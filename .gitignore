@@ -1,0 +1,63 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+build
+.next
+out
+
+# Tauri
+apps/desktop/src-tauri/target
+apps/mobile/src-tauri/target
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Turbo
+.turbo
+
+# Test coverage
+coverage
+.nyc_output
+
+# Cache
+.cache
+.eslintcache
+*.tsbuildinfo
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Portfolio Performance files (user data)
+*.portfolio
+*.xml
+
+# Rust
+Cargo.lock
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Claude Code
+.claude/

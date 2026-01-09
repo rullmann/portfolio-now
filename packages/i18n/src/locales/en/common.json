@@ -1,0 +1,120 @@
+{
+  "app": {
+    "name": "Portfolio Performance",
+    "tagline": "Manage your portfolio"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "portfolio": "Portfolio",
+    "securities": "Securities",
+    "accounts": "Accounts",
+    "transactions": "Transactions",
+    "reports": "Reports",
+    "settings": "Settings"
+  },
+  "portfolio": {
+    "title": "Portfolio",
+    "create": "Create Portfolio",
+    "edit": "Edit Portfolio",
+    "delete": "Delete Portfolio",
+    "name": "Name",
+    "currency": "Base Currency",
+    "totalValue": "Total Value",
+    "performance": "Performance",
+    "holdings": "Holdings"
+  },
+  "securities": {
+    "title": "Securities",
+    "add": "Add Security",
+    "edit": "Edit Security",
+    "delete": "Delete Security",
+    "name": "Name",
+    "isin": "ISIN",
+    "wkn": "WKN",
+    "ticker": "Ticker",
+    "type": "Type",
+    "currency": "Currency",
+    "price": "Price",
+    "types": {
+      "STOCK": "Stock",
+      "ETF": "ETF",
+      "FUND": "Fund",
+      "BOND": "Bond",
+      "CRYPTO": "Cryptocurrency",
+      "COMMODITY": "Commodity",
+      "OTHER": "Other"
+    }
+  },
+  "accounts": {
+    "title": "Accounts",
+    "add": "Add Account",
+    "edit": "Edit Account",
+    "delete": "Delete Account",
+    "name": "Name",
+    "type": "Type",
+    "balance": "Balance",
+    "currency": "Currency",
+    "types": {
+      "DEPOT": "Securities Account",
+      "CASH": "Cash Account"
+    }
+  },
+  "transactions": {
+    "title": "Transactions",
+    "add": "Add Transaction",
+    "edit": "Edit Transaction",
+    "delete": "Delete Transaction",
+    "date": "Date",
+    "type": "Type",
+    "security": "Security",
+    "shares": "Shares",
+    "amount": "Amount",
+    "fees": "Fees",
+    "taxes": "Taxes",
+    "note": "Note",
+    "types": {
+      "BUY": "Buy",
+      "SELL": "Sell",
+      "DIVIDEND": "Dividend",
+      "INTEREST": "Interest",
+      "DEPOSIT": "Deposit",
+      "WITHDRAWAL": "Withdrawal",
+      "TRANSFER_IN": "Transfer In",
+      "TRANSFER_OUT": "Transfer Out",
+      "FEES": "Fees",
+      "TAXES": "Taxes"
+    }
+  },
+  "reports": {
+    "title": "Reports",
+    "performance": "Performance",
+    "ttwror": "TTWROR",
+    "irr": "IRR",
+    "gains": "Gains/Losses",
+    "allocation": "Asset Allocation"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "search": "Search",
+    "filter": "Filter",
+    "export": "Export",
+    "import": "Import",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "confirm": "Confirm",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "file": {
+    "new": "New",
+    "open": "Open",
+    "save": "Save",
+    "saveAs": "Save As...",
+    "recent": "Recent Files"
+  }
+}

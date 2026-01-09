@@ -1,0 +1,120 @@
+{
+  "app": {
+    "name": "Portfolio Performance",
+    "tagline": "Verwalte dein Portfolio"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "portfolio": "Portfolio",
+    "securities": "Wertpapiere",
+    "accounts": "Konten",
+    "transactions": "Buchungen",
+    "reports": "Berichte",
+    "settings": "Einstellungen"
+  },
+  "portfolio": {
+    "title": "Portfolio",
+    "create": "Portfolio erstellen",
+    "edit": "Portfolio bearbeiten",
+    "delete": "Portfolio löschen",
+    "name": "Name",
+    "currency": "Basiswährung",
+    "totalValue": "Gesamtwert",
+    "performance": "Performance",
+    "holdings": "Bestände"
+  },
+  "securities": {
+    "title": "Wertpapiere",
+    "add": "Wertpapier hinzufügen",
+    "edit": "Wertpapier bearbeiten",
+    "delete": "Wertpapier löschen",
+    "name": "Name",
+    "isin": "ISIN",
+    "wkn": "WKN",
+    "ticker": "Symbol",
+    "type": "Typ",
+    "currency": "Währung",
+    "price": "Kurs",
+    "types": {
+      "STOCK": "Aktie",
+      "ETF": "ETF",
+      "FUND": "Fonds",
+      "BOND": "Anleihe",
+      "CRYPTO": "Kryptowährung",
+      "COMMODITY": "Rohstoff",
+      "OTHER": "Sonstige"
+    }
+  },
+  "accounts": {
+    "title": "Konten",
+    "add": "Konto hinzufügen",
+    "edit": "Konto bearbeiten",
+    "delete": "Konto löschen",
+    "name": "Name",
+    "type": "Typ",
+    "balance": "Saldo",
+    "currency": "Währung",
+    "types": {
+      "DEPOT": "Depot",
+      "CASH": "Verrechnungskonto"
+    }
+  },
+  "transactions": {
+    "title": "Buchungen",
+    "add": "Buchung hinzufügen",
+    "edit": "Buchung bearbeiten",
+    "delete": "Buchung löschen",
+    "date": "Datum",
+    "type": "Typ",
+    "security": "Wertpapier",
+    "shares": "Stück",
+    "amount": "Betrag",
+    "fees": "Gebühren",
+    "taxes": "Steuern",
+    "note": "Notiz",
+    "types": {
+      "BUY": "Kauf",
+      "SELL": "Verkauf",
+      "DIVIDEND": "Dividende",
+      "INTEREST": "Zinsen",
+      "DEPOSIT": "Einlage",
+      "WITHDRAWAL": "Entnahme",
+      "TRANSFER_IN": "Einlieferung",
+      "TRANSFER_OUT": "Auslieferung",
+      "FEES": "Gebühren",
+      "TAXES": "Steuern"
+    }
+  },
+  "reports": {
+    "title": "Berichte",
+    "performance": "Performance",
+    "ttwror": "TTWROR",
+    "irr": "IZF (IRR)",
+    "gains": "Gewinn/Verlust",
+    "allocation": "Vermögensaufteilung"
+  },
+  "common": {
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "delete": "Löschen",
+    "edit": "Bearbeiten",
+    "add": "Hinzufügen",
+    "search": "Suchen",
+    "filter": "Filtern",
+    "export": "Exportieren",
+    "import": "Importieren",
+    "loading": "Laden...",
+    "error": "Fehler",
+    "success": "Erfolgreich",
+    "confirm": "Bestätigen",
+    "yes": "Ja",
+    "no": "Nein"
+  },
+  "file": {
+    "new": "Neu",
+    "open": "Öffnen",
+    "save": "Speichern",
+    "saveAs": "Speichern unter...",
+    "recent": "Zuletzt geöffnet"
+  }
+}

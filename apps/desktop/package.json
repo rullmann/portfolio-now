@@ -1,0 +1,53 @@
+{
+  "name": "@portfolio/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@portfolio/core": "workspace:*",
+    "@portfolio/i18n": "workspace:*",
+    "@portfolio/ui": "workspace:*",
+    "@tanstack/react-query": "^5.90.0",
+    "@tauri-apps/api": "^2.4.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-fs": "^2.4.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-router-dom": "^7.6.2",
+    "recharts": "^3.6.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@tauri-apps/cli": "^2.4.0",
+    "@types/node": "^25.0.3",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.21",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "lucide-react": "^0.480.0",
+    "postcss": "^8.5.0",
+    "tailwind-merge": "^3.0.0",
+    "tailwindcss": "^3.4.19",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^6.0.0"
+  }
+}

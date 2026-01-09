@@ -1,0 +1,26 @@
+{
+  "name": "portfolio-modern",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Modern cross-platform portfolio tracking application",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "desktop": "pnpm --filter @portfolio/desktop dev",
+    "desktop:build": "pnpm --filter @portfolio/desktop build"
+  },
+  "keywords": ["portfolio", "finance", "investment", "tauri"],
+  "author": "",
+  "license": "EPL-1.0",
+  "packageManager": "pnpm@10.26.2",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Portfolio Performance",
+  "version": "0.1.0",
+  "identifier": "com.portfolio-performance.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Portfolio Performance",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "maximized": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Finance",
+    "copyright": "Portfolio Performance Contributors",
+    "shortDescription": "Investment Portfolio Tracking",
+    "longDescription": "A comprehensive application for tracking and analyzing investment portfolios",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "externalBin": [
+      "binaries/pp-import"
+    ]
+  }
+}
