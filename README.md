@@ -2,7 +2,6 @@
 
 Modern cross-platform desktop application for tracking and analyzing investment portfolios. A reimplementation of [Portfolio Performance](https://github.com/portfolio-performance/portfolio) using Tauri (Rust + React/TypeScript).
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
 ## Features
@@ -105,14 +104,6 @@ portfolio-now/
 | Alpha Vantage | Yes | Global stocks (25 calls/day free) |
 | CoinGecko | No | Cryptocurrencies |
 | ECB | No | Exchange rates |
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
