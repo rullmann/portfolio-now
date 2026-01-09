@@ -1,8 +1,8 @@
 {
-  "name": "portfolio-modern",
+  "name": "portfolio-now",
   "version": "1.0.0",
   "private": true,
-  "description": "Modern cross-platform portfolio tracking application",
+  "description": "Modern investment portfolio tracking and analysis",
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",

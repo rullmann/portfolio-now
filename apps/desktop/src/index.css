@@ -95,3 +95,40 @@
 .transition-theme {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
+
+/* Accessibility: Skip link for keyboard navigation */
+.skip-link {
+  @apply sr-only;
+}
+
+.skip-link:focus {
+  @apply not-sr-only absolute top-4 left-4 z-50 px-4 py-2 bg-primary text-primary-foreground rounded-md;
+}
+
+/* Accessibility: Improved focus states for interactive elements */
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  /* Ultra-thin Glassmorphism Cards */
+  .glass-card {
+    @apply rounded-xl border border-border/50 bg-card/80 backdrop-blur-sm;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    transition: all 0.15s ease;
+  }
+
+  .glass-card:hover {
+    @apply border-border bg-card;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  }
+
+  .dark .glass-card {
+    @apply bg-card/60;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+
+  .dark .glass-card:hover {
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  }
+}

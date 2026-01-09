@@ -168,6 +168,7 @@ pub fn init_database(path: &Path) -> Result<()> {
             high INTEGER,
             low INTEGER,
             volume INTEGER,
+            updated_at TEXT,
             FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
         );
 
@@ -282,8 +283,8 @@ pub fn init_database(path: &Path) -> Result<()> {
             purchase_date TEXT NOT NULL,
             original_shares INTEGER NOT NULL,  -- scale: 10^8, original purchase amount
             remaining_shares INTEGER NOT NULL, -- scale: 10^8, shares still held
-            gross_amount INTEGER NOT NULL,     -- scale: 10^2, cost before fees/taxes
-            net_amount INTEGER NOT NULL,       -- scale: 10^2, cost including fees/taxes
+            gross_amount INTEGER NOT NULL,     -- scale: 10^2, cost INCLUDING fees/taxes (= Purchase Value per PP)
+            net_amount INTEGER NOT NULL,       -- scale: 10^2, cost EXCLUDING fees/taxes
             currency TEXT NOT NULL,
             FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE,
             FOREIGN KEY (portfolio_id) REFERENCES pp_portfolio(id) ON DELETE CASCADE,
@@ -412,7 +413,84 @@ pub fn init_database(path: &Path) -> Result<()> {
         "#,
     )?;
 
+    // Run migrations for existing databases
+    run_migrations(&conn)?;
+
     *DB.lock().unwrap() = Some(conn);
+    Ok(())
+}
+
+/// Run database migrations to add missing columns to existing tables
+fn run_migrations(conn: &Connection) -> Result<()> {
+    // Helper to check if a column exists in a table
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+        let sql = format!("PRAGMA table_info({})", table);
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            }) {
+                for name in rows.flatten() {
+                    if name == column {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // Migration: Add is_retired column to pp_portfolio if missing
+    if !column_exists(conn, "pp_portfolio", "is_retired") {
+        conn.execute(
+            "ALTER TABLE pp_portfolio ADD COLUMN is_retired INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        log::info!("Migration: Added is_retired column to pp_portfolio");
+    }
+
+    // Migration: Add note column to pp_portfolio if missing
+    if !column_exists(conn, "pp_portfolio", "note") {
+        conn.execute("ALTER TABLE pp_portfolio ADD COLUMN note TEXT", [])?;
+        log::info!("Migration: Added note column to pp_portfolio");
+    }
+
+    // Migration: Add updated_at column to pp_portfolio if missing
+    if !column_exists(conn, "pp_portfolio", "updated_at") {
+        conn.execute("ALTER TABLE pp_portfolio ADD COLUMN updated_at TEXT", [])?;
+        log::info!("Migration: Added updated_at column to pp_portfolio");
+    }
+
+    // Migration: Add is_retired column to pp_account if missing
+    if !column_exists(conn, "pp_account", "is_retired") {
+        conn.execute(
+            "ALTER TABLE pp_account ADD COLUMN is_retired INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        log::info!("Migration: Added is_retired column to pp_account");
+    }
+
+    // Migration: Add is_retired column to pp_security if missing
+    if !column_exists(conn, "pp_security", "is_retired") {
+        conn.execute(
+            "ALTER TABLE pp_security ADD COLUMN is_retired INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        log::info!("Migration: Added is_retired column to pp_security");
+    }
+
+    // Migration: Add updated_at column to pp_latest_price if missing
+    if !column_exists(conn, "pp_latest_price", "updated_at") {
+        conn.execute("ALTER TABLE pp_latest_price ADD COLUMN updated_at TEXT", [])?;
+        log::info!("Migration: Added updated_at column to pp_latest_price");
+    }
+
+    // Migration: Add custom_logo column to pp_security for user-uploaded logos
+    if !column_exists(conn, "pp_security", "custom_logo") {
+        conn.execute("ALTER TABLE pp_security ADD COLUMN custom_logo TEXT", [])?;
+        log::info!("Migration: Added custom_logo column to pp_security");
+    }
+
     Ok(())
 }
 

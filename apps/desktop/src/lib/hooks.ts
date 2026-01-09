@@ -262,3 +262,145 @@ export function usePortfolioSummary(importId?: number): UseDataState<PortfolioSu
 
   return { data, isLoading, error, refresh };
 }
+
+// ============================================================================
+// Logo Caching Hook
+// ============================================================================
+
+export interface CachedLogo {
+  url: string;
+  isLocal: boolean;
+  domain: string;
+}
+
+export interface UseCachedLogosState {
+  logos: Map<number, CachedLogo>;
+  isLoading: boolean;
+  refresh: () => Promise<void>;
+}
+
+interface SecurityInfo {
+  id: number;
+  ticker?: string;
+  name: string;
+}
+
+/**
+ * Hook for loading logos with local caching.
+ * - First checks local cache (works even without API key)
+ * - Falls back to Brandfetch CDN if API key is available
+ * - Downloads and caches logos from CDN
+ */
+export function useCachedLogos(
+  securities: SecurityInfo[],
+  brandfetchApiKey: string | null
+): UseCachedLogosState {
+  const [logos, setLogos] = useState<Map<number, CachedLogo>>(new Map());
+  const [isLoading, setIsLoading] = useState(false);
+
+  const loadLogos = useCallback(async () => {
+    if (securities.length === 0) {
+      setLogos(new Map());
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Get domain info (works even without API key)
+      // API key is passed to get CDN URLs, but domains are always returned
+      const results = await api.fetchLogosBatch(brandfetchApiKey || '', securities);
+      const newLogos = new Map<number, CachedLogo>();
+
+      // Process each result
+      for (const result of results) {
+        // Need at least a domain to look up cached logos
+        if (!result.domain) continue;
+
+        // Check if cached locally
+        const cachedData = await api.getCachedLogoData(result.domain);
+
+        if (cachedData) {
+          // Use local cache (works even without API key!)
+          newLogos.set(result.securityId, {
+            url: cachedData,
+            isLocal: true,
+            domain: result.domain,
+          });
+        } else if (result.logoUrl) {
+          // Not cached but have CDN URL - use it and try to cache
+          newLogos.set(result.securityId, {
+            url: result.logoUrl,
+            isLocal: false,
+            domain: result.domain,
+          });
+
+          // Try to download and cache in background
+          fetchAndCacheLogo(result.logoUrl, result.domain, result.securityId, setLogos);
+        }
+        // If no cache and no CDN URL (no API key), skip this security
+      }
+
+      setLogos(newLogos);
+    } catch (err) {
+      console.error('Failed to load logos:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [securities, brandfetchApiKey]);
+
+  useEffect(() => {
+    loadLogos();
+  }, [loadLogos]);
+
+  return { logos, isLoading, refresh: loadLogos };
+}
+
+/**
+ * Fetch logo from CDN and save to local cache.
+ */
+async function fetchAndCacheLogo(
+  cdnUrl: string,
+  domain: string,
+  securityId: number,
+  setLogos: React.Dispatch<React.SetStateAction<Map<number, CachedLogo>>>
+): Promise<void> {
+  try {
+    // Fetch the image
+    const response = await fetch(cdnUrl);
+    if (!response.ok) return;
+
+    const blob = await response.blob();
+
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+
+      try {
+        // Save to local cache
+        await api.saveLogoToCache(domain, base64);
+
+        // Update state to reflect local cache
+        setLogos((prev) => {
+          const newMap = new Map(prev);
+          const existing = newMap.get(securityId);
+          if (existing) {
+            newMap.set(securityId, {
+              url: base64,
+              isLocal: true,
+              domain: existing.domain,
+            });
+          }
+          return newMap;
+        });
+      } catch (err) {
+        console.error('Failed to cache logo for', domain, err);
+      }
+    };
+    reader.readAsDataURL(blob);
+  } catch (err) {
+    // Silently fail - logo will continue using CDN URL
+    console.debug('Failed to fetch logo for caching:', domain, err);
+  }
+}

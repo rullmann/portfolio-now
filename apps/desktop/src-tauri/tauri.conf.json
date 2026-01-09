@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Portfolio Performance",
+  "productName": "Portfolio Now",
   "version": "0.1.0",
-  "identifier": "com.portfolio-performance.desktop",
+  "identifier": "com.portfolio-now.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Portfolio Performance",
+        "title": "Portfolio Now",
         "width": 1280,
         "height": 800,
         "minWidth": 800,
@@ -38,7 +38,7 @@
       "icons/icon.ico"
     ],
     "category": "Finance",
-    "copyright": "Portfolio Performance Contributors",
+    "copyright": "Portfolio Now",
     "shortDescription": "Investment Portfolio Tracking",
     "longDescription": "A comprehensive application for tracking and analyzing investment portfolios",
     "macOS": {

@@ -3,7 +3,6 @@
 //! Run with: cargo run --bin verify_db_holdings
 
 use anyhow::Result;
-use rusqlite::params;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

@@ -10,6 +10,7 @@ use crate::pp::{
     transaction::PortfolioTransaction,
 };
 use crate::protobuf;
+use crate::quotes::ExchangeRate;
 use anyhow::Result;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,31 @@ pub async fn import_pp_file(path: String, app: AppHandle) -> Result<ImportResult
     // Save to database
     let result =
         save_client_to_db(&path, &client, &app).map_err(|e| format!("Failed to save to database: {}", e))?;
+
+    // Fetch exchange rates from ECB (non-blocking, errors are logged but don't fail import)
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            stage: "exchange_rates".to_string(),
+            message: "Fetching exchange rates...".to_string(),
+            percent: 96,
+            current: None,
+            total: None,
+        },
+    );
+
+    match crate::quotes::ecb::fetch_latest_rates().await {
+        Ok(rates) => {
+            if let Err(e) = save_exchange_rates(&rates) {
+                log::warn!("Failed to save exchange rates: {}", e);
+            } else {
+                log::info!("Saved {} exchange rates from ECB", rates.len());
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to fetch exchange rates from ECB: {}", e);
+        }
+    }
 
     // Emit progress: complete
     let _ = app.emit(
@@ -530,6 +556,9 @@ fn insert_account_transaction(
         |row| row.get(0),
     )?;
 
+    // Delete existing units (for re-import scenarios to avoid duplicates)
+    tx.execute("DELETE FROM pp_txn_unit WHERE txn_id = ?1", params![txn_id])?;
+
     // Insert units
     for unit in &txn.units {
         let (forex_amount, forex_currency, exchange_rate) = match &unit.forex {
@@ -656,6 +685,9 @@ fn insert_portfolio_transaction(
         params![txn.uuid],
         |row| row.get(0),
     )?;
+
+    // Delete existing units (for re-import scenarios to avoid duplicates)
+    tx.execute("DELETE FROM pp_txn_unit WHERE txn_id = ?1", params![txn_id])?;
 
     // Insert units
     for unit in &txn.units {
@@ -807,7 +839,7 @@ fn link_cross_entries(tx: &rusqlite::Transaction, client: &Client) -> Result<()>
     let mut processed: HashSet<(String, String)> = HashSet::new();
 
     // Helper to insert cross-entry and update transactions
-    let mut insert_cross_entry = |cross: &crate::pp::transaction::CrossEntry, txn_uuid: &str| -> Result<()> {
+    let mut insert_cross_entry = |cross: &crate::pp::transaction::CrossEntry, _txn_uuid: &str| -> Result<()> {
         // Avoid duplicates (each cross-entry is referenced by both source and target txn)
         let key = if cross.source_uuid < cross.target_uuid {
             (cross.source_uuid.clone(), cross.target_uuid.clone())
@@ -982,3 +1014,60 @@ pub fn delete_import(import_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Save exchange rates to the database
+fn save_exchange_rates(rates: &[ExchangeRate]) -> Result<()> {
+    let mut conn_guard = db::get_connection()?;
+    let conn = conn_guard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+
+    let tx = conn.transaction()?;
+
+    for rate in rates {
+        // Store rate as decimal string for precision
+        tx.execute(
+            "INSERT OR REPLACE INTO pp_exchange_rate (base_currency, term_currency, date, rate)
+             VALUES (?, ?, ?, ?)",
+            params![rate.base, rate.target, rate.date.to_string(), rate.rate.to_string()],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Rebuild all FIFO lots from transactions
+/// Call this after fixing FIFO calculation logic to recalculate cost basis
+#[command]
+pub fn rebuild_fifo_lots() -> Result<RebuildFifoResult, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Count securities before rebuild
+    let security_count: i64 = conn
+        .query_row("SELECT COUNT(DISTINCT id) FROM pp_security", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    // Rebuild FIFO lots for all securities
+    crate::fifo::build_all_fifo_lots(conn).map_err(|e| e.to_string())?;
+
+    // Count lots after rebuild
+    let lot_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pp_fifo_lot WHERE remaining_shares > 0", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    Ok(RebuildFifoResult {
+        securities_processed: security_count as usize,
+        lots_created: lot_count as usize,
+    })
+}
+
+/// Result of FIFO rebuild
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebuildFifoResult {
+    pub securities_processed: usize,
+    pub lots_created: usize,
+}

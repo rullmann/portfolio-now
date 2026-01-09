@@ -4,6 +4,8 @@ import {
   Area,
   ResponsiveContainer,
   Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
 
 interface PortfolioValuePoint {
@@ -14,9 +16,10 @@ interface PortfolioValuePoint {
 interface MiniPortfolioChartProps {
   data: PortfolioValuePoint[];
   height?: number;
+  showAxis?: boolean;
 }
 
-export function MiniPortfolioChart({ data, height = 80 }: MiniPortfolioChartProps) {
+export function MiniPortfolioChart({ data, height = 80, showAxis = false }: MiniPortfolioChartProps) {
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     return data;
@@ -37,16 +40,49 @@ export function MiniPortfolioChart({ data, height = 80 }: MiniPortfolioChartProp
 
   const strokeColor = isPositive ? '#22c55e' : '#ef4444';
 
+  // Use unique gradient ID to avoid conflicts with multiple charts
+  const gradientId = showAxis ? 'dashboardChartGradient' : 'miniChartGradient';
+
   return (
     <div className="w-full" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+        <AreaChart
+          data={chartData}
+          margin={showAxis
+            ? { top: 10, right: 10, left: 0, bottom: 0 }
+            : { top: 2, right: 2, left: 2, bottom: 2 }
+          }
+        >
           <defs>
-            <linearGradient id="miniChartGradient" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={strokeColor} stopOpacity={0.2} />
               <stop offset="95%" stopColor={strokeColor} stopOpacity={0} />
             </linearGradient>
           </defs>
+          {showAxis && (
+            <XAxis
+              dataKey="date"
+              axisLine={false}
+              tickLine={false}
+              tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+              tickFormatter={(value) => {
+                const date = new Date(value);
+                return date.toLocaleDateString('de-DE', { month: 'short' });
+              }}
+              interval="preserveStartEnd"
+              minTickGap={40}
+            />
+          )}
+          {showAxis && (
+            <YAxis
+              axisLine={false}
+              tickLine={false}
+              tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+              tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+              width={40}
+              domain={['dataMin - 1000', 'dataMax + 1000']}
+            />
+          )}
           <Tooltip
             contentStyle={{
               backgroundColor: 'hsl(var(--card))',
@@ -66,10 +102,10 @@ export function MiniPortfolioChart({ data, height = 80 }: MiniPortfolioChartProp
             type="monotone"
             dataKey="value"
             stroke={strokeColor}
-            strokeWidth={1.5}
-            fill="url(#miniChartGradient)"
+            strokeWidth={showAxis ? 2 : 1.5}
+            fill={`url(#${gradientId})`}
             dot={false}
-            activeDot={{ r: 3, fill: strokeColor }}
+            activeDot={{ r: showAxis ? 4 : 3, fill: strokeColor }}
           />
         </AreaChart>
       </ResponsiveContainer>

@@ -1,7 +1,9 @@
 //! Data query commands for accessing imported Portfolio Performance data.
 
+use crate::currency;
 use crate::db;
 use crate::pp::common::{prices, shares};
+use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -17,10 +19,17 @@ pub struct SecurityData {
     pub isin: Option<String>,
     pub wkn: Option<String>,
     pub ticker: Option<String>,
+    pub feed: Option<String>,           // Provider for historical quotes
+    pub feed_url: Option<String>,       // URL/suffix for historical quotes
+    pub latest_feed: Option<String>,    // Provider for current quotes
+    pub latest_feed_url: Option<String>, // URL/suffix for current quotes
     pub is_retired: bool,
     pub latest_price: Option<f64>,
     pub latest_price_date: Option<String>,
+    pub updated_at: Option<String>, // When the price was last fetched
     pub prices_count: i32,
+    pub current_holdings: f64, // Total shares held across all portfolios
+    pub custom_logo: Option<String>, // Base64-encoded custom logo
 }
 
 /// Get all securities from the database
@@ -31,18 +40,43 @@ pub fn get_securities(import_id: Option<i64>) -> Result<Vec<SecurityData>, Strin
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
+    // Calculate current holdings by summing portfolio transactions
+    // BUY, TRANSFER_IN, DELIVERY_INBOUND add shares
+    // SELL, TRANSFER_OUT, DELIVERY_OUTBOUND subtract shares
     let sql = if import_id.is_some() {
-        "SELECT s.id, s.uuid, s.name, s.currency, s.isin, s.wkn, s.ticker, s.is_retired,
-                lp.value, lp.date,
-                (SELECT COUNT(*) FROM pp_price WHERE security_id = s.id) as prices_count
+        "SELECT s.id, s.uuid, s.name, s.currency, s.isin, s.wkn, s.ticker,
+                s.feed, s.feed_url, s.latest_feed, s.latest_feed_url, s.is_retired,
+                lp.value, lp.date, lp.updated_at,
+                (SELECT COUNT(*) FROM pp_price WHERE security_id = s.id) as prices_count,
+                COALESCE((
+                    SELECT SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END)
+                    FROM pp_txn t
+                    WHERE t.security_id = s.id AND t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+                ), 0) as current_holdings,
+                s.custom_logo
          FROM pp_security s
          LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
          WHERE s.import_id = ?1
          ORDER BY s.name"
     } else {
-        "SELECT s.id, s.uuid, s.name, s.currency, s.isin, s.wkn, s.ticker, s.is_retired,
-                lp.value, lp.date,
-                (SELECT COUNT(*) FROM pp_price WHERE security_id = s.id) as prices_count
+        "SELECT s.id, s.uuid, s.name, s.currency, s.isin, s.wkn, s.ticker,
+                s.feed, s.feed_url, s.latest_feed, s.latest_feed_url, s.is_retired,
+                lp.value, lp.date, lp.updated_at,
+                (SELECT COUNT(*) FROM pp_price WHERE security_id = s.id) as prices_count,
+                COALESCE((
+                    SELECT SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END)
+                    FROM pp_txn t
+                    WHERE t.security_id = s.id AND t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+                ), 0) as current_holdings,
+                s.custom_logo
          FROM pp_security s
          LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
          ORDER BY s.name"
@@ -57,9 +91,14 @@ pub fn get_securities(import_id: Option<i64>) -> Result<Vec<SecurityData>, Strin
     }
     .map_err(|e| e.to_string())?;
 
+    // Column indices:
+    // 0: id, 1: uuid, 2: name, 3: currency, 4: isin, 5: wkn, 6: ticker,
+    // 7: feed, 8: feed_url, 9: latest_feed, 10: latest_feed_url, 11: is_retired,
+    // 12: lp.value, 13: lp.date, 14: lp.updated_at, 15: prices_count, 16: current_holdings, 17: custom_logo
     let securities: Vec<SecurityData> = rows
         .mapped(|row| {
-            let latest_value: Option<i64> = row.get(8)?;
+            let latest_value: Option<i64> = row.get(12)?;
+            let holdings_raw: i64 = row.get(16)?;
             Ok(SecurityData {
                 id: row.get(0)?,
                 uuid: row.get(1)?,
@@ -68,10 +107,17 @@ pub fn get_securities(import_id: Option<i64>) -> Result<Vec<SecurityData>, Strin
                 isin: row.get(4)?,
                 wkn: row.get(5)?,
                 ticker: row.get(6)?,
-                is_retired: row.get::<_, i32>(7)? != 0,
+                feed: row.get(7)?,
+                feed_url: row.get(8)?,
+                latest_feed: row.get(9)?,
+                latest_feed_url: row.get(10)?,
+                is_retired: row.get::<_, i32>(11)? != 0,
                 latest_price: latest_value.map(prices::to_decimal),
-                latest_price_date: row.get(9)?,
-                prices_count: row.get(10)?,
+                latest_price_date: row.get(13)?,
+                updated_at: row.get(14)?,
+                prices_count: row.get(15)?,
+                current_holdings: shares::to_decimal(holdings_raw),
+                custom_logo: row.get(17)?,
             })
         })
         .filter_map(|r| r.ok())
@@ -503,19 +549,29 @@ pub struct PortfolioHolding {
 }
 
 /// Holdings aggregated by ISIN across all portfolios
+/// Implements Portfolio Performance's Vermögensaufstellung columns
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AggregatedHolding {
     pub isin: String,
     pub name: String,
     pub currency: String,
+    pub security_id: i64,
     pub total_shares: f64,
     pub current_price: Option<f64>,
     pub current_value: Option<f64>,
+    /// Einstandswert (total cost basis from FIFO)
     pub cost_basis: f64,
+    /// Einstandskurs (cost per share = cost_basis / shares)
+    pub purchase_price: Option<f64>,
+    /// Gewinn/Verlust (unrealized gain/loss)
     pub gain_loss: Option<f64>,
+    /// Abs.Perf. % Seit (performance percentage)
     pub gain_loss_percent: Option<f64>,
+    /// ΣDiv Seit (total dividends received for this position)
+    pub dividends_total: f64,
     pub portfolios: Vec<PortfolioHolding>,
+    pub custom_logo: Option<String>,
 }
 
 /// Get all holdings aggregated by ISIN across all portfolios
@@ -528,6 +584,10 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
+    // Get base currency for value conversion
+    let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+    let today = Utc::now().date_naive();
+
     // STEP 1: Calculate holdings using transaction sums (PP PortfolioSnapshot logic)
     // shares = SUM(BUY/TRANSFER_IN/DELIVERY_INBOUND) - SUM(SELL/TRANSFER_OUT/DELIVERY_OUTBOUND)
     let holdings_sql = "
@@ -537,6 +597,7 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
                 MAX(s.id) as security_id,
                 MAX(s.name) as name,
                 MAX(s.currency) as currency,
+                MAX(s.custom_logo) as custom_logo,
                 SUM(CASE
                     WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
                     WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
@@ -555,7 +616,8 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
             ph.currency,
             ph.security_id,
             ph.net_shares,
-            lp.value as latest_price
+            lp.value as latest_price,
+            ph.custom_logo
         FROM portfolio_holdings ph
         LEFT JOIN pp_latest_price lp ON lp.security_id = ph.security_id
         ORDER BY ph.net_shares * COALESCE(lp.value, 0) DESC
@@ -564,12 +626,16 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
     let mut holdings_stmt = conn.prepare(holdings_sql).map_err(|e| e.to_string())?;
 
     // STEP 2: Get cost basis from FIFO lots (separate from share count!)
+    // Include currency to enable conversion to base currency
+    // Use gross_amount (purchase price INCLUDING fees/taxes) for cost basis, matching PP behavior
+    // PP CostCalculation.java: Purchase Value = gross amount with all fees and taxes
     let cost_basis_sql = "
         SELECT
             COALESCE(s.isin, s.uuid) as identifier,
+            MAX(l.currency) as lot_currency,
             SUM(CASE
                 WHEN l.original_shares > 0 THEN
-                    (l.remaining_shares * l.net_amount / l.original_shares)
+                    (l.remaining_shares * l.gross_amount / l.original_shares)
                 ELSE 0
             END) as cost_basis
         FROM pp_fifo_lot l
@@ -578,42 +644,117 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
         GROUP BY COALESCE(s.isin, s.uuid)
     ";
 
-    let mut cost_basis_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    // Map identifier -> (cost_basis_cents, currency)
+    let mut cost_basis_map: std::collections::HashMap<String, (i64, String)> = std::collections::HashMap::new();
     let mut cost_stmt = conn.prepare(cost_basis_sql).map_err(|e| e.to_string())?;
     let cost_rows = cost_stmt
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,  // identifier
+                row.get::<_, String>(1)?,  // currency
+                row.get::<_, i64>(2)?,     // cost_basis
+            ))
         })
         .map_err(|e| e.to_string())?;
 
     for row in cost_rows {
-        if let Ok((identifier, cost)) = row {
-            cost_basis_map.insert(identifier, cost);
+        if let Ok((identifier, lot_currency, cost)) = row {
+            cost_basis_map.insert(identifier, (cost, lot_currency));
+        }
+    }
+
+    // STEP 3: Get dividend sums per security (ΣDiv Seit)
+    // Sum all DIVIDENDS transactions for each security across all accounts
+    let dividends_sql = "
+        SELECT
+            COALESCE(s.isin, s.uuid) as identifier,
+            t.currency,
+            SUM(t.amount) as dividend_total
+        FROM pp_txn t
+        JOIN pp_security s ON s.id = t.security_id
+        WHERE t.txn_type = 'DIVIDENDS'
+          AND t.owner_type = 'account'
+        GROUP BY COALESCE(s.isin, s.uuid)
+    ";
+
+    // Map identifier -> (dividend_total_cents, currency)
+    let mut dividends_map: std::collections::HashMap<String, (i64, String)> = std::collections::HashMap::new();
+    let mut div_stmt = conn.prepare(dividends_sql).map_err(|e| e.to_string())?;
+    let div_rows = div_stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // identifier
+                row.get::<_, String>(1)?,  // currency
+                row.get::<_, i64>(2)?,     // dividend_total
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in div_rows {
+        if let Ok((identifier, div_currency, total)) = row {
+            dividends_map.insert(identifier, (total, div_currency));
         }
     }
 
     // Build holdings with transaction-based shares and FIFO-based cost basis
-    let mut holdings: Vec<AggregatedHolding> = holdings_stmt
+    // First, collect raw data
+    let raw_holdings: Vec<_> = holdings_stmt
         .query_map([], |row| {
             let identifier: String = row.get(0)?;
             let name: String = row.get(1)?;
             let currency: String = row.get(2)?;
-            let _security_id: i64 = row.get(3)?;
+            let security_id: i64 = row.get(3)?;
             let shares_raw: i64 = row.get(4)?;
             let latest_price_raw: Option<i64> = row.get(5)?;
+            let custom_logo: Option<String> = row.get(6)?;
 
-            Ok((identifier, name, currency, shares_raw, latest_price_raw))
+            Ok((identifier, name, currency, security_id, shares_raw, latest_price_raw, custom_logo))
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .map(|(identifier, name, currency, shares_raw, latest_price_raw)| {
+        .collect();
+
+    // Then process with currency conversion
+    let mut holdings: Vec<AggregatedHolding> = raw_holdings
+        .into_iter()
+        .map(|(identifier, name, security_currency, security_id, shares_raw, latest_price_raw, custom_logo)| {
             let total_shares = shares::to_decimal(shares_raw);
             let current_price = latest_price_raw.map(prices::to_decimal);
-            let current_value = current_price.map(|p| p * total_shares);
 
-            // Get cost basis from FIFO map
-            let cost_basis_cents = cost_basis_map.get(&identifier).copied().unwrap_or(0);
-            let cost_basis = cost_basis_cents as f64 / 100.0;
+            // Calculate value in security's currency first
+            let value_in_security_currency = current_price.map(|p| p * total_shares);
+
+            // Convert to base currency if different
+            let current_value = if security_currency == base_currency {
+                value_in_security_currency
+            } else {
+                value_in_security_currency.map(|v| {
+                    currency::convert(conn, v, &security_currency, &base_currency, today)
+                        .unwrap_or(v) // Fallback to unconverted if no rate found
+                })
+            };
+
+            // Get cost basis from FIFO map and convert to base currency
+            let (cost_basis_cents, lot_currency) = cost_basis_map
+                .get(&identifier)
+                .cloned()
+                .unwrap_or((0, base_currency.clone()));
+            let cost_basis_raw = cost_basis_cents as f64 / 100.0;
+
+            // Convert cost basis to base currency if needed
+            let cost_basis = if lot_currency == base_currency {
+                cost_basis_raw
+            } else {
+                currency::convert(conn, cost_basis_raw, &lot_currency, &base_currency, today)
+                    .unwrap_or(cost_basis_raw)
+            };
+
+            // Calculate purchase price per share (Einstandskurs)
+            let purchase_price = if total_shares > 0.0 {
+                Some(cost_basis / total_shares)
+            } else {
+                None
+            };
 
             let gain_loss = current_value.map(|v| v - cost_basis);
             let gain_loss_percent = if cost_basis > 0.0 {
@@ -622,22 +763,39 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
                 None
             };
 
+            // Get dividend total from map and convert to base currency
+            let (div_cents, div_currency) = dividends_map
+                .get(&identifier)
+                .cloned()
+                .unwrap_or((0, base_currency.clone()));
+            let div_raw = div_cents as f64 / 100.0;
+            let dividends_total = if div_currency == base_currency {
+                div_raw
+            } else {
+                currency::convert(conn, div_raw, &div_currency, &base_currency, today)
+                    .unwrap_or(div_raw)
+            };
+
             AggregatedHolding {
                 isin: identifier,
                 name,
-                currency,
+                currency: security_currency,
+                security_id,
                 total_shares,
                 current_price,
                 current_value,
                 cost_basis,
+                purchase_price,
                 gain_loss,
                 gain_loss_percent,
+                dividends_total,
                 portfolios: Vec::new(),
+                custom_logo,
             }
         })
         .collect();
 
-    // STEP 3: Get per-portfolio breakdown using transaction sums (NOT FIFO lots!)
+    // STEP 4: Get per-portfolio breakdown using transaction sums (NOT FIFO lots!)
     let portfolio_sql = "
         SELECT
             COALESCE(s.isin, s.uuid) as identifier,
@@ -677,16 +835,31 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
         let shares = shares::to_decimal(shares_raw);
         let entry = portfolio_map.entry(identifier.clone()).or_default();
 
-        // Find the price for this identifier from our holdings
-        let price = holdings
+        // Find the price and currency for this identifier from our holdings
+        let holding_info = holdings
             .iter()
             .find(|h| h.isin == identifier)
-            .and_then(|h| h.current_price);
+            .map(|h| (h.current_price, h.currency.clone()));
+
+        let value = if let Some((Some(price), security_currency)) = holding_info {
+            let value_in_security_currency = price * shares;
+            // Convert to base currency if different
+            if security_currency == base_currency {
+                Some(value_in_security_currency)
+            } else {
+                Some(
+                    currency::convert(conn, value_in_security_currency, &security_currency, &base_currency, today)
+                        .unwrap_or(value_in_security_currency)
+                )
+            }
+        } else {
+            None
+        };
 
         entry.push(PortfolioHolding {
             portfolio_name,
             shares,
-            value: price.map(|p| p * shares),
+            value,
         });
     }
 
@@ -741,11 +914,13 @@ pub fn get_portfolio_summary(import_id: Option<i64>) -> Result<PortfolioSummary,
             )
             .unwrap_or(0),
             conn.query_row::<i32, _, _>(
-                "SELECT COUNT(*) FROM pp_txn t
-                 JOIN pp_account a ON t.owner_type = 'account' AND t.owner_id = a.id AND a.import_id = ?1
-                 UNION ALL
-                 SELECT COUNT(*) FROM pp_txn t
-                 JOIN pp_portfolio p ON t.owner_type = 'portfolio' AND t.owner_id = p.id AND p.import_id = ?1",
+                "SELECT COALESCE(SUM(cnt), 0) FROM (
+                     SELECT COUNT(*) as cnt FROM pp_txn t
+                     JOIN pp_account a ON t.owner_type = 'account' AND t.owner_id = a.id AND a.import_id = ?1
+                     UNION ALL
+                     SELECT COUNT(*) FROM pp_txn t
+                     JOIN pp_portfolio p ON t.owner_type = 'portfolio' AND t.owner_id = p.id AND p.import_id = ?1
+                 )",
                 params![id],
                 |r| r.get(0),
             )
@@ -906,4 +1081,395 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
         .collect();
 
     Ok(result)
+}
+
+/// Get cost basis history showing how the Einstand (cost basis) evolved over time
+/// Uses FIFO lots with monthly aggregation for smoother visualization
+#[command]
+pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get the current actual cost basis from FIFO lots (this is the ground truth)
+    let current_cost_basis: f64 = conn
+        .query_row(
+            r#"SELECT COALESCE(SUM(
+                CASE WHEN original_shares > 0 THEN
+                    remaining_shares * 1.0 / original_shares * gross_amount
+                ELSE 0 END
+            ), 0) / 100.0 FROM pp_fifo_lot WHERE remaining_shares > 0"#,
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0.0);
+
+    // Get purchase events aggregated by MONTH (YYYY-MM format, use last day of month)
+    let purchases_sql = r#"
+        SELECT
+            strftime('%Y-%m', purchase_date) || '-' ||
+            CASE strftime('%m', purchase_date)
+                WHEN '01' THEN '31' WHEN '02' THEN '28' WHEN '03' THEN '31'
+                WHEN '04' THEN '30' WHEN '05' THEN '31' WHEN '06' THEN '30'
+                WHEN '07' THEN '31' WHEN '08' THEN '31' WHEN '09' THEN '30'
+                WHEN '10' THEN '31' WHEN '11' THEN '30' WHEN '12' THEN '31'
+            END as month_end,
+            SUM(gross_amount) / 100.0 as amount
+        FROM pp_fifo_lot
+        GROUP BY strftime('%Y-%m', purchase_date)
+        ORDER BY month_end ASC
+    "#;
+
+    // Get sale events aggregated by MONTH
+    let sales_sql = r#"
+        SELECT
+            strftime('%Y-%m', t.date) || '-' ||
+            CASE strftime('%m', t.date)
+                WHEN '01' THEN '31' WHEN '02' THEN '28' WHEN '03' THEN '31'
+                WHEN '04' THEN '30' WHEN '05' THEN '31' WHEN '06' THEN '30'
+                WHEN '07' THEN '31' WHEN '08' THEN '31' WHEN '09' THEN '30'
+                WHEN '10' THEN '31' WHEN '11' THEN '30' WHEN '12' THEN '31'
+            END as month_end,
+            SUM(ABS(t.amount)) / 100.0 as amount
+        FROM pp_txn t
+        WHERE t.owner_type = 'portfolio'
+          AND t.txn_type IN ('SELL', 'DELIVERY_OUTBOUND')
+          AND t.shares IS NOT NULL
+        GROUP BY strftime('%Y-%m', t.date)
+        ORDER BY month_end ASC
+    "#;
+
+    // Collect purchase events (monthly)
+    let mut events: Vec<(String, f64, bool)> = Vec::new();
+    {
+        let mut stmt = conn.prepare(purchases_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            if let Ok((date, amount)) = row {
+                events.push((date, amount, true));
+            }
+        }
+    }
+
+    // Collect sale events (monthly)
+    {
+        let mut stmt = conn.prepare(sales_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            if let Ok((date, amount)) = row {
+                events.push((date, amount, false));
+            }
+        }
+    }
+
+    // Sort by date
+    events.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Calculate total purchases and total sales proceeds
+    let total_purchases: f64 = events.iter().filter(|e| e.2).map(|e| e.1).sum();
+    let total_sales: f64 = events.iter().filter(|e| !e.2).map(|e| e.1).sum();
+
+    // The cost basis consumed by sales is: total_purchases - current_cost_basis
+    let consumed_cost_basis = total_purchases - current_cost_basis;
+
+    // Scale factor: how much of sale proceeds represents cost basis (vs. gain/loss)
+    let sale_to_cost_ratio = if total_sales > 0.0 {
+        consumed_cost_basis / total_sales
+    } else {
+        0.0
+    };
+
+    // Build cumulative cost basis by month
+    let mut cost_basis_by_month: std::collections::BTreeMap<String, f64> =
+        std::collections::BTreeMap::new();
+    let mut cumulative: f64 = 0.0;
+
+    for (date, amount, is_purchase) in events {
+        if is_purchase {
+            cumulative += amount;
+        } else {
+            cumulative -= amount * sale_to_cost_ratio;
+        }
+        cost_basis_by_month.insert(date, cumulative.max(0.0));
+    }
+
+    // Convert to vector
+    let result: Vec<PortfolioValuePoint> = cost_basis_by_month
+        .into_iter()
+        .map(|(date, value)| PortfolioValuePoint { date, value })
+        .collect();
+
+    Ok(result)
+}
+
+/// Upload a custom logo for a security (base64-encoded)
+#[command]
+pub fn upload_security_logo(security_id: i64, logo_data: String) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    conn.execute(
+        "UPDATE pp_security SET custom_logo = ?1 WHERE id = ?2",
+        params![logo_data, security_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Delete the custom logo for a security
+#[command]
+pub fn delete_security_logo(security_id: i64) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    conn.execute(
+        "UPDATE pp_security SET custom_logo = NULL WHERE id = ?1",
+        params![security_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Get the custom logo for a security
+#[command]
+pub fn get_security_logo(security_id: i64) -> Result<Option<String>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT custom_logo FROM pp_security WHERE id = ?1",
+            params![security_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+// ============================================================================
+// FIFO Cost Basis History
+// ============================================================================
+
+/// A snapshot of the FIFO cost basis at a point in time
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FifoCostBasisSnapshot {
+    pub date: String,
+    pub shares: f64,
+    pub cost_per_share: f64,
+    pub total_cost_basis: f64,
+}
+
+/// Transaction with trade details for chart markers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeMarker {
+    pub date: String,
+    pub txn_type: String,
+    pub shares: f64,
+    pub price_per_share: f64,
+    pub amount: f64,
+    pub fees: f64,
+    pub taxes: f64,
+}
+
+/// Complete data for security detail chart
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityChartData {
+    pub cost_basis_history: Vec<FifoCostBasisSnapshot>,
+    pub trades: Vec<TradeMarker>,
+}
+
+/// Get FIFO cost basis history for a security over time
+/// Returns snapshots at each transaction date showing:
+/// - Total shares held
+/// - Cost per share (Einstandskurs)
+/// - Total cost basis (Einstandswert)
+///
+/// Note: This queries by ISIN to handle aggregated holdings where multiple
+/// security entries may exist with the same ISIN (from different imports).
+#[command]
+pub fn get_fifo_cost_basis_history(security_id: i64) -> Result<SecurityChartData, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // First, get the ISIN for the given security_id
+    // If no ISIN, use the UUID as identifier
+    let identifier: String = conn
+        .query_row(
+            "SELECT COALESCE(isin, uuid) FROM pp_security WHERE id = ?1",
+            params![security_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Security not found: {}", e))?;
+
+    // Get all portfolio transactions for securities with this ISIN, sorted by date
+    // Same ordering as FIFO processing: BUY first, then TRANSFER, then SELL
+    let mut stmt = conn.prepare(r#"
+        SELECT
+            t.id, t.txn_type, t.date, t.amount, t.shares,
+            COALESCE(SUM(CASE WHEN u.unit_type = 'FEE' THEN u.amount ELSE 0 END), 0) as fees,
+            COALESCE(SUM(CASE WHEN u.unit_type = 'TAX' THEN u.amount ELSE 0 END), 0) as taxes
+        FROM pp_txn t
+        LEFT JOIN pp_txn_unit u ON u.txn_id = t.id
+        JOIN pp_security s ON s.id = t.security_id
+        WHERE COALESCE(s.isin, s.uuid) = ?1 AND t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+        GROUP BY t.id
+        ORDER BY
+            date(t.date),
+            CASE t.txn_type
+                WHEN 'BUY' THEN 1
+                WHEN 'DELIVERY_INBOUND' THEN 1
+                WHEN 'TRANSFER_IN' THEN 2
+                WHEN 'TRANSFER_OUT' THEN 3
+                WHEN 'SELL' THEN 4
+                WHEN 'DELIVERY_OUTBOUND' THEN 4
+                ELSE 5
+            END,
+            t.id
+    "#).map_err(|e| e.to_string())?;
+
+    struct TxnRow {
+        _id: i64,
+        txn_type: String,
+        date: String,
+        amount: i64,
+        shares: i64,
+        fees: i64,
+        taxes: i64,
+    }
+
+    let transactions: Vec<TxnRow> = stmt
+        .query_map([&identifier], |row| {
+            Ok(TxnRow {
+                _id: row.get(0)?,
+                txn_type: row.get(1)?,
+                date: row.get(2)?,
+                amount: row.get(3)?,
+                shares: row.get(4)?,
+                fees: row.get(5)?,
+                taxes: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Process transactions to build cost basis history
+    // Using simplified FIFO: track total shares and total cost
+    let mut total_shares: i64 = 0;
+    let mut total_cost: i64 = 0; // In cents (amount scale)
+    let mut snapshots: Vec<FifoCostBasisSnapshot> = Vec::new();
+    let mut trades: Vec<TradeMarker> = Vec::new();
+
+    for txn in transactions {
+        let shares_decimal = shares::to_decimal(txn.shares);
+        let amount_decimal = txn.amount as f64 / 100.0;
+        let fees_decimal = txn.fees as f64 / 100.0;
+        let taxes_decimal = txn.taxes as f64 / 100.0;
+
+        match txn.txn_type.as_str() {
+            "BUY" | "DELIVERY_INBOUND" | "TRANSFER_IN" => {
+                // Add shares and cost
+                total_shares += txn.shares;
+                total_cost += txn.amount; // amount includes fees/taxes for cost basis
+
+                // Calculate price per share for trade marker
+                let price_per_share = if txn.shares > 0 {
+                    // Net amount (without fees/taxes) / shares
+                    let net_amount = txn.amount - txn.fees - txn.taxes;
+                    (net_amount as f64 / 100.0) / shares_decimal
+                } else {
+                    0.0
+                };
+
+                trades.push(TradeMarker {
+                    date: txn.date.clone(),
+                    txn_type: txn.txn_type.clone(),
+                    shares: shares_decimal,
+                    price_per_share,
+                    amount: amount_decimal,
+                    fees: fees_decimal,
+                    taxes: taxes_decimal,
+                });
+            }
+            "SELL" | "DELIVERY_OUTBOUND" | "TRANSFER_OUT" => {
+                // Remove shares proportionally (FIFO average)
+                if total_shares > 0 {
+                    // Calculate proportional cost to remove
+                    let cost_per_share = total_cost as f64 / total_shares as f64;
+                    let cost_removed = (cost_per_share * txn.shares as f64) as i64;
+                    total_cost -= cost_removed;
+                    total_shares -= txn.shares;
+
+                    // Ensure non-negative
+                    if total_cost < 0 {
+                        total_cost = 0;
+                    }
+                    if total_shares < 0 {
+                        total_shares = 0;
+                    }
+                }
+
+                // Calculate price per share for trade marker
+                let price_per_share = if txn.shares > 0 {
+                    let net_amount = txn.amount - txn.fees - txn.taxes;
+                    (net_amount as f64 / 100.0) / shares_decimal
+                } else {
+                    0.0
+                };
+
+                trades.push(TradeMarker {
+                    date: txn.date.clone(),
+                    txn_type: txn.txn_type.clone(),
+                    shares: shares_decimal,
+                    price_per_share,
+                    amount: amount_decimal,
+                    fees: fees_decimal,
+                    taxes: taxes_decimal,
+                });
+            }
+            _ => {}
+        }
+
+        // Create snapshot after each transaction
+        let shares_decimal = shares::to_decimal(total_shares);
+        let total_cost_decimal = total_cost as f64 / 100.0;
+        let cost_per_share = if total_shares > 0 {
+            total_cost_decimal / shares_decimal
+        } else {
+            0.0
+        };
+
+        snapshots.push(FifoCostBasisSnapshot {
+            date: txn.date,
+            shares: shares_decimal,
+            cost_per_share,
+            total_cost_basis: total_cost_decimal,
+        });
+    }
+
+    Ok(SecurityChartData {
+        cost_basis_history: snapshots,
+        trades,
+    })
 }

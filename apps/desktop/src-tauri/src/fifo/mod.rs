@@ -34,17 +34,29 @@ pub struct FifoLot {
 
 impl FifoLot {
     /// Calculate remaining cost basis proportionally
+    /// Uses gross_amount (INCLUDING fees and taxes) per PP convention for Purchase Value
     pub fn remaining_cost_basis(&self) -> i64 {
         if self.original_shares == 0 {
             return 0;
         }
-        ((self.remaining_shares as i128 * self.net_amount as i128) /
+        ((self.remaining_shares as i128 * self.gross_amount as i128) /
          self.original_shares as i128) as i64
     }
 }
 
+/// Record of a lot consumption (for tracking realized gains)
+#[derive(Debug, Clone)]
+pub struct FifoConsumption {
+    pub lot_id: i64,
+    pub sale_txn_id: i64,
+    pub shares_consumed: i64,
+    pub gross_amount: i64, // Proportional cost basis (with fees/taxes)
+    pub net_amount: i64,   // Proportional cost basis (without fees/taxes)
+}
+
 /// Transaction data for FIFO processing
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct TxnData {
     id: i64,
     uuid: String,
@@ -125,14 +137,17 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
 
     // FIFO lots per portfolio: portfolio_id -> Vec<FifoLot>
     let mut lots_by_portfolio: HashMap<i64, Vec<FifoLot>> = HashMap::new();
+    let mut consumptions: Vec<FifoConsumption> = Vec::new();
     let mut next_lot_id: i64 = 1;
 
     for txn in transactions {
         match txn.txn_type.as_str() {
             "BUY" | "DELIVERY_INBOUND" => {
                 // Create new lot
-                let gross_amount = txn.amount - txn.fees - txn.taxes;
-                let net_amount = txn.amount;
+                // PP CostCalculation.java: gross_amount INCLUDES fees and taxes (= Purchase Value)
+                // net_amount EXCLUDES fees and taxes
+                let gross_amount = txn.amount;
+                let net_amount = txn.amount - txn.fees - txn.taxes;
 
                 let lot = FifoLot {
                     id: next_lot_id,
@@ -155,7 +170,7 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
             }
 
             "SELL" | "DELIVERY_OUTBOUND" => {
-                // Consume lots in FIFO order
+                // Consume lots in FIFO order and track consumptions
                 let lots = lots_by_portfolio.entry(txn.portfolio_id).or_default();
                 let mut shares_to_consume = txn.shares;
 
@@ -168,6 +183,22 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
                     }
 
                     let consumed = std::cmp::min(lot.remaining_shares, shares_to_consume);
+
+                    // Calculate proportional cost basis for consumed shares
+                    // PP CostCalculation.java: proportion = consumed / original_shares
+                    let proportion = consumed as f64 / lot.original_shares as f64;
+                    let consumed_gross = (lot.gross_amount as f64 * proportion).round() as i64;
+                    let consumed_net = (lot.net_amount as f64 * proportion).round() as i64;
+
+                    // Record the consumption for realized gains tracking
+                    consumptions.push(FifoConsumption {
+                        lot_id: lot.id,
+                        sale_txn_id: txn.id,
+                        shares_consumed: consumed,
+                        gross_amount: consumed_gross,
+                        net_amount: consumed_net,
+                    });
+
                     lot.remaining_shares -= consumed;
                     shares_to_consume -= consumed;
                 }
@@ -216,7 +247,9 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
         }
     }
 
-    // Insert all lots into database
+    // Insert all lots into database and track the mapping from temp ID to actual DB ID
+    let mut lot_id_map: HashMap<i64, i64> = HashMap::new();
+
     for (_portfolio_id, lots) in lots_by_portfolio {
         for lot in lots {
             if lot.remaining_shares > 0 || lot.original_shares > 0 {
@@ -230,7 +263,35 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
                         lot.original_shares, lot.remaining_shares, lot.gross_amount, lot.net_amount, lot.currency
                     ],
                 )?;
+
+                // Map the temporary lot ID to the actual database ID
+                let db_lot_id = conn.last_insert_rowid();
+                lot_id_map.insert(lot.id, db_lot_id);
             }
+        }
+    }
+
+    // Insert all consumption records
+    for consumption in consumptions {
+        // Look up the actual database lot ID
+        if let Some(&db_lot_id) = lot_id_map.get(&consumption.lot_id) {
+            conn.execute(
+                r#"INSERT INTO pp_fifo_consumption
+                   (lot_id, sale_txn_id, shares_consumed, gross_amount, net_amount)
+                   VALUES (?, ?, ?, ?, ?)"#,
+                params![
+                    db_lot_id,
+                    consumption.sale_txn_id,
+                    consumption.shares_consumed,
+                    consumption.gross_amount,
+                    consumption.net_amount
+                ],
+            )?;
+        } else {
+            log::warn!(
+                "FIFO: Consumption references unknown lot_id {} for sale_txn {}",
+                consumption.lot_id, consumption.sale_txn_id
+            );
         }
     }
 
@@ -350,6 +411,8 @@ fn create_lot_for_transfer(
     security_id: i64,
     next_lot_id: &mut i64,
 ) {
+    // PP CostCalculation.java: gross_amount INCLUDES fees and taxes (= Purchase Value)
+    // net_amount EXCLUDES fees and taxes
     let lot = FifoLot {
         id: *next_lot_id,
         security_id,
@@ -358,8 +421,8 @@ fn create_lot_for_transfer(
         purchase_date: txn.date.clone(),
         original_shares: txn.shares,
         remaining_shares: txn.shares,
-        gross_amount: txn.amount - txn.fees - txn.taxes,
-        net_amount: txn.amount,
+        gross_amount: txn.amount,
+        net_amount: txn.amount - txn.fees - txn.taxes,
         currency: txn.currency.clone(),
     };
     *next_lot_id += 1;
@@ -388,13 +451,15 @@ pub fn build_all_fifo_lots(conn: &Connection) -> Result<()> {
 }
 
 /// Get FIFO cost basis for a security (aggregated across all portfolios)
+/// Returns (total_remaining_shares, total_cost_basis)
+/// Cost basis uses gross_amount (INCLUDING fees and taxes) per PP convention
 pub fn get_fifo_cost_basis(conn: &Connection, security_id: i64) -> Result<(i64, i64)> {
     let mut stmt = conn.prepare(r#"
         SELECT
             COALESCE(SUM(remaining_shares), 0),
             COALESCE(SUM(
                 CASE WHEN original_shares > 0 THEN
-                    (remaining_shares * net_amount / original_shares)
+                    (remaining_shares * gross_amount / original_shares)
                 ELSE 0 END
             ), 0)
         FROM pp_fifo_lot

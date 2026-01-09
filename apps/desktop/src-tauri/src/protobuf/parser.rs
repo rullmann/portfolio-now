@@ -95,6 +95,9 @@ fn convert_client(pb: &PClient) -> Result<Client> {
             // For other types: pb_tx.portfolio is the owning portfolio
             if pb_tx.transaction_type == super::schema::transaction_type::SECURITY_TRANSFER {
                 // TRANSFER: portfolio = source (TRANSFER_OUT), other_portfolio = destination (TRANSFER_IN)
+                // UUIDs: TRANSFER_OUT = "{uuid}-out", TRANSFER_IN = "{uuid}"
+                let transfer_out_uuid = format!("{}-out", pb_tx.uuid);
+                let transfer_in_uuid = pb_tx.uuid.clone();
 
                 // Add TRANSFER_OUT to source portfolio (pb_tx.portfolio)
                 if let Some(source_portfolio) = client
@@ -102,7 +105,12 @@ fn convert_client(pb: &PClient) -> Result<Client> {
                     .iter_mut()
                     .find(|p| &p.uuid == portfolio_uuid)
                 {
-                    if let Some(tx) = convert_transaction(pb_tx, true)? {
+                    if let Some(mut tx) = convert_transaction(pb_tx, true)? {
+                        // Set cross-entry to link TRANSFER_OUT -> TRANSFER_IN
+                        tx.cross_entry = Some(CrossEntry::portfolio_transfer(
+                            transfer_out_uuid.clone(),
+                            transfer_in_uuid.clone(),
+                        ));
                         source_portfolio.transactions.push(tx);
                     }
                 }
@@ -114,7 +122,12 @@ fn convert_client(pb: &PClient) -> Result<Client> {
                         .iter_mut()
                         .find(|p| &p.uuid == other_portfolio_uuid)
                     {
-                        if let Some(tx) = convert_transaction(pb_tx, false)? {
+                        if let Some(mut tx) = convert_transaction(pb_tx, false)? {
+                            // Set cross-entry to link TRANSFER_OUT -> TRANSFER_IN
+                            tx.cross_entry = Some(CrossEntry::portfolio_transfer(
+                                transfer_out_uuid.clone(),
+                                transfer_in_uuid.clone(),
+                            ));
                             dest_portfolio.transactions.push(tx);
                         }
                     }
@@ -148,6 +161,24 @@ fn convert_client(pb: &PClient) -> Result<Client> {
             // For cash transfers (CASH_TRANSFER=5), also create transfer for target account
             if pb_tx.transaction_type == super::schema::transaction_type::CASH_TRANSFER {
                 if let Some(other_account_uuid) = &pb_tx.other_account {
+                    // UUIDs: TRANSFER_OUT = "{uuid}", TRANSFER_IN = "{uuid}-in"
+                    let transfer_out_uuid = pb_tx.uuid.clone();
+                    let transfer_in_uuid = format!("{}-in", pb_tx.uuid);
+
+                    // Update the source transaction with cross-entry
+                    if let Some(source_account) = client
+                        .accounts
+                        .iter_mut()
+                        .find(|a| &a.uuid == account_uuid)
+                    {
+                        if let Some(source_tx) = source_account.transactions.last_mut() {
+                            source_tx.cross_entry = Some(CrossEntry::account_transfer(
+                                transfer_out_uuid.clone(),
+                                transfer_in_uuid.clone(),
+                            ));
+                        }
+                    }
+
                     if let Some(target_account) = client
                         .accounts
                         .iter_mut()
@@ -158,9 +189,14 @@ fn convert_client(pb: &PClient) -> Result<Client> {
                         // Swap the direction for the target account
                         target_tx.account = Some(other_account_uuid.clone());
                         target_tx.other_account = Some(account_uuid.clone());
-                        target_tx.uuid = format!("{}-in", pb_tx.uuid);
+                        target_tx.uuid = transfer_in_uuid.clone();
 
-                        if let Some(tx) = convert_account_transaction(&target_tx)? {
+                        if let Some(mut tx) = convert_account_transaction(&target_tx)? {
+                            // Set cross-entry to link TRANSFER_OUT -> TRANSFER_IN
+                            tx.cross_entry = Some(CrossEntry::account_transfer(
+                                transfer_out_uuid.clone(),
+                                transfer_in_uuid.clone(),
+                            ));
                             target_account.transactions.push(tx);
                         }
                     }

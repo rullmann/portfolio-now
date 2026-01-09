@@ -2,3 +2,8 @@ export { SecurityPriceChart } from './SecurityPriceChart';
 export { AssetAllocationChart } from './AssetAllocationChart';
 export { PortfolioValueChart } from './PortfolioValueChart';
 export { MiniPortfolioChart } from './MiniPortfolioChart';
+export { TradingViewMiniChart } from './TradingViewMiniChart';
+export { TradingViewPortfolioChart } from './TradingViewPortfolioChart';
+export { TradingViewBenchmarkChart } from './TradingViewBenchmarkChart';
+export { TradingViewChart } from './TradingViewChart';
+export { IndicatorsPanel } from './IndicatorsPanel';
