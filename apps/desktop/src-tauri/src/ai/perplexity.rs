@@ -1,4 +1,7 @@
-//! OpenAI GPT-4 Vision API provider for chart analysis
+//! Perplexity Sonar API provider for chart analysis
+//!
+//! Perplexity's Sonar models combine real-time web search with vision capabilities.
+//! API format is OpenAI-compatible.
 
 use super::{
     build_analysis_prompt, AiError, AiErrorKind, ChartAnalysisResponse, ChartContext,
@@ -9,7 +12,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const API_URL: &str = "https://api.perplexity.ai/chat/completions";
 
 #[derive(Serialize)]
 struct ChatCompletionRequest {
@@ -59,33 +62,32 @@ struct Usage {
     total_tokens: u32,
 }
 
-/// Parse OpenAI API error response
+/// Parse Perplexity API error response
 fn parse_error(status: u16, body: &str, model: &str) -> AiError {
-    let fallback = get_fallback_model("openai", model);
+    let fallback = get_fallback_model("perplexity", model);
     let body_lower = body.to_lowercase();
 
     match status {
         429 => {
-            // OpenAI uses 429 for rate limit and quota
             if body_lower.contains("quota") || body_lower.contains("billing") ||
-               body_lower.contains("exceeded") {
-                AiError::quota_exceeded("OpenAI", model, fallback)
+               body_lower.contains("exceeded") || body_lower.contains("limit") {
+                AiError::quota_exceeded("Perplexity", model, fallback)
             } else {
                 let retry_after = parse_retry_delay(body);
-                AiError::rate_limit("OpenAI", model, retry_after)
+                AiError::rate_limit("Perplexity", model, retry_after)
             }
         }
-        401 => AiError::invalid_api_key("OpenAI", model),
+        401 => AiError::invalid_api_key("Perplexity", model),
         403 => {
             if body_lower.contains("permission") || body_lower.contains("access") {
-                AiError::invalid_api_key("OpenAI", model)
+                AiError::invalid_api_key("Perplexity", model)
             } else {
-                AiError::other("OpenAI", model, "Zugriff verweigert")
+                AiError::other("Perplexity", model, "Zugriff verweigert")
             }
         }
-        404 => AiError::model_not_found("OpenAI", model, fallback),
-        500..=599 => AiError::server_error("OpenAI", model, &format!("HTTP {}", status)),
-        _ => AiError::other("OpenAI", model, &format!("HTTP {}: {}",
+        404 => AiError::model_not_found("Perplexity", model, fallback),
+        500..=599 => AiError::server_error("Perplexity", model, &format!("HTTP {}", status)),
+        _ => AiError::other("Perplexity", model, &format!("HTTP {}: {}",
             status,
             if body.len() > 200 { &body[..200] } else { body }
         )),
@@ -97,7 +99,7 @@ fn is_retryable(err: &AiError) -> bool {
     matches!(err.kind, AiErrorKind::RateLimit | AiErrorKind::ServerError | AiErrorKind::NetworkError)
 }
 
-/// Analyze a chart image using OpenAI GPT-4 Vision with retry logic
+/// Analyze a chart image using Perplexity Sonar with retry logic
 pub async fn analyze(
     image_base64: &str,
     model: &str,
@@ -108,7 +110,7 @@ pub async fn analyze(
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {}", api_key))
-            .map_err(|_| AiError::invalid_api_key("OpenAI", model))?,
+            .map_err(|_| AiError::invalid_api_key("Perplexity", model))?,
     );
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
@@ -118,7 +120,7 @@ pub async fn analyze(
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .pool_max_idle_per_host(2)
         .build()
-        .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
+        .map_err(|e| AiError::network_error("Perplexity", model, &e.to_string()))?;
 
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
@@ -131,7 +133,7 @@ pub async fn analyze(
                 },
                 ContentPart::ImageUrl {
                     image_url: ImageUrl {
-                        // OpenAI accepts JPEG for optimized images
+                        // Perplexity accepts base64 data URLs like OpenAI
                         url: format!("data:image/jpeg;base64,{}", image_base64),
                     },
                 },
@@ -140,7 +142,7 @@ pub async fn analyze(
     };
 
     // Retry loop with exponential backoff
-    let mut last_error = AiError::other("OpenAI", model, "No attempts made");
+    let mut last_error = AiError::other("Perplexity", model, "No attempts made");
 
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
@@ -151,11 +153,11 @@ pub async fn analyze(
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {
-                    AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                    AiError::network_error("Perplexity", model, "Zeitüberschreitung")
                 } else if e.is_connect() {
-                    AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                    AiError::network_error("Perplexity", model, "Verbindung fehlgeschlagen")
                 } else {
-                    AiError::network_error("OpenAI", model, &e.to_string())
+                    AiError::network_error("Perplexity", model, &e.to_string())
                 };
 
                 if attempt < MAX_RETRIES && is_retryable(&last_error) {
@@ -180,7 +182,7 @@ pub async fn analyze(
         let data: ChatCompletionResponse = response
             .json()
             .await
-            .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+            .map_err(|e| AiError::other("Perplexity", model, &format!("JSON parse error: {}", e)))?;
 
         let raw_analysis = data
             .choices
@@ -193,7 +195,7 @@ pub async fn analyze(
 
         return Ok(ChartAnalysisResponse {
             analysis,
-            provider: "OpenAI".to_string(),
+            provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
         });

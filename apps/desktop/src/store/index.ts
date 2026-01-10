@@ -153,6 +153,71 @@ export const useExpandedGroupsStore = create<ExpandedGroupsState>()((set) => ({
 // Auto-update interval options (in minutes, 0 = disabled)
 export type AutoUpdateInterval = 0 | 15 | 30 | 60;
 
+// AI Model options per provider (updated January 2025)
+export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251015' | 'claude-opus-4-5-20251101';
+export type OpenAIModel = 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4o' | 'o3';
+export type GeminiModel = 'gemini-3-pro-preview' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-2.5-pro';
+
+// AI Models - Updated January 2025
+// Sources:
+// - Claude: https://platform.claude.com/docs/en/about-claude/models/overview
+// - OpenAI: https://platform.openai.com/docs/models
+// - Gemini: https://ai.google.dev/gemini-api/docs/models
+// - Perplexity: https://docs.perplexity.ai/guides/model-cards
+export const AI_MODELS = {
+  claude: [
+    { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', description: 'Ausgewogen' },
+    { id: 'claude-haiku-4-5-20251015', name: 'Claude Haiku 4.5', description: 'Schnell & günstig' },
+    { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Beste Qualität' },
+  ],
+  openai: [
+    { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Neuestes, 1M Kontext' },
+    { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', description: 'Schnell & günstig' },
+    { id: 'gpt-4o', name: 'GPT-4o', description: 'Multimodal, bewährt' },
+    { id: 'o3', name: 'o3', description: 'Reasoning-Modell' },
+  ],
+  gemini: [
+    { id: 'gemini-3-flash', name: 'Gemini 3 Flash', description: 'Neuestes, schnell' },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Beste Qualität (Preview)' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Bewährt, schnell' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Bewährt, beste Qualität' },
+  ],
+  perplexity: [
+    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Beste Qualität + Web-Suche' },
+    { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
+    { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro', description: 'Reasoning mit CoT' },
+    { id: 'sonar-deep-research', name: 'Sonar Deep Research', description: 'Experten-Recherche' },
+  ],
+} as const;
+
+// Deprecated model mappings - auto-upgrade to replacements
+const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
+  perplexity: {
+    'sonar-reasoning': 'sonar-reasoning-pro',
+  },
+  claude: {
+    'claude-3-opus-20240229': 'claude-sonnet-4-5-20250514',
+    'claude-3-sonnet-20240229': 'claude-sonnet-4-5-20250514',
+    'claude-3-haiku-20240307': 'claude-haiku-4-5-20251015',
+    'claude-2.1': 'claude-sonnet-4-5-20250514',
+  },
+  openai: {
+    'gpt-4-vision-preview': 'gpt-4o',
+    'gpt-4-turbo': 'gpt-4.1',
+    'gpt-4-turbo-preview': 'gpt-4.1',
+  },
+  gemini: {
+    'gemini-pro-vision': 'gemini-2.0-flash',
+    'gemini-1.5-pro': 'gemini-2.5-pro',
+    'gemini-1.5-flash': 'gemini-2.5-flash',
+  },
+};
+
+// Get upgraded model if deprecated
+function getUpgradedModel(provider: string, model: string): string | null {
+  return DEPRECATED_MODELS[provider]?.[model] || null;
+}
+
 interface SettingsState {
   // Quote sync settings
   syncOnlyHeldSecurities: boolean;
@@ -187,14 +252,22 @@ interface SettingsState {
   setTwelveDataApiKey: (key: string) => void;
 
   // AI Analysis Settings
-  aiProvider: 'claude' | 'openai' | 'gemini';
-  setAiProvider: (provider: 'claude' | 'openai' | 'gemini') => void;
+  aiProvider: 'claude' | 'openai' | 'gemini' | 'perplexity';
+  setAiProvider: (provider: 'claude' | 'openai' | 'gemini' | 'perplexity') => void;
+  aiModel: string;
+  setAiModel: (model: string) => void;
   anthropicApiKey: string;
   setAnthropicApiKey: (key: string) => void;
   openaiApiKey: string;
   setOpenaiApiKey: (key: string) => void;
   geminiApiKey: string;
   setGeminiApiKey: (key: string) => void;
+  perplexityApiKey: string;
+  setPerplexityApiKey: (key: string) => void;
+
+  // Model migration tracking (not persisted)
+  pendingModelMigration: { from: string; to: string; provider: string } | null;
+  clearPendingModelMigration: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -234,20 +307,92 @@ export const useSettingsStore = create<SettingsState>()(
 
       // AI Analysis Settings
       aiProvider: 'claude',
-      setAiProvider: (provider) => set({ aiProvider: provider }),
+      setAiProvider: (provider) => set({
+        aiProvider: provider,
+        // Reset model to default for new provider
+        aiModel: provider === 'claude' ? 'claude-sonnet-4-5-20250514'
+          : provider === 'openai' ? 'gpt-4.1'
+          : 'gemini-3-flash',
+      }),
+      aiModel: 'claude-sonnet-4-5-20250514',
+      setAiModel: (model) => set({ aiModel: model }),
       anthropicApiKey: '',
       setAnthropicApiKey: (key) => set({ anthropicApiKey: key }),
       openaiApiKey: '',
       setOpenaiApiKey: (key) => set({ openaiApiKey: key }),
       geminiApiKey: '',
       setGeminiApiKey: (key) => set({ geminiApiKey: key }),
+      perplexityApiKey: '',
+      setPerplexityApiKey: (key) => set({ perplexityApiKey: key }),
+
+      // Model migration tracking (transient, not persisted)
+      pendingModelMigration: null,
+      clearPendingModelMigration: () => set({ pendingModelMigration: null }),
     }),
     {
       name: 'portfolio-settings',
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        ...(persistedState as Partial<SettingsState>),
-      }),
+      version: 3, // Increment when model lists change (v3: Added Gemini 3)
+      migrate: (persistedState, version) => {
+        const state = persistedState as Partial<SettingsState>;
+
+        // Migration: validate AI models (revalidate on each version bump)
+        if (version < 3) {
+          const provider = state.aiProvider || 'claude';
+          const validModels = AI_MODELS[provider].map(m => m.id) as string[];
+
+          // Reset to default if current model is not valid for the provider
+          if (state.aiModel && !validModels.includes(state.aiModel)) {
+            state.aiModel = AI_MODELS[provider][0].id;
+          }
+        }
+
+        return state as SettingsState;
+      },
+      merge: (persistedState, currentState) => {
+        const merged = {
+          ...currentState,
+          ...(persistedState as Partial<SettingsState>),
+        };
+
+        // Auto-upgrade deprecated models
+        const provider = merged.aiProvider || 'claude';
+        const originalModel = merged.aiModel;
+        const upgradedModel = getUpgradedModel(provider, merged.aiModel);
+
+        if (upgradedModel) {
+          console.log(`Auto-upgrading deprecated model ${merged.aiModel} to ${upgradedModel}`);
+          merged.aiModel = upgradedModel;
+          // Track migration for notification
+          merged.pendingModelMigration = {
+            from: originalModel,
+            to: upgradedModel,
+            provider,
+          };
+        }
+
+        // Validate model exists in current list
+        const validModels = AI_MODELS[provider].map(m => m.id) as string[];
+        if (!validModels.includes(merged.aiModel)) {
+          const defaultModel = AI_MODELS[provider][0].id;
+          // Track migration if model was invalid
+          if (!merged.pendingModelMigration && originalModel !== defaultModel) {
+            merged.pendingModelMigration = {
+              from: originalModel,
+              to: defaultModel,
+              provider,
+            };
+          }
+          merged.aiModel = defaultModel;
+        }
+
+        return merged;
+      },
+      // Exclude transient state from persistence
+      partialize: (state) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { pendingModelMigration, clearPendingModelMigration, ...persisted } = state;
+        return persisted as SettingsState;
+      },
     }
   )
 );

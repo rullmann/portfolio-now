@@ -181,10 +181,14 @@ export function TradingViewChart({
 
     const isDark = theme === 'dark';
 
+    // Use container height if available, otherwise fall back to prop
+    const containerHeight = containerRef.current.clientHeight;
+    const chartHeight = containerHeight > 100 ? containerHeight : height;
+
     // Create chart
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
-      height,
+      height: chartHeight,
       layout: {
         background: { type: ColorType.Solid, color: isDark ? '#1a1a2e' : '#ffffff' },
         textColor: isDark ? '#d1d4dc' : '#333333',
@@ -376,12 +380,12 @@ export function TradingViewChart({
 
     chart.timeScale().fitContent();
 
-    // Resize observer
+    // Resize observer - handle both width and height
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
-        const { width } = entry.contentRect;
-        if (chart && width > 0) {
-          chart.applyOptions({ width });
+        const { width, height: newHeight } = entry.contentRect;
+        if (chart && width > 0 && newHeight > 100) {
+          chart.applyOptions({ width, height: newHeight });
         }
       }
     });
@@ -406,7 +410,7 @@ export function TradingViewChart({
   }
 
   return (
-    <div className="relative h-full">
+    <div className="relative w-full h-full">
       {/* Legend */}
       <div className="absolute top-2 left-2 z-10 bg-background/80 backdrop-blur-sm rounded-lg px-3 py-2 text-xs font-mono">
         {symbol && <span className="font-bold text-foreground mr-4">{symbol}</span>}
@@ -443,8 +447,8 @@ export function TradingViewChart({
         )}
       </div>
 
-      {/* Chart Container */}
-      <div ref={containerRef} className="w-full h-full" />
+      {/* Chart Container - absolute positioning ensures it fills the parent */}
+      <div ref={containerRef} className="absolute inset-0" />
     </div>
   );
 }

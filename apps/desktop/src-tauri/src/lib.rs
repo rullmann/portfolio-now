@@ -204,6 +204,7 @@ pub fn run() {
             commands::pdf_export::export_tax_report_pdf,
             // AI Chart Analysis
             commands::ai::analyze_chart_with_ai,
+            commands::ai::get_ai_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,11 +4,20 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2 } from 'lucide-react';
+import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
+import { invoke } from '@tauri-apps/api/core';
+import ReactMarkdown from 'react-markdown';
 import type { SecurityData, PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices } from '../../lib/api';
 import { useSettingsStore } from '../../store';
+
+interface ChartAnalysisResponse {
+  analysis: string;
+  provider: string;
+  model: string;
+  tokensUsed?: number;
+}
 
 interface SecurityPriceModalProps {
   isOpen: boolean;
@@ -88,6 +97,110 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
   const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
+  const aiProvider = useSettingsStore((state) => state.aiProvider);
+  const aiModel = useSettingsStore((state) => state.aiModel);
+  const anthropicApiKey = useSettingsStore((state) => state.anthropicApiKey);
+  const openaiApiKey = useSettingsStore((state) => state.openaiApiKey);
+  const geminiApiKey = useSettingsStore((state) => state.geminiApiKey);
+
+  // AI Analysis state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number } | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [isAiCollapsed, setIsAiCollapsed] = useState(true);
+
+  // Get API key for selected provider
+  const aiApiKey = useMemo(() => {
+    switch (aiProvider) {
+      case 'claude': return anthropicApiKey;
+      case 'openai': return openaiApiKey;
+      case 'gemini': return geminiApiKey;
+    }
+  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey]);
+
+  const providerName = useMemo(() => {
+    switch (aiProvider) {
+      case 'claude': return 'Claude';
+      case 'openai': return 'GPT-4';
+      case 'gemini': return 'Gemini';
+    }
+  }, [aiProvider]);
+
+  // Reset AI analysis when modal closes or security changes
+  useEffect(() => {
+    if (!isOpen) {
+      setAnalysis(null);
+      setAnalysisInfo(null);
+      setAnalysisError(null);
+      setIsAiCollapsed(true);
+    }
+  }, [isOpen, security?.id]);
+
+  const handleAnalyze = async () => {
+    if (!chartContainerRef.current || !security || !aiApiKey) return;
+
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    setIsAiCollapsed(false);
+
+    try {
+      // Find all canvases in the chart container
+      const canvases = chartContainerRef.current.querySelectorAll('canvas');
+      if (canvases.length === 0) throw new Error('Chart canvas nicht gefunden');
+
+      // Create combined canvas with proper device pixel ratio handling
+      const containerRect = chartContainerRef.current.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+
+      const combinedCanvas = document.createElement('canvas');
+      combinedCanvas.width = containerRect.width * dpr;
+      combinedCanvas.height = containerRect.height * dpr;
+
+      const ctx = combinedCanvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas context nicht verfügbar');
+
+      ctx.scale(dpr, dpr);
+
+      const isDark = document.documentElement.classList.contains('dark');
+      ctx.fillStyle = isDark ? '#1f2937' : '#ffffff';
+      ctx.fillRect(0, 0, containerRect.width, containerRect.height);
+
+      // Draw each canvas layer at correct position
+      canvases.forEach((canvas) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = rect.left - containerRect.left;
+        const y = rect.top - containerRect.top;
+        ctx.drawImage(
+          canvas,
+          0, 0, canvas.width, canvas.height,
+          x, y, rect.width, rect.height
+        );
+      });
+
+      const imageBase64 = combinedCanvas.toDataURL('image/png').split(',')[1];
+
+      const context = {
+        securityName: security.name,
+        ticker: security.ticker,
+        currency: security.currency,
+        currentPrice: stats.latestPrice,
+        timeframe: selectedPeriod,
+        indicators: [],
+      };
+
+      const result = await invoke<ChartAnalysisResponse>('analyze_chart_with_ai', {
+        request: { imageBase64, provider: aiProvider, model: aiModel, apiKey: aiApiKey, context },
+      });
+
+      setAnalysis(result.analysis);
+      setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   // Load logo when modal opens
   useEffect(() => {
@@ -449,6 +562,79 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                     <p className="font-medium tabular-nums">{stats.latestPrice.toLocaleString('de-DE', { minimumFractionDigits: 2 })} {currency}</p>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* AI Analysis Section */}
+            {aiApiKey && chartData.length > 0 && (
+              <div className="border-t border-border">
+                {/* AI Header */}
+                <div className="flex items-center justify-between p-3 bg-muted/30">
+                  <button
+                    onClick={() => setIsAiCollapsed(!isAiCollapsed)}
+                    className="flex items-center gap-2 hover:text-primary transition-colors"
+                  >
+                    <Sparkles size={16} className="text-primary" />
+                    <span className="font-medium text-sm">KI-Analyse</span>
+                    <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
+                      {providerName}
+                    </span>
+                    {isAiCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                  </button>
+                  <button
+                    onClick={handleAnalyze}
+                    disabled={isAnalyzing}
+                    className="flex items-center gap-2 px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <RefreshCw size={12} className="animate-spin" />
+                        Analysiere...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={12} />
+                        Analysieren
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* AI Content */}
+                {!isAiCollapsed && (
+                  <div className="p-4 h-48 overflow-y-auto border-t border-border">
+                    {analysisError ? (
+                      <div className="text-destructive text-sm">{analysisError}</div>
+                    ) : isAnalyzing ? (
+                      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                        <RefreshCw size={24} className="animate-spin mb-2 opacity-50" />
+                        <p className="text-sm">Analyse wird erstellt...</p>
+                      </div>
+                    ) : analysis ? (
+                      <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-li:my-0">
+                        <ReactMarkdown>{analysis}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm">
+                        <Sparkles size={24} className="mb-2 opacity-30" />
+                        <p>Klicke "Analysieren" für KI-Einschätzung</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* AI Footer */}
+                {!isAiCollapsed && (
+                  <div className="px-4 py-2 border-t border-border bg-muted/30 flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Keine Anlageberatung</span>
+                    {analysisInfo && (
+                      <span className="text-xs text-muted-foreground">
+                        {analysisInfo.model}
+                        {analysisInfo.tokens && ` | ${analysisInfo.tokens.toLocaleString()} Tokens`}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </>

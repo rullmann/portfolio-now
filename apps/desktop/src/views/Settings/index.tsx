@@ -2,11 +2,21 @@
  * Settings view for application configuration.
  */
 
-import { useState, useEffect } from 'react';
-import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles } from 'lucide-react';
-import { useSettingsStore, useUIStore, toast } from '../../store';
+import { useState, useEffect, useCallback } from 'react';
+import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { useSettingsStore, useUIStore, toast, AI_MODELS } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
+import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIProviderLogo';
+
+// Type for dynamically fetched AI models
+interface DynamicAiModel {
+  id: string;
+  name: string;
+  description: string;
+  supportsVision: boolean;
+}
 
 export function SettingsView() {
   const {
@@ -32,12 +42,16 @@ export function SettingsView() {
     setTwelveDataApiKey,
     aiProvider,
     setAiProvider,
+    aiModel,
+    setAiModel,
     anthropicApiKey,
     setAnthropicApiKey,
     openaiApiKey,
     setOpenaiApiKey,
     geminiApiKey,
     setGeminiApiKey,
+    perplexityApiKey,
+    setPerplexityApiKey,
   } = useSettingsStore();
 
   const [showBrandfetchKey, setShowBrandfetchKey] = useState(false);
@@ -46,6 +60,8 @@ export function SettingsView() {
   const [showAlphaVantageKey, setShowAlphaVantageKey] = useState(false);
   const [showTwelveDataKey, setShowTwelveDataKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
+  const [dynamicModels, setDynamicModels] = useState<DynamicAiModel[] | null>(null);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -100,6 +116,87 @@ export function SettingsView() {
       setIsClearing(false);
     }
   };
+
+  // Get current API key for selected provider
+  const currentApiKey = aiProvider === 'claude' ? anthropicApiKey
+    : aiProvider === 'openai' ? openaiApiKey
+    : aiProvider === 'gemini' ? geminiApiKey
+    : perplexityApiKey;
+
+  // Fetch available models from API
+  const fetchAiModels = useCallback(async () => {
+    if (!currentApiKey) {
+      setDynamicModels(null);
+      return;
+    }
+
+    setIsLoadingModels(true);
+    try {
+      const models = await invoke<DynamicAiModel[]>('get_ai_models', {
+        provider: aiProvider,
+        apiKey: currentApiKey,
+      });
+
+      // Sort models: prefer non-preview, then by name (newer versions typically sort higher)
+      const sortedModels = [...models].sort((a, b) => {
+        // Prioritize non-preview models
+        const aPreview = a.id.includes('preview') ? 1 : 0;
+        const bPreview = b.id.includes('preview') ? 1 : 0;
+        if (aPreview !== bPreview) return aPreview - bPreview;
+        // Then sort by version (higher = newer)
+        return b.id.localeCompare(a.id);
+      });
+
+      setDynamicModels(sortedModels);
+
+      // Check if current model is deprecated
+      const currentModelExists = sortedModels.some(m => m.id === aiModel);
+
+      if (!currentModelExists && sortedModels.length > 0) {
+        // Model is deprecated - migrate to recommended model
+        const recommendedModel = sortedModels[0];
+        setAiModel(recommendedModel.id);
+        toast.warning(
+          `Modell "${aiModel}" nicht mehr verfügbar. Automatisch auf "${recommendedModel.name}" gewechselt.`,
+        );
+      } else {
+        // Check for new models (compare count with static list)
+        const staticCount = AI_MODELS[aiProvider].length;
+        if (sortedModels.length > staticCount) {
+          const newCount = sortedModels.length - staticCount;
+          toast.info(`${newCount} neue(s) Modell(e) verfügbar!`);
+        } else {
+          toast.success(`${sortedModels.length} Modelle geladen`);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch AI models:', err);
+      toast.error(`Modelle laden fehlgeschlagen: ${err}`);
+      setDynamicModels(null);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }, [aiProvider, currentApiKey, aiModel, setAiModel]);
+
+  // Reset dynamic models when provider changes
+  useEffect(() => {
+    setDynamicModels(null);
+  }, [aiProvider]);
+
+  // Auto-check models on mount if API key is present (validates selected model)
+  useEffect(() => {
+    if (currentApiKey && !dynamicModels && !isLoadingModels) {
+      // Delay to avoid immediate API call on page load
+      const timer = setTimeout(() => {
+        fetchAiModels();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only on mount
+
+  // Check if current model might be outdated (not in static list)
+  const modelMightBeOutdated = !AI_MODELS[aiProvider].some(m => m.id === aiModel) && !dynamicModels;
 
   return (
     <div className="space-y-6">
@@ -375,22 +472,114 @@ export function SettingsView() {
         <p className="text-sm text-muted-foreground mb-4">
           Nutze KI zur technischen Analyse deiner Charts. Die KI analysiert das Chartbild und gibt eine strukturierte Einschätzung.
         </p>
+
+        {/* Active Provider Display */}
+        {currentApiKey && (
+          <div className="mb-6 p-4 rounded-lg bg-muted/50 border border-border">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-background border border-border shadow-sm">
+                <AIProviderLogo provider={aiProvider} size={28} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-lg">{AI_PROVIDER_NAMES[aiProvider]}</span>
+                  <CheckCircle2 size={16} className="text-green-600" />
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {(dynamicModels || AI_MODELS[aiProvider]).find(m => m.id === aiModel)?.name || aiModel}
+                </div>
+              </div>
+              <div className="text-right text-xs text-muted-foreground">
+                <div>Aktiver Provider</div>
+                <div className="font-mono">{aiModel.split('-').slice(-1)[0]}</div>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="space-y-4">
-          {/* Provider Selection */}
+          {/* Provider Selection with Logos */}
           <div>
-            <label className="text-sm font-medium">KI-Anbieter</label>
-            <select
-              value={aiProvider}
-              onChange={(e) => {
-                setAiProvider(e.target.value as 'claude' | 'openai' | 'gemini');
-                setShowAiKey(false);
-              }}
-              className="mt-1 block w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
-            >
-              <option value="claude">Claude (Anthropic)</option>
-              <option value="openai">GPT-4 (OpenAI)</option>
-              <option value="gemini">Gemini (Google)</option>
-            </select>
+            <label className="text-sm font-medium mb-2 block">KI-Anbieter</label>
+            <div className="flex flex-wrap gap-2">
+              {(['claude', 'openai', 'gemini', 'perplexity'] as const).map((provider) => {
+                const isActive = aiProvider === provider;
+                const hasKey = provider === 'claude' ? !!anthropicApiKey
+                  : provider === 'openai' ? !!openaiApiKey
+                  : provider === 'gemini' ? !!geminiApiKey
+                  : !!perplexityApiKey;
+                return (
+                  <button
+                    key={provider}
+                    type="button"
+                    onClick={() => {
+                      setAiProvider(provider);
+                      setShowAiKey(false);
+                    }}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
+                      isActive
+                        ? 'border-primary bg-primary/5 shadow-sm'
+                        : 'border-border hover:border-muted-foreground/30 hover:bg-muted/50'
+                    }`}
+                  >
+                    <AIProviderLogo provider={provider} size={20} />
+                    <span className={`font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}>
+                      {AI_PROVIDER_NAMES[provider]}
+                    </span>
+                    {hasKey && (
+                      <CheckCircle2 size={14} className="text-green-600 ml-1" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Model Selection */}
+          <div className="max-w-lg">
+            <label className="text-sm font-medium flex items-center gap-2">
+              Modell
+              {dynamicModels && (
+                <span className="text-xs text-green-600 dark:text-green-400">
+                  (Live von API)
+                </span>
+              )}
+              {modelMightBeOutdated && (
+                <span className="text-xs text-amber-600 dark:text-amber-400" title="Modell nicht in Standard-Liste - prüfen empfohlen">
+                  (Prüfen empfohlen)
+                </span>
+              )}
+            </label>
+            <div className="flex gap-2 mt-1">
+              <select
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                className="flex-1 rounded-md border border-input bg-background px-3 py-2"
+              >
+                {(dynamicModels || AI_MODELS[aiProvider]).map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} ({model.description})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={fetchAiModels}
+                disabled={isLoadingModels || !currentApiKey}
+                title={currentApiKey ? 'Modelle von API laden' : 'API Key erforderlich'}
+                className="px-3 py-2 rounded-md border border-input bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isLoadingModels ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+              </button>
+            </div>
+            {!dynamicModels && currentApiKey && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Klicke ↻ um aktuelle Modelle zu laden
+              </p>
+            )}
           </div>
 
           {/* Dynamic API Key Field */}
@@ -449,19 +638,24 @@ export function SettingsView() {
                     ? anthropicApiKey
                     : aiProvider === 'openai'
                       ? openaiApiKey
-                      : geminiApiKey
+                      : aiProvider === 'gemini'
+                        ? geminiApiKey
+                        : perplexityApiKey
                 }
                 onChange={(e) => {
                   if (aiProvider === 'claude') setAnthropicApiKey(e.target.value);
                   else if (aiProvider === 'openai') setOpenaiApiKey(e.target.value);
-                  else setGeminiApiKey(e.target.value);
+                  else if (aiProvider === 'gemini') setGeminiApiKey(e.target.value);
+                  else setPerplexityApiKey(e.target.value);
                 }}
                 placeholder={
                   aiProvider === 'claude'
                     ? 'sk-ant-...'
                     : aiProvider === 'openai'
                       ? 'sk-...'
-                      : 'AI...'
+                      : aiProvider === 'gemini'
+                        ? 'AI...'
+                        : 'pplx-...'
                 }
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -475,12 +669,14 @@ export function SettingsView() {
             </div>
             {((aiProvider === 'claude' && anthropicApiKey) ||
               (aiProvider === 'openai' && openaiApiKey) ||
-              (aiProvider === 'gemini' && geminiApiKey)) && (
+              (aiProvider === 'gemini' && geminiApiKey) ||
+              (aiProvider === 'perplexity' && perplexityApiKey)) && (
               <p className="text-xs text-green-600 mt-1">
                 API Key gespeichert.{' '}
                 {aiProvider === 'claude' && 'Claude'}
                 {aiProvider === 'openai' && 'GPT-4'}
-                {aiProvider === 'gemini' && 'Gemini'} ist als KI-Anbieter verfügbar.
+                {aiProvider === 'gemini' && 'Gemini'}
+                {aiProvider === 'perplexity' && 'Perplexity'} ist als KI-Anbieter verfügbar.
               </p>
             )}
           </div>

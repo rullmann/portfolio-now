@@ -167,6 +167,23 @@ function App() {
     });
   }, [setError]);
 
+  // Check for AI model migrations and notify user
+  const { pendingModelMigration, clearPendingModelMigration } = useSettingsStore();
+  useEffect(() => {
+    if (pendingModelMigration) {
+      const { from, to, provider } = pendingModelMigration;
+      const providerName = provider === 'claude' ? 'Claude'
+        : provider === 'openai' ? 'OpenAI'
+        : provider === 'gemini' ? 'Gemini'
+        : 'Perplexity';
+
+      toast.info(
+        `KI-Modell aktualisiert: ${from} → ${to} (${providerName}). Das alte Modell ist nicht mehr verfügbar.`
+      );
+      clearPendingModelMigration();
+    }
+  }, [pendingModelMigration, clearPendingModelMigration]);
+
 
   // ============================================================================
   // Import Handler

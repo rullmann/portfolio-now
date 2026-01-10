@@ -3,12 +3,14 @@
  * Captures the chart as an image and sends it to an AI provider for analysis.
  */
 
-import { useState, useMemo, useRef } from 'react';
-import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useMemo, useRef, useCallback } from 'react';
+import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp, ArrowRight, Clock } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
-import { useSettingsStore, useUIStore } from '../../store';
+import { useSettingsStore, useUIStore, AI_MODELS, toast } from '../../store';
 import type { IndicatorConfig } from '../../lib/indicators';
+import { AIProviderLogo, AI_PROVIDER_NAMES } from '../common/AIProviderLogo';
+import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
 
 // Local SecurityData type (simplified version used in ChartsView)
 interface SecurityData {
@@ -24,6 +26,16 @@ interface ChartAnalysisResponse {
   provider: string;
   model: string;
   tokensUsed?: number;
+}
+
+// Structured AI error from backend
+interface AiError {
+  kind: 'rate_limit' | 'quota_exceeded' | 'invalid_api_key' | 'model_not_found' | 'server_error' | 'network_error' | 'other';
+  message: string;
+  provider: string;
+  model: string;
+  retryAfterSecs?: number;
+  fallbackModel?: string;
 }
 
 interface AIAnalysisPanelProps {
@@ -44,11 +56,14 @@ export function AIAnalysisPanel({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AiError | null>(null);
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const rateLimiterRef = useRef<RateLimiter>(new RateLimiter(5000)); // 5 second minimum between calls
 
-  const { aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey } = useSettingsStore();
+  const { aiProvider, aiModel, setAiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
 
   // Get API key for selected provider
   const apiKey = useMemo(() => {
@@ -59,63 +74,97 @@ export function AIAnalysisPanel({
         return openaiApiKey;
       case 'gemini':
         return geminiApiKey;
+      case 'perplexity':
+        return perplexityApiKey;
     }
-  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey]);
+  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey]);
 
-  const providerName = useMemo(() => {
-    switch (aiProvider) {
-      case 'claude':
-        return 'Claude';
-      case 'openai':
-        return 'GPT-4';
-      case 'gemini':
-        return 'Gemini';
+  // Get current model name
+  const modelName = useMemo(() => {
+    const models = AI_MODELS[aiProvider];
+    const model = models.find(m => m.id === aiModel);
+    return model?.name || aiModel;
+  }, [aiProvider, aiModel]);
+
+  // Parse error from backend (could be JSON or plain string)
+  const parseError = useCallback((err: unknown): AiError | null => {
+    const errStr = err instanceof Error ? err.message : String(err);
+
+    // Try to parse as JSON (structured error)
+    try {
+      const parsed = JSON.parse(errStr);
+      if (parsed.kind && parsed.message) {
+        return parsed as AiError;
+      }
+    } catch {
+      // Not JSON, use as plain message
     }
-  }, [aiProvider]);
 
-  const handleAnalyze = async () => {
+    // Return as generic error
+    return {
+      kind: 'other',
+      message: errStr,
+      provider: AI_PROVIDER_NAMES[aiProvider],
+      model: aiModel,
+    };
+  }, [aiProvider, aiModel]);
+
+  // Start countdown for auto-retry
+  const startRetryCountdown = useCallback((seconds: number) => {
+    setRetryCountdown(seconds);
+
+    const tick = () => {
+      setRetryCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          return null;
+        }
+        retryTimerRef.current = window.setTimeout(tick, 1000);
+        return prev - 1;
+      });
+    };
+
+    retryTimerRef.current = window.setTimeout(tick, 1000);
+  }, []);
+
+  // Clear retry timer
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    setRetryCountdown(null);
+  }, []);
+
+  // Switch to fallback model
+  const switchToFallback = useCallback((fallbackModel: string) => {
+    setAiModel(fallbackModel);
+    setError(null);
+    toast.info(`Modell gewechselt zu: ${fallbackModel}`);
+  }, [setAiModel]);
+
+  const handleAnalyze = async (overrideModel?: string) => {
     if (!chartRef.current || !security || !apiKey) return;
 
+    // Rate limiting check
+    if (!rateLimiterRef.current.canCall()) {
+      const waitTime = Math.ceil(rateLimiterRef.current.timeUntilNextCall() / 1000);
+      toast.warning(`Bitte warte noch ${waitTime} Sekunden vor der nächsten Analyse`);
+      return;
+    }
+
+    clearRetryTimer();
     setIsAnalyzing(true);
     setError(null);
     setIsCollapsed(false);
 
     try {
-      // Find all canvases in the chart container
-      const canvases = chartRef.current.querySelectorAll('canvas');
-      if (canvases.length === 0) {
-        throw new Error('Chart canvas nicht gefunden');
-      }
+      // Capture and optimize chart image
+      const { base64: imageBase64, savings } = captureAndOptimizeChart(chartRef.current);
+      console.log(`Chart image optimized: ${savings}`);
 
-      // Create a combined canvas with all chart layers
-      const container = chartRef.current;
-      const combinedCanvas = document.createElement('canvas');
-      combinedCanvas.width = container.clientWidth;
-      combinedCanvas.height = container.clientHeight;
-      const ctx = combinedCanvas.getContext('2d');
+      // Mark call time for rate limiting
+      rateLimiterRef.current.markCalled();
 
-      if (!ctx) {
-        throw new Error('Canvas context nicht verfügbar');
-      }
-
-      // Fill with background color
-      const isDark = document.documentElement.classList.contains('dark');
-      ctx.fillStyle = isDark ? '#1f2937' : '#ffffff';
-      ctx.fillRect(0, 0, combinedCanvas.width, combinedCanvas.height);
-
-      // Draw each canvas layer
-      canvases.forEach((canvas) => {
-        const rect = canvas.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        const x = rect.left - containerRect.left;
-        const y = rect.top - containerRect.top;
-        ctx.drawImage(canvas, x, y);
-      });
-
-      // Convert to base64
-      const imageBase64 = combinedCanvas.toDataURL('image/png').split(',')[1];
-
-      // Build context
       const context = {
         securityName: security.name,
         ticker: security.ticker,
@@ -133,11 +182,13 @@ export function AIAnalysisPanel({
           }),
       };
 
-      // Call backend
+      const modelToUse = overrideModel || aiModel;
+
       const result = await invoke<ChartAnalysisResponse>('analyze_chart_with_ai', {
         request: {
           imageBase64,
           provider: aiProvider,
+          model: modelToUse,
           apiKey,
           context,
         },
@@ -150,7 +201,13 @@ export function AIAnalysisPanel({
         tokens: result.tokensUsed,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const parsedError = parseError(err);
+      setError(parsedError);
+
+      // Auto-start countdown for rate limit errors
+      if (parsedError?.kind === 'rate_limit' && parsedError.retryAfterSecs) {
+        startRetryCountdown(parsedError.retryAfterSecs);
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -161,6 +218,119 @@ export function AIAnalysisPanel({
   const navigateToAiSettings = () => {
     setScrollTarget('ai-analysis');
     setCurrentView('settings');
+  };
+
+  // Render error with appropriate actions
+  const renderError = () => {
+    if (!error) return null;
+
+    const getErrorIcon = () => {
+      switch (error.kind) {
+        case 'rate_limit':
+          return <Clock size={16} className="shrink-0 mt-0.5" />;
+        case 'quota_exceeded':
+          return <AlertCircle size={16} className="shrink-0 mt-0.5" />;
+        case 'invalid_api_key':
+          return <Settings size={16} className="shrink-0 mt-0.5" />;
+        default:
+          return <AlertCircle size={16} className="shrink-0 mt-0.5" />;
+      }
+    };
+
+    const getErrorColor = () => {
+      switch (error.kind) {
+        case 'rate_limit':
+          return 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20';
+        case 'quota_exceeded':
+          return 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20';
+        default:
+          return 'text-destructive bg-destructive/10';
+      }
+    };
+
+    return (
+      <div className={`flex flex-col gap-3 text-sm p-3 rounded-md ${getErrorColor()}`}>
+        <div className="flex items-start gap-2">
+          {getErrorIcon()}
+          <div className="flex-1">
+            <p className="font-medium">
+              {error.kind === 'rate_limit' && 'Zu viele Anfragen'}
+              {error.kind === 'quota_exceeded' && 'Kontingent erschöpft'}
+              {error.kind === 'invalid_api_key' && 'Ungültiger API Key'}
+              {error.kind === 'model_not_found' && 'Modell nicht verfügbar'}
+              {error.kind === 'server_error' && 'Server-Fehler'}
+              {error.kind === 'network_error' && 'Netzwerkfehler'}
+              {error.kind === 'other' && 'Fehler bei der Analyse'}
+            </p>
+            <p className="text-xs mt-1 opacity-80">{error.message}</p>
+          </div>
+        </div>
+
+        {/* Action buttons based on error type */}
+        <div className="flex flex-wrap gap-2">
+          {/* Rate limit: show countdown or retry button */}
+          {error.kind === 'rate_limit' && (
+            retryCountdown !== null ? (
+              <span className="text-xs opacity-70">
+                Erneuter Versuch in {retryCountdown}s...
+              </span>
+            ) : (
+              <button
+                onClick={() => handleAnalyze()}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs bg-background border border-current/20 rounded hover:bg-muted transition-colors"
+              >
+                <RefreshCw size={12} />
+                Erneut versuchen
+              </button>
+            )
+          )}
+
+          {/* Quota exceeded: show fallback option */}
+          {error.kind === 'quota_exceeded' && error.fallbackModel && (
+            <button
+              onClick={() => switchToFallback(error.fallbackModel!)}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-background border border-current/20 rounded hover:bg-muted transition-colors"
+            >
+              <ArrowRight size={12} />
+              Zu {error.fallbackModel} wechseln
+            </button>
+          )}
+
+          {/* Model not found: show fallback option */}
+          {error.kind === 'model_not_found' && error.fallbackModel && (
+            <button
+              onClick={() => switchToFallback(error.fallbackModel!)}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-background border border-current/20 rounded hover:bg-muted transition-colors"
+            >
+              <ArrowRight size={12} />
+              {error.fallbackModel} verwenden
+            </button>
+          )}
+
+          {/* Invalid API key: link to settings */}
+          {error.kind === 'invalid_api_key' && (
+            <button
+              onClick={navigateToAiSettings}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-background border border-current/20 rounded hover:bg-muted transition-colors"
+            >
+              <Settings size={12} />
+              Einstellungen öffnen
+            </button>
+          )}
+
+          {/* Server/network error: retry button */}
+          {(error.kind === 'server_error' || error.kind === 'network_error') && (
+            <button
+              onClick={() => handleAnalyze()}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-background border border-current/20 rounded hover:bg-muted transition-colors"
+            >
+              <RefreshCw size={12} />
+              Erneut versuchen
+            </button>
+          )}
+        </div>
+      </div>
+    );
   };
 
   // No API key configured
@@ -199,13 +369,16 @@ export function AIAnalysisPanel({
         >
           <Sparkles size={16} className="text-primary" />
           <span className="font-medium">KI-Analyse</span>
-          <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
-            {providerName}
-          </span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-muted rounded border border-border/50">
+            <AIProviderLogo provider={aiProvider} size={14} />
+            <span className="text-xs font-medium">{AI_PROVIDER_NAMES[aiProvider]}</span>
+            <span className="text-xs text-muted-foreground">|</span>
+            <span className="text-xs text-muted-foreground">{modelName}</span>
+          </div>
           {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </button>
         <button
-          onClick={handleAnalyze}
+          onClick={() => handleAnalyze()}
           disabled={isAnalyzing || !security}
           className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
@@ -226,27 +399,24 @@ export function AIAnalysisPanel({
       {/* Content */}
       {!isCollapsed && (
         <>
-          <div className="p-4 max-h-80 overflow-y-auto">
-            {error && (
-              <div className="flex items-start gap-2 text-destructive text-sm bg-destructive/10 p-3 rounded-md">
-                <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium">Fehler bei der Analyse</p>
-                  <p className="text-xs mt-1 opacity-80">{error}</p>
-                </div>
+          <div className="p-4 h-64 overflow-y-auto">
+            {error && renderError()}
+            {isAnalyzing ? (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                <RefreshCw size={32} className="animate-spin mb-3 opacity-50" />
+                <p className="text-sm">Analyse wird erstellt...</p>
               </div>
-            )}
-            {analysis ? (
-              <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-base prose-headings:font-semibold prose-p:my-2 prose-ul:my-2 prose-li:my-0.5">
+            ) : analysis ? (
+              <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-base prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-li:my-0">
                 <ReactMarkdown>{analysis}</ReactMarkdown>
               </div>
-            ) : (
-              <div className="text-muted-foreground text-sm text-center py-8">
-                <Sparkles size={32} className="mx-auto mb-3 opacity-30" />
-                <p>Klicke "Chart analysieren" um eine KI-gestützte</p>
-                <p>technische Analyse zu erhalten.</p>
+            ) : !error ? (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                <Sparkles size={32} className="mb-3 opacity-30" />
+                <p className="text-sm">Klicke "Chart analysieren" um eine KI-gestützte</p>
+                <p className="text-sm">technische Analyse zu erhalten.</p>
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Footer */}

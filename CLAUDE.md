@@ -14,17 +14,19 @@ apps/desktop/
 ├── src/                    # React Frontend (TypeScript)
 │   ├── store/              # Zustand State Management
 │   ├── components/         # UI (layout/, common/, modals/, charts/)
+│   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, ...)
+│   │   └── charts/         # TradingViewChart, AIAnalysisPanel
 │   ├── views/              # View-Komponenten pro Route
 │   └── lib/                # API, Types, Hooks
 └── src-tauri/              # Rust Backend
     └── src/
-        ├── commands/       # Tauri IPC Commands (21 Module)
+        ├── commands/       # Tauri IPC Commands (22 Module)
         ├── db/             # SQLite (rusqlite)
         ├── pp/             # Portfolio Performance Datenmodelle
         ├── protobuf/       # .portfolio Parser
         ├── quotes/         # Kursquellen (Yahoo, Finnhub, EZB, etc.)
         ├── fifo/           # FIFO Cost Basis
-        └── ai/             # KI-Analyse (Claude, GPT-4, Gemini)
+        └── ai/             # KI-Analyse (Claude, GPT-4, Gemini, Perplexity) + Markdown-Normalisierung
 ```
 
 ## Tech Stack
@@ -120,7 +122,8 @@ GROUP BY security_id, owner_id
 - `record_stock_split()`, `record_spinoff()`, `record_merger()`
 
 ### AI Chart Analysis
-- `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren (Claude, GPT-4, Gemini)
+- `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren (Claude, GPT-4, Gemini, Perplexity)
+- `get_ai_models(provider, api_key)` - Verfügbare Modelle von Provider-API laden
 
 ---
 
@@ -138,11 +141,43 @@ GROUP BY security_id, owner_id
 
 ## AI Provider (Chart-Analyse)
 
-| Provider | API Key | Model | Beschreibung |
-|----------|---------|-------|--------------|
-| **Claude** | Ja | claude-sonnet-4-5-20250514 | Anthropic, sehr gute Chart-Analyse |
-| **GPT-4** | Ja | gpt-4o | OpenAI, gute visuelle Analyse |
-| **Gemini** | Ja | gemini-2.0-flash | Google, kostenloser Tier verfügbar |
+| Provider | API Key | Standard-Modelle | Beschreibung |
+|----------|---------|------------------|--------------|
+| **Claude** | Ja | claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-5 | Anthropic, sehr gute Chart-Analyse |
+| **OpenAI** | Ja | gpt-4.1, gpt-4.1-mini, gpt-4o, o3 | OpenAI, gute visuelle Analyse |
+| **Gemini** | Ja | gemini-3-flash, gemini-3-pro, gemini-2.5-flash/pro | Google, kostenloser Tier verfügbar |
+| **Perplexity** | Ja | sonar-pro, sonar, sonar-reasoning-pro, sonar-deep-research | Web-Suche + Vision, OpenAI-kompatible API |
+
+### Dynamische Modell-Erkennung
+
+Modelle werden beim Öffnen der Einstellungen automatisch von den Provider-APIs geladen:
+- **Deprecated Models**: Automatische Migration auf empfohlenes Modell + Toast-Warnung beim App-Start
+- **Neue Modelle**: Info-Toast wenn neue Modelle verfügbar sind
+- **Refresh-Button**: Manuelle Aktualisierung der Modell-Liste
+
+### Markdown-Normalisierung
+
+Alle AI-Antworten werden durch `normalize_markdown_response()` nachbearbeitet:
+- Konvertiert Plain-Text-Überschriften (z.B. "Trend:") zu Markdown ("## Trend")
+- Entfernt Perplexity-Zitierungen wie [1], [2]
+- Stellt konsistente Formatierung über alle Provider sicher
+
+### AI Provider Logos
+
+Offizielle SVG-Logos in `src/components/common/AIProviderLogo.tsx`:
+```tsx
+import { AIProviderLogo, ClaudeLogo, OpenAILogo, GeminiLogo, PerplexityLogo } from '../common/AIProviderLogo';
+
+// Dynamisch nach Provider
+<AIProviderLogo provider="claude" size={24} />
+<AIProviderLogo provider="perplexity" size={24} />
+
+// Oder einzeln
+<ClaudeLogo size={20} />
+<OpenAILogo size={20} />
+<GeminiLogo size={20} />
+<PerplexityLogo size={20} />
+```
 
 ---
 
@@ -203,7 +238,7 @@ useUIStore: { currentView, sidebarCollapsed, scrollTarget, setCurrentView, toggl
 // App State
 useAppStore: { isLoading, error, setLoading, setError, clearError }
 
-// Settings (LocalStorage)
+// Settings (LocalStorage, Version 4)
 useSettingsStore: {
   language: 'de' | 'en',
   theme: 'light' | 'dark' | 'system',
@@ -211,9 +246,18 @@ useSettingsStore: {
   // Quote Provider Keys
   brandfetchApiKey, finnhubApiKey, coingeckoApiKey, alphaVantageApiKey, twelveDataApiKey,
   // AI Provider
-  aiProvider: 'claude' | 'openai' | 'gemini',
-  anthropicApiKey, openaiApiKey, geminiApiKey
+  aiProvider: 'claude' | 'openai' | 'gemini' | 'perplexity',
+  aiModel: string,  // z.B. 'claude-sonnet-4-5-20250514'
+  anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey,
+  // Transient (nicht persistiert)
+  pendingModelMigration: { from, to, provider } | null
 }
+
+// AI_MODELS Konstante (Fallback wenn API nicht erreichbar)
+AI_MODELS: { claude: [...], openai: [...], gemini: [...], perplexity: [...] }
+
+// DEPRECATED_MODELS Mapping für Auto-Upgrade
+DEPRECATED_MODELS: { 'sonar-reasoning': 'sonar-reasoning-pro', ... }
 
 // Toast
 toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
@@ -237,9 +281,9 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 | Benchmark | ✅ | Performance-Vergleich |
 | Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse |
 | Plans | ✅ | Sparpläne |
-| Reports | 🔄 | Backend fertig, UI in Arbeit |
-| Rebalancing | 🔄 | Backend fertig, UI in Arbeit |
-| Settings | ✅ | Sprache, Theme, API Keys, KI-Provider |
+| Reports | ✅ | Performance, Dividenden, Gewinne, Steuer mit Charts |
+| Rebalancing | ✅ | Zielgewichtung, Vorschau, Ausführung |
+| Settings | ✅ | Sprache, Theme, API Keys, KI-Provider (4 Provider) |
 
 ---
 
@@ -251,6 +295,9 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 4. **Retired Portfolios:** Holdings trotzdem anzeigen wenn > 0
 5. **ISIN-Aggregation:** Securities mit gleicher ISIN zusammenfassen
 6. **Yahoo-Symbole:** Internationale haben Suffix (.DE, .WA), US nicht
+7. **AI Raw Strings:** In Rust `r#"..."#` nicht mit `"#` im Inhalt verwenden (benutze `r##"..."##`)
+8. **Perplexity Vision:** Nicht alle Sonar-Modelle unterstützen Vision (nur sonar-pro, sonar)
+9. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
 
 ---
 

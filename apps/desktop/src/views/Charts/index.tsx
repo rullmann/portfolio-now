@@ -164,8 +164,9 @@ export function ChartsView() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
-  // Ref for AI chart capture
+  // Refs for AI chart capture (normal and fullscreen)
   const chartContainerRef = useRef<HTMLDivElement>(null);
+  const fullscreenChartRef = useRef<HTMLDivElement>(null);
 
   // ============================================================================
   // Data Loading
@@ -368,6 +369,11 @@ export function ChartsView() {
 
   // Fullscreen mode
   if (isFullscreen) {
+    // Calculate heights for fullscreen layout
+    const headerHeight = 52; // Header with title and controls
+    const aiPanelHeight = 280; // Fixed height for AI panel
+    const chartHeight = window.innerHeight - headerHeight - aiPanelHeight;
+
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col">
         {/* Header */}
@@ -409,29 +415,43 @@ export function ChartsView() {
 
         {/* Main Content */}
         <div className="flex-1 flex min-h-0">
-          {/* Chart */}
-          <div className="flex-1 min-w-0">
-            {isLoading ? (
-              <div className="h-full flex items-center justify-center">
-                <Loader2 size={32} className="animate-spin text-muted-foreground" />
-              </div>
-            ) : ohlcData.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                <TrendingUp size={48} className="mb-4 opacity-50" />
-                <p className="text-lg font-medium">Keine Preisdaten verfügbar</p>
-              </div>
-            ) : (
-              <ChartErrorBoundary>
-                <TradingViewChart
-                  data={ohlcData}
-                  indicators={indicators}
-                  height={window.innerHeight - 60}
-                  theme={resolvedTheme}
-                  showVolume={true}
-                  symbol={selectedSecurity?.ticker || selectedSecurity?.name}
-                />
-              </ChartErrorBoundary>
-            )}
+          {/* Left: Chart + AI Analysis */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Chart */}
+            <div ref={fullscreenChartRef} className="flex-1 min-h-0">
+              {isLoading ? (
+                <div className="h-full flex items-center justify-center">
+                  <Loader2 size={32} className="animate-spin text-muted-foreground" />
+                </div>
+              ) : ohlcData.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <TrendingUp size={48} className="mb-4 opacity-50" />
+                  <p className="text-lg font-medium">Keine Preisdaten verfügbar</p>
+                </div>
+              ) : (
+                <ChartErrorBoundary>
+                  <TradingViewChart
+                    data={ohlcData}
+                    indicators={indicators}
+                    height={chartHeight}
+                    theme={resolvedTheme}
+                    showVolume={true}
+                    symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                  />
+                </ChartErrorBoundary>
+              )}
+            </div>
+
+            {/* AI Analysis Panel - Fullscreen */}
+            <div className="border-t border-border">
+              <AIAnalysisPanel
+                chartRef={fullscreenChartRef}
+                security={selectedSecurity}
+                currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
+                timeRange={timeRange}
+                indicators={indicators}
+              />
+            </div>
           </div>
 
           {/* Indicators Panel (narrower in fullscreen) */}
