@@ -11,6 +11,8 @@ Modern cross-platform desktop application for tracking and analyzing investment 
 - **FIFO cost basis tracking** with realized gains calculation
 - **Performance metrics** (TTWROR, IRR, benchmark comparison with Alpha/Beta/Sharpe)
 - **Technical analysis** charts (Candlestick, RSI, MACD, Bollinger Bands, SMA/EMA)
+- **AI-powered chart analysis** with Claude, GPT-4, or Gemini for technical insights
+- **Dividend tracking** with detailed payment history and logos
 - **Taxonomies & classifications** for asset allocation analysis
 - **Investment plans** with interval scheduling
 - **Rebalancing** preview and execution
@@ -88,10 +90,11 @@ portfolio-now/
 | Accounts | Track cash accounts and balances |
 | Transactions | Filter and paginate all transactions |
 | Holdings | Donut chart visualization of positions |
+| Dividends | Dividend payments grouped by security with logos |
 | Watchlist | Track securities without owning them |
 | Taxonomies | Classify assets by custom categories |
 | Benchmark | Compare portfolio against benchmarks |
-| Charts | Technical analysis with indicators |
+| Charts | Technical analysis with indicators and AI analysis |
 | Reports | Dividend, gains, and tax reports |
 | Rebalancing | Calculate trades to reach target allocation |
 
@@ -104,6 +107,14 @@ portfolio-now/
 | Alpha Vantage | Yes | Global stocks (25 calls/day free) |
 | CoinGecko | No | Cryptocurrencies |
 | ECB | No | Exchange rates |
+
+## AI Providers (Chart Analysis)
+
+| Provider | Model | Features |
+|----------|-------|----------|
+| Claude (Anthropic) | claude-sonnet-4-5-20250514 | Excellent chart analysis |
+| GPT-4 (OpenAI) | gpt-4o | Strong visual analysis |
+| Gemini (Google) | gemini-2.0-flash | Free tier available |
 
 ## Acknowledgments
 
