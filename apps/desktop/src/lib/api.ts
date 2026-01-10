@@ -75,6 +75,12 @@ import type {
   BenchmarkData,
   BenchmarkComparison,
   BenchmarkDataPoint,
+  // New types for Phase 1
+  AggregatedHolding,
+  PdfExportResult,
+  DetectedSplit,
+  SplitDetectionResult,
+  PortfolioValuePoint,
 } from './types';
 
 // ============================================================================
@@ -353,12 +359,7 @@ export async function getPortfolioSummary(importId?: number): Promise<PortfolioS
   return invoke<PortfolioSummary>('get_portfolio_summary', { importId });
 }
 
-/**
- * Get portfolio value history for chart display.
- */
-export async function getPortfolioHistory(): Promise<Array<{ date: string; value: number }>> {
-  return invoke<Array<{ date: string; value: number }>>('get_portfolio_history');
-}
+// Note: getPortfolioHistory is defined below with optional date parameters
 
 /**
  * Get invested capital history (cumulative BUY amounts minus SELL proceeds).
@@ -509,6 +510,21 @@ export async function createTransaction(data: CreateTransactionRequest): Promise
  */
 export async function deleteTransaction(id: number): Promise<void> {
   return invoke('delete_transaction', { id });
+}
+
+/**
+ * Update a transaction (date, amount, shares, note, fees, taxes).
+ * Does not allow changing owner, type, or security.
+ */
+export async function updateTransaction(id: number, data: {
+  date?: string;
+  amount?: number;      // cents
+  shares?: number;      // scaled by 10^8
+  note?: string;
+  feeAmount?: number;   // cents
+  taxAmount?: number;   // cents
+}): Promise<void> {
+  return invoke('update_transaction', { id, data });
 }
 
 /**
@@ -1132,18 +1148,25 @@ export async function previewPdfImport(pdfPath: string): Promise<PdfImportPrevie
  * @param portfolioId Portfolio to import buy/sell transactions to
  * @param accountId Account to import transactions to
  * @param createMissingSecurities Whether to create new securities for unknown ISINs
+ * @param skipDuplicates Whether to skip potential duplicate transactions
  */
 export async function importPdfTransactions(
   pdfPath: string,
   portfolioId: number,
   accountId: number,
-  createMissingSecurities: boolean = true
+  createMissingSecurities: boolean = true,
+  skipDuplicates: boolean = true,
+  typeOverrides?: Record<number, string>,
+  feeOverrides?: Record<number, number>
 ): Promise<PdfImportResult> {
   return invoke<PdfImportResult>('import_pdf_transactions', {
     pdfPath,
     portfolioId,
     accountId,
     createMissingSecurities,
+    skipDuplicates,
+    typeOverrides: typeOverrides ?? null,
+    feeOverrides: feeOverrides ?? null,
   });
 }
 
@@ -1449,3 +1472,143 @@ export async function getCachedLogoData(domain: string): Promise<string | null> 
 export async function saveLogoToCache(domain: string, base64Data: string): Promise<string> {
   return invoke<string>('save_logo_to_cache', { domain, base64Data });
 }
+
+// ============================================================================
+// Aggregated Holdings API
+// ============================================================================
+
+/**
+ * Get all holdings aggregated by ISIN across all portfolios.
+ * Includes current price, cost basis, and gain/loss calculations.
+ */
+export async function getAllHoldings(): Promise<AggregatedHolding[]> {
+  return invoke<AggregatedHolding[]>('get_all_holdings');
+}
+
+/**
+ * Get portfolio value history over time.
+ * @param startDate Optional start date (YYYY-MM-DD)
+ * @param endDate Optional end date (YYYY-MM-DD)
+ */
+export async function getPortfolioHistory(
+  startDate?: string,
+  endDate?: string
+): Promise<PortfolioValuePoint[]> {
+  return invoke<PortfolioValuePoint[]>('get_portfolio_history', { startDate, endDate });
+}
+
+// ============================================================================
+// PDF Export API
+// ============================================================================
+
+/**
+ * Export portfolio summary to PDF.
+ * @param path Output file path
+ * @param portfolioId Optional portfolio ID (null for all)
+ */
+export async function exportPortfolioSummaryPdf(
+  path: string,
+  portfolioId?: number | null
+): Promise<PdfExportResult> {
+  return invoke<PdfExportResult>('export_portfolio_summary_pdf', { path, portfolioId });
+}
+
+/**
+ * Export holdings to PDF.
+ * @param path Output file path
+ * @param portfolioId Optional portfolio ID (null for all)
+ * @param date Optional date (YYYY-MM-DD)
+ */
+export async function exportHoldingsPdf(
+  path: string,
+  portfolioId?: number | null,
+  date?: string | null
+): Promise<PdfExportResult> {
+  return invoke<PdfExportResult>('export_holdings_pdf', { path, portfolioId, date });
+}
+
+/**
+ * Export performance report to PDF.
+ * @param path Output file path
+ * @param startDate Start date (YYYY-MM-DD)
+ * @param endDate End date (YYYY-MM-DD)
+ * @param portfolioId Optional portfolio ID (null for all)
+ */
+export async function exportPerformancePdf(
+  path: string,
+  startDate: string,
+  endDate: string,
+  portfolioId?: number | null
+): Promise<PdfExportResult> {
+  return invoke<PdfExportResult>('export_performance_pdf', { path, startDate, endDate, portfolioId });
+}
+
+/**
+ * Export dividend report to PDF.
+ * @param path Output file path
+ * @param year Year for the report
+ * @param portfolioId Optional portfolio ID (null for all)
+ */
+export async function exportDividendPdf(
+  path: string,
+  year: number,
+  portfolioId?: number | null
+): Promise<PdfExportResult> {
+  return invoke<PdfExportResult>('export_dividend_pdf', { path, year, portfolioId });
+}
+
+/**
+ * Export tax report to PDF.
+ * @param path Output file path
+ * @param year Year for the report
+ */
+export async function exportTaxReportPdf(path: string, year: number): Promise<PdfExportResult> {
+  return invoke<PdfExportResult>('export_tax_report_pdf', { path, year });
+}
+
+// ============================================================================
+// Stock Split Detection API
+// ============================================================================
+
+/**
+ * Detect potential stock splits for a security based on price patterns.
+ * @param securityId Security to analyze
+ */
+export async function detectSecuritySplits(securityId: number): Promise<DetectedSplit[]> {
+  return invoke<DetectedSplit[]>('detect_security_splits', { securityId });
+}
+
+/**
+ * Detect potential stock splits for all securities.
+ */
+export async function detectAllSplits(): Promise<SplitDetectionResult> {
+  return invoke<SplitDetectionResult>('detect_all_splits');
+}
+
+// ============================================================================
+// Retire Entity API
+// ============================================================================
+
+/**
+ * Mark a security as retired (no longer actively traded).
+ * Does not delete the security, just sets isRetired flag.
+ */
+export async function retireSecurity(id: number): Promise<void> {
+  return invoke('retire_security', { id });
+}
+
+/**
+ * Mark an account as retired.
+ */
+export async function retireAccount(id: number): Promise<void> {
+  return invoke('retire_account', { id });
+}
+
+/**
+ * Mark a portfolio as retired.
+ */
+export async function retirePortfolio(id: number): Promise<void> {
+  return invoke('retire_portfolio', { id });
+}
+
+// Note: exportDatabaseToPortfolio and getBaseCurrency are defined in Export API section above

@@ -3,10 +3,103 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, HelpCircle, ChevronDown, ChevronUp, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import type { SecurityData, CreateSecurityRequest, UpdateSecurityRequest } from '../../lib/types';
 import { createSecurity, updateSecurity } from '../../lib/api';
 import { useSettingsStore } from '../../store';
+
+// Key-Value Entry Component for attributes/properties editing
+interface KeyValueEntry {
+  key: string;
+  value: string;
+}
+
+function KeyValueEditor({
+  title,
+  entries,
+  onChange,
+  expanded,
+  onToggleExpand,
+}: {
+  title: string;
+  entries: KeyValueEntry[];
+  onChange: (entries: KeyValueEntry[]) => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const addEntry = () => {
+    onChange([...entries, { key: '', value: '' }]);
+  };
+
+  const updateEntry = (index: number, field: 'key' | 'value', val: string) => {
+    const newEntries = [...entries];
+    newEntries[index] = { ...newEntries[index], [field]: val };
+    onChange(newEntries);
+  };
+
+  const removeEntry = (index: number) => {
+    onChange(entries.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="border border-border rounded-md overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className="w-full flex items-center justify-between p-3 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <ChevronRight
+            size={16}
+            className={`transition-transform ${expanded ? 'rotate-90' : ''}`}
+          />
+          <span className="text-sm font-medium">{title}</span>
+          <span className="text-xs text-muted-foreground">
+            ({entries.filter(e => e.key).length})
+          </span>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="p-3 space-y-2 border-t border-border bg-card">
+          {entries.map((entry, index) => (
+            <div key={index} className="flex gap-2 items-center">
+              <input
+                type="text"
+                value={entry.key}
+                onChange={(e) => updateEntry(index, 'key', e.target.value)}
+                placeholder="Schlüssel"
+                className="flex-1 px-2 py-1.5 text-sm border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <input
+                type="text"
+                value={entry.value}
+                onChange={(e) => updateEntry(index, 'value', e.target.value)}
+                placeholder="Wert"
+                className="flex-1 px-2 py-1.5 text-sm border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <button
+                type="button"
+                onClick={() => removeEntry(index)}
+                className="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addEntry}
+            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors"
+          >
+            <Plus size={14} />
+            Hinzufügen
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface SecurityFormModalProps {
   isOpen: boolean;
@@ -83,6 +176,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
   const [formData, setFormData] = useState({
     name: '',
     currency: 'EUR',
+    targetCurrency: '',      // Target currency for conversion (PP field)
     isin: '',
     wkn: '',
     ticker: '',
@@ -93,11 +187,24 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
     latestFeedUrl: '',      // URL/suffix for current quotes
     latestYahooExchange: '', // Exchange suffix for Yahoo (current quotes)
     note: '',
+    isRetired: false,       // Retired flag
   });
+
+  // Attributes and Properties as key-value arrays
+  const [attributes, setAttributes] = useState<KeyValueEntry[]>([]);
+  const [properties, setProperties] = useState<KeyValueEntry[]>([]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showProviderHelp, setShowProviderHelp] = useState(false);
+  const [showAttributesExpanded, setShowAttributesExpanded] = useState(false);
+  const [showPropertiesExpanded, setShowPropertiesExpanded] = useState(false);
+
+  // Helper to convert Record to KeyValueEntry array
+  const recordToEntries = (record: Record<string, string> | undefined): KeyValueEntry[] => {
+    if (!record) return [];
+    return Object.entries(record).map(([key, value]) => ({ key, value }));
+  };
 
   // Reset form when modal opens or security changes
   useEffect(() => {
@@ -113,6 +220,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
         setFormData({
           name: security.name || '',
           currency: security.currency || 'EUR',
+          targetCurrency: security.targetCurrency || '',
           isin: security.isin || '',
           wkn: security.wkn || '',
           ticker: security.ticker || '',
@@ -122,12 +230,17 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           latestFeed: security.latestFeed || '',
           latestFeedUrl: latestYahooExchange ? '' : (security.latestFeedUrl || ''),
           latestYahooExchange,
-          note: '',
+          note: security.note || '',
+          isRetired: security.isRetired || false,
         });
+        // Load attributes and properties
+        setAttributes(recordToEntries(security.attributes));
+        setProperties(recordToEntries(security.properties));
       } else {
         setFormData({
           name: '',
           currency: 'EUR',
+          targetCurrency: '',
           isin: '',
           wkn: '',
           ticker: '',
@@ -138,15 +251,27 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           latestFeedUrl: '',
           latestYahooExchange: '',
           note: '',
+          isRetired: false,
         });
+        setAttributes([]);
+        setProperties([]);
       }
       setError(null);
+      setShowAttributesExpanded(false);
+      setShowPropertiesExpanded(false);
     }
   }, [isOpen, security]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  // Helper to convert KeyValueEntry array back to Record
+  const entriesToRecord = (entries: KeyValueEntry[]): Record<string, string> | undefined => {
+    const filtered = entries.filter(e => e.key.trim());
+    if (filtered.length === 0) return undefined;
+    return Object.fromEntries(filtered.map(e => [e.key.trim(), e.value]));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -162,12 +287,17 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
       ? formData.latestYahooExchange
       : formData.latestFeedUrl;
 
+    // Convert attributes and properties to Records
+    const attributesRecord = entriesToRecord(attributes);
+    const propertiesRecord = entriesToRecord(properties);
+
     try {
       if (isEditMode && security) {
         // Send all field values - empty string means "clear the field"
         const updateData: UpdateSecurityRequest = {
           name: formData.name || undefined,
           currency: formData.currency || undefined,
+          targetCurrency: formData.targetCurrency || undefined,
           isin: formData.isin,      // send as-is to allow clearing
           wkn: formData.wkn,        // send as-is to allow clearing
           ticker: formData.ticker,  // send as-is to allow clearing
@@ -176,12 +306,16 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           latestFeed: formData.latestFeed, // send as-is to allow clearing
           latestFeedUrl: effectiveLatestFeedUrl, // send as-is to allow clearing
           note: formData.note || undefined,
+          isRetired: formData.isRetired,
+          attributes: attributesRecord,
+          properties: propertiesRecord,
         };
         await updateSecurity(security.id, updateData);
       } else {
         const createData: CreateSecurityRequest = {
           name: formData.name,
           currency: formData.currency,
+          targetCurrency: formData.targetCurrency || undefined,
           isin: formData.isin || undefined,
           wkn: formData.wkn || undefined,
           ticker: formData.ticker || undefined,
@@ -190,6 +324,8 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           latestFeed: formData.latestFeed || undefined,
           latestFeedUrl: effectiveLatestFeedUrl || undefined,
           note: formData.note || undefined,
+          attributes: attributesRecord,
+          properties: propertiesRecord,
         };
         await createSecurity(createData);
       }
@@ -248,24 +384,45 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
             />
           </div>
 
-          {/* Currency */}
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Währung <span className="text-destructive">*</span>
-            </label>
-            <select
-              name="currency"
-              value={formData.currency}
-              onChange={handleChange}
-              required
-              className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {CURRENCIES.map((cur) => (
-                <option key={cur} value={cur}>
-                  {cur}
-                </option>
-              ))}
-            </select>
+          {/* Currency & Target Currency */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Währung <span className="text-destructive">*</span>
+              </label>
+              <select
+                name="currency"
+                value={formData.currency}
+                onChange={handleChange}
+                required
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {CURRENCIES.map((cur) => (
+                  <option key={cur} value={cur}>
+                    {cur}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Zielwährung</label>
+              <select
+                name="targetCurrency"
+                value={formData.targetCurrency}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">Keine</option>
+                {CURRENCIES.map((cur) => (
+                  <option key={cur} value={cur}>
+                    {cur}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Für automatische Währungsumrechnung
+              </p>
+            </div>
           </div>
 
           {/* ISIN */}
@@ -505,6 +662,50 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
               className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none"
               placeholder="Optionale Notizen..."
             />
+          </div>
+
+          {/* Retired Flag (Edit mode only) */}
+          {isEditMode && (
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="isRetired"
+                checked={formData.isRetired}
+                onChange={(e) => setFormData((prev) => ({ ...prev, isRetired: e.target.checked }))}
+                className="w-4 h-4 rounded border-border focus:ring-2 focus:ring-primary"
+              />
+              <label htmlFor="isRetired" className="text-sm font-medium">
+                Wertpapier stillgelegt
+              </label>
+              <span className="text-xs text-muted-foreground">
+                (nicht mehr aktiv gehandelt)
+              </span>
+            </div>
+          )}
+
+          {/* Attributes & Properties (PP Round-Trip) */}
+          <div className="border-t border-border pt-4 mt-2 space-y-3">
+            <h3 className="text-sm font-semibold text-muted-foreground">Erweiterte Attribute (PP-kompatibel)</h3>
+
+            <KeyValueEditor
+              title="Attribute"
+              entries={attributes}
+              onChange={setAttributes}
+              expanded={showAttributesExpanded}
+              onToggleExpand={() => setShowAttributesExpanded(!showAttributesExpanded)}
+            />
+
+            <KeyValueEditor
+              title="Eigenschaften"
+              entries={properties}
+              onChange={setProperties}
+              expanded={showPropertiesExpanded}
+              onToggleExpand={() => setShowPropertiesExpanded(!showPropertiesExpanded)}
+            />
+
+            <p className="text-xs text-muted-foreground">
+              Diese Felder werden beim Export in PP-Dateien beibehalten.
+            </p>
           </div>
 
           {/* Actions */}

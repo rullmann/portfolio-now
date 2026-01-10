@@ -10,7 +10,7 @@
  * - Fullscreen mode
  */
 
-import { useState, useEffect, useMemo, useCallback, Component, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, Component, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Search,
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { TradingViewChart } from '../../components/charts/TradingViewChart';
 import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
+import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SecuritySearchModal } from '../../components/modals';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC } from '../../lib/indicators';
@@ -162,6 +163,9 @@ export function ChartsView() {
   const [watchlistSecurityIds, setWatchlistSecurityIds] = useState<Set<number>>(new Set());
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+
+  // Ref for AI chart capture
+  const chartContainerRef = useRef<HTMLDivElement>(null);
 
   // ============================================================================
   // Data Loading
@@ -591,7 +595,10 @@ export function ChartsView() {
             </div>
 
             {/* Chart Area */}
-            <div className="flex-1 bg-card border border-border rounded-lg overflow-hidden min-h-0">
+            <div
+              ref={chartContainerRef}
+              className="flex-1 bg-card border border-border rounded-lg overflow-hidden min-h-0"
+            >
               {isLoading ? (
                 <div className="h-full flex items-center justify-center">
                   <Loader2 size={32} className="animate-spin text-muted-foreground" />
@@ -615,6 +622,15 @@ export function ChartsView() {
                 </ChartErrorBoundary>
               )}
             </div>
+
+            {/* AI Analysis Panel */}
+            <AIAnalysisPanel
+              chartRef={chartContainerRef}
+              security={selectedSecurity}
+              currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
+              timeRange={timeRange}
+              indicators={indicators}
+            />
           </div>
 
           {/* Right Sidebar - Indicators */}

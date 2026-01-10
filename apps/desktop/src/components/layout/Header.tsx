@@ -1,130 +1,79 @@
 /**
- * Header component with file operations and actions.
- * Redesigned with dropdown menu for cleaner UI.
+ * Header component with import actions and new transaction button.
+ * Simplified: removed legacy file operations (Neu, Öffnen, Speichern).
  */
 
+import { useState } from 'react';
 import {
-  FileText,
   Plus,
-  FolderOpen,
-  Save,
-  FilePlus,
   Database,
   RefreshCw,
-  File,
+  FileDown,
+  FileText,
 } from 'lucide-react';
 import {
   useUIStore,
   useAppStore,
-  usePortfolioFileStore,
-  useDataModeStore,
   getViewLabel,
 } from '../../store';
-import { DropdownMenu, DropdownItem, DropdownDivider } from '../common';
+import { DropdownMenu, DropdownItem } from '../common';
+import { TransactionFormModal } from '../modals/TransactionFormModal';
+import { PdfImportModal } from '../modals/PdfImportModal';
 
 interface HeaderProps {
-  onNewFile: () => void;
-  onOpenFile: () => void;
-  onSaveFile: () => void;
-  onSaveAsFile: () => void;
-  onImportToDb: () => void;
+  onImportPP: () => void;
   onRefresh: () => void;
-  hasPortfolioFile: boolean;
 }
 
 export function Header({
-  onNewFile,
-  onOpenFile,
-  onSaveFile,
-  onSaveAsFile,
-  onImportToDb,
+  onImportPP,
   onRefresh,
-  hasPortfolioFile,
 }: HeaderProps) {
   const { currentView } = useUIStore();
   const { isLoading } = useAppStore();
-  const { currentFilePath, hasUnsavedChanges } = usePortfolioFileStore();
-  const { useDbData } = useDataModeStore();
 
-  const fileName = currentFilePath
-    ? currentFilePath.split('/').pop() || 'Portfolio'
-    : hasPortfolioFile
-      ? 'Neues Portfolio'
-      : null;
+  const [showTransactionModal, setShowTransactionModal] = useState(false);
+  const [showPdfImportModal, setShowPdfImportModal] = useState(false);
 
   return (
-    <header className="h-14 flex items-center justify-between px-6 border-b border-border bg-card">
-      {/* Left: View title and file info */}
-      <div className="flex items-center gap-4">
-        <h1 className="text-lg font-semibold text-foreground">
-          {getViewLabel(currentView)}
-        </h1>
-        {fileName && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <FileText className="w-4 h-4" aria-hidden="true" />
-            <span>{fileName}</span>
-            {hasUnsavedChanges && (
-              <span className="text-yellow-500" aria-label="Ungespeicherte Änderungen">
-                *
-              </span>
-            )}
-          </div>
-        )}
-      </div>
+    <>
+      <header className="h-14 flex items-center justify-between px-6 border-b border-border bg-card">
+        {/* Left: View title */}
+        <div className="flex items-center gap-4">
+          <h1 className="text-lg font-semibold text-foreground">
+            {getViewLabel(currentView)}
+          </h1>
+        </div>
 
-      {/* Right: Actions */}
-      <div className="flex items-center gap-2">
-        {/* File Menu Dropdown */}
-        <DropdownMenu
-          trigger={
-            <>
-              <File className="w-4 h-4" aria-hidden="true" />
-              <span>Datei</span>
-            </>
-          }
-          disabled={isLoading}
-        >
-          <DropdownItem
-            onClick={onNewFile}
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2">
+          {/* Import Menu Dropdown */}
+          <DropdownMenu
+            trigger={
+              <>
+                <FileDown className="w-4 h-4" aria-hidden="true" />
+                <span>Importieren</span>
+              </>
+            }
             disabled={isLoading}
-            icon={<FilePlus className="w-4 h-4" />}
           >
-            Neu
-          </DropdownItem>
-          <DropdownItem
-            onClick={onOpenFile}
-            disabled={isLoading}
-            icon={<FolderOpen className="w-4 h-4" />}
-          >
-            Öffnen...
-          </DropdownItem>
-          <DropdownDivider />
-          <DropdownItem
-            onClick={onSaveFile}
-            disabled={isLoading || !hasPortfolioFile || !hasUnsavedChanges}
-            icon={<Save className="w-4 h-4" />}
-          >
-            Speichern
-          </DropdownItem>
-          <DropdownItem
-            onClick={onSaveAsFile}
-            disabled={isLoading || !hasPortfolioFile}
-            icon={<Save className="w-4 h-4" />}
-          >
-            Speichern unter...
-          </DropdownItem>
-          <DropdownDivider />
-          <DropdownItem
-            onClick={onImportToDb}
-            disabled={isLoading}
-            icon={<Database className="w-4 h-4" />}
-          >
-            In DB importieren
-          </DropdownItem>
-        </DropdownMenu>
+            <DropdownItem
+              onClick={onImportPP}
+              disabled={isLoading}
+              icon={<Database className="w-4 h-4" />}
+            >
+              Portfolio Performance Datei...
+            </DropdownItem>
+            <DropdownItem
+              onClick={() => setShowPdfImportModal(true)}
+              disabled={isLoading}
+              icon={<FileText className="w-4 h-4" />}
+            >
+              PDF Kontoauszug...
+            </DropdownItem>
+          </DropdownMenu>
 
-        {/* Refresh button (when using DB) */}
-        {useDbData && (
+          {/* Refresh button */}
           <button
             onClick={onRefresh}
             disabled={isLoading}
@@ -137,18 +86,36 @@ export function Header({
               aria-hidden="true"
             />
           </button>
-        )}
 
-        {/* Primary action: New transaction */}
-        <button
-          disabled={!hasPortfolioFile && !useDbData}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Neue Buchung erstellen"
-        >
-          <Plus className="w-4 h-4" aria-hidden="true" />
-          <span>Neue Buchung</span>
-        </button>
-      </div>
-    </header>
+          {/* Primary action: New transaction */}
+          <button
+            onClick={() => setShowTransactionModal(true)}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Neue Buchung erstellen"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            <span>Neue Buchung</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Transaction Form Modal */}
+      <TransactionFormModal
+        isOpen={showTransactionModal}
+        onClose={() => setShowTransactionModal(false)}
+        onSuccess={() => {
+          setShowTransactionModal(false);
+          onRefresh();
+        }}
+      />
+
+      {/* PDF Import Modal */}
+      <PdfImportModal
+        isOpen={showPdfImportModal}
+        onClose={() => setShowPdfImportModal(false)}
+        onSuccess={onRefresh}
+      />
+    </>
   );
 }

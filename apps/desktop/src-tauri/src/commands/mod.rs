@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod benchmark;
 pub mod brandfetch;
 pub mod corporate_actions;

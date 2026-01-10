@@ -201,7 +201,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
   // Initialize and update chart
   useEffect(() => {
-    if (!isOpen || !chartContainerRef.current || chartData.length === 0) {
+    if (!isOpen || viewMode !== 'chart' || !chartContainerRef.current || chartData.length === 0) {
       return;
     }
 
@@ -297,7 +297,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
         seriesRef.current = null;
       }
     };
-  }, [isOpen, chartData, stats.isPositive]);
+  }, [isOpen, viewMode, chartData, stats.isPositive]);
 
   if (!isOpen) return null;
 

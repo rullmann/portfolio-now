@@ -86,6 +86,8 @@ pub struct Security {
     pub uuid: String,
     pub name: String,
     pub currency: String,
+    /// Target currency for currency conversion (e.g., for exchange rate securities)
+    pub target_currency: Option<String>,
     /// Online ID for data providers
     pub online_id: Option<String>,
     /// ISIN (International Securities Identification Number)
@@ -110,8 +112,10 @@ pub struct Security {
     pub latest: Option<LatestPrice>,
     /// Security events (splits, dividends, etc.)
     pub events: Vec<SecurityEventKind>,
-    /// Custom attributes
+    /// Custom attributes (user-defined key-value pairs)
     pub attributes: std::collections::HashMap<String, String>,
+    /// Properties (system key-value pairs, separate from attributes)
+    pub properties: std::collections::HashMap<String, String>,
     /// Whether the security is retired/inactive
     pub is_retired: bool,
     /// User note
@@ -126,6 +130,7 @@ impl Security {
             uuid,
             name,
             currency,
+            target_currency: None,
             online_id: None,
             isin: None,
             wkn: None,
@@ -139,6 +144,7 @@ impl Security {
             latest: None,
             events: Vec::new(),
             attributes: std::collections::HashMap::new(),
+            properties: std::collections::HashMap::new(),
             is_retired: false,
             note: None,
             updated_at: None,

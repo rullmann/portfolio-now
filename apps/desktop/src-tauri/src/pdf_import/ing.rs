@@ -3,8 +3,8 @@
 //! Parses broker statements from ING Germany.
 
 use super::{
-    parse_german_date, parse_german_decimal, BankParser, ParsedTransaction,
-    ParsedTransactionType,
+    parse_german_date, parse_german_decimal, BankParser, ParseContext,
+    ParsedTransaction, ParsedTransactionType,
 };
 use regex::Regex;
 
@@ -24,7 +24,7 @@ impl IngParser {
         }
     }
 
-    fn parse_buy_sell(&self, content: &str) -> Vec<ParsedTransaction> {
+    fn parse_buy_sell(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
         // ING patterns
@@ -104,21 +104,21 @@ impl IngParser {
         // Extract gross amount
         if let Some(re) = &amount_re {
             if let Some(caps) = re.captures(content) {
-                txn.gross_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.gross_amount = ctx.parse_amount("gross_amount", &caps[1]);
             }
         }
 
         // Extract fees
         if let Some(re) = &provision_re {
             if let Some(caps) = re.captures(content) {
-                txn.fees = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.fees = ctx.parse_amount("fees", &caps[1]);
             }
         }
 
         // Extract total
         if let Some(re) = &total_re {
             if let Some(caps) = re.captures(content) {
-                txn.net_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.net_amount = ctx.parse_amount("net_amount", &caps[1]);
             }
         }
 
@@ -137,7 +137,7 @@ impl IngParser {
         transactions
     }
 
-    fn parse_dividends(&self, content: &str) -> Vec<ParsedTransaction> {
+    fn parse_dividends(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
         // Check for dividend
@@ -199,7 +199,7 @@ impl IngParser {
         // Extract gross
         if let Some(re) = &gross_re {
             if let Some(caps) = re.captures(content) {
-                txn.gross_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.gross_amount = ctx.parse_amount("gross_amount", &caps[1]);
             }
         }
 
@@ -207,12 +207,12 @@ impl IngParser {
         let mut total_tax = 0.0;
         if let Some(re) = &tax_re {
             if let Some(caps) = re.captures(content) {
-                total_tax += parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                total_tax += ctx.parse_amount("tax", &caps[1]);
             }
         }
         if let Some(re) = &soli_re {
             if let Some(caps) = re.captures(content) {
-                total_tax += parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                total_tax += ctx.parse_amount("soli", &caps[1]);
             }
         }
         txn.taxes = total_tax;
@@ -220,7 +220,7 @@ impl IngParser {
         // Extract net
         if let Some(re) = &net_re {
             if let Some(caps) = re.captures(content) {
-                txn.net_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.net_amount = ctx.parse_amount("net_amount", &caps[1]);
             }
         }
 
@@ -239,11 +239,11 @@ impl BankParser for IngParser {
             .any(|pattern| content.contains(pattern))
     }
 
-    fn parse(&self, content: &str) -> Result<Vec<ParsedTransaction>, String> {
+    fn parse(&self, content: &str, ctx: &mut ParseContext) -> Result<Vec<ParsedTransaction>, String> {
         let mut transactions = Vec::new();
 
-        transactions.extend(self.parse_buy_sell(content));
-        transactions.extend(self.parse_dividends(content));
+        transactions.extend(self.parse_buy_sell(content, ctx));
+        transactions.extend(self.parse_dividends(content, ctx));
 
         transactions.sort_by(|a, b| a.date.cmp(&b.date));
 

@@ -139,6 +139,21 @@ fn convert_to_protobuf(client: &Client) -> Result<PClient> {
         pb.dashboards.push(convert_dashboard(dash));
     }
 
+    // Convert settings
+    pb.settings = convert_settings_to_protobuf(&client.settings);
+
+    // Convert properties
+    if let Some(props) = client.properties.as_object() {
+        for (key, value) in props {
+            if let Some(val_str) = value.as_str() {
+                pb.properties.push(schema::PProperty {
+                    key: key.clone(),
+                    value: val_str.to_string(),
+                });
+            }
+        }
+    }
+
     Ok(pb)
 }
 
@@ -148,6 +163,7 @@ fn convert_security(sec: &Security) -> PSecurity {
         uuid: sec.uuid.clone(),
         name: sec.name.clone(),
         currency_code: Some(sec.currency.clone()),
+        target_currency_code: sec.target_currency.clone(),
         online_id: sec.online_id.clone(),
         isin: sec.isin.clone(),
         ticker_symbol: sec.ticker.clone(),
@@ -156,6 +172,12 @@ fn convert_security(sec: &Security) -> PSecurity {
         feed: sec.feed.clone(),
         feed_url: sec.feed_url.clone(),
         is_retired: sec.is_retired,
+        note: sec.note.clone(),
+        updated_at: sec.updated_at.as_ref().and_then(|s| parse_timestamp(s)),
+        latest_feed: sec.latest_feed.clone(),
+        latest_feed_url: sec.latest_feed_url.clone(),
+        attributes: convert_attributes_to_protobuf(&sec.attributes),
+        properties: convert_attributes_to_protobuf(&sec.properties),
         ..Default::default()
     };
 
@@ -191,8 +213,8 @@ fn convert_account(acc: &Account) -> PAccount {
         currency_code: acc.currency.clone(),
         note: acc.note.clone(),
         is_retired: acc.is_retired,
-        attributes: Vec::new(),
-        updated_at: None,
+        attributes: convert_attributes_to_protobuf(&acc.attributes),
+        updated_at: acc.updated_at.as_ref().and_then(|s| parse_timestamp(s)),
     }
 }
 
@@ -204,7 +226,7 @@ fn convert_portfolio(port: &Portfolio) -> PPortfolio {
         note: port.note.clone(),
         is_retired: port.is_retired,
         reference_account: port.reference_account_uuid.clone(),
-        attributes: Vec::new(),
+        attributes: convert_attributes_to_protobuf(&port.attributes),
         updated_at: port.updated_at.as_ref().and_then(|s| parse_timestamp(s)),
     }
 }
@@ -233,7 +255,7 @@ fn convert_portfolio_transaction(tx: &PortfolioTransaction, portfolio_uuid: &str
         other_account: None,
         other_portfolio: None,
         other_uuid: tx.cross_entry.as_ref().map(|ce| ce.target_uuid.clone()),
-        other_updated_at: None,
+        other_updated_at: tx.other_updated_at.as_ref().and_then(|s| parse_timestamp(s)),
         date: Some(datetime_to_timestamp(tx.date)),
         currency_code: tx.amount.currency.clone(),
         amount: tx.amount.amount,
@@ -284,7 +306,7 @@ fn convert_account_transaction(tx: &AccountTransaction, account_uuid: &str) -> O
         other_account: tx.cross_entry.as_ref().map(|ce| ce.target_uuid.clone()),
         other_portfolio: None,
         other_uuid: tx.cross_entry.as_ref().map(|ce| ce.target_uuid.clone()),
-        other_updated_at: None,
+        other_updated_at: tx.other_updated_at.as_ref().and_then(|s| parse_timestamp(s)),
         date: Some(datetime_to_timestamp(tx.date)),
         currency_code: tx.amount.currency.clone(),
         amount: tx.amount.amount,
@@ -337,11 +359,11 @@ fn convert_transaction_unit(unit: &TransactionUnit) -> PTransactionUnit {
 fn convert_investment_plan(plan: &crate::pp::InvestmentPlan) -> PInvestmentPlan {
     PInvestmentPlan {
         name: plan.name.clone(),
-        note: None,
+        note: plan.note.clone(),
         security: plan.security_uuid.clone(),
         portfolio: plan.portfolio_uuid.clone(),
         account: plan.account_uuid.clone(),
-        attributes: Vec::new(),
+        attributes: convert_attributes_to_protobuf(&plan.attributes),
         auto_generate: plan.auto_generate,
         date: plan
             .start
@@ -351,10 +373,10 @@ fn convert_investment_plan(plan: &crate::pp::InvestmentPlan) -> PInvestmentPlan 
             .unwrap_or(0),
         interval: plan.interval,
         amount: plan.amount,
-        fees: 0,
-        transactions: Vec::new(),
-        taxes: 0,
-        plan_type: 0, // PURCHASE_OR_DELIVERY
+        fees: plan.fees,
+        transactions: plan.transactions.clone(),
+        taxes: plan.taxes,
+        plan_type: plan.plan_type,
     }
 }
 
@@ -428,6 +450,72 @@ fn convert_dashboard(dash: &crate::pp::Dashboard) -> PDashboard {
             })
             .collect(),
     }
+}
+
+/// Convert HashMap attributes to protobuf PKeyValue list
+fn convert_attributes_to_protobuf(
+    attrs: &std::collections::HashMap<String, String>,
+) -> Vec<schema::PKeyValue> {
+    attrs
+        .iter()
+        .map(|(key, value)| schema::PKeyValue {
+            key: key.clone(),
+            value: Some(schema::PAnyValue {
+                kind: Some(schema::PAnyValueKind::String(value.clone())),
+            }),
+        })
+        .collect()
+}
+
+/// Convert settings JSON back to PSettings
+fn convert_settings_to_protobuf(settings: &serde_json::Value) -> Option<schema::PSettings> {
+    if settings.is_null() {
+        return None;
+    }
+
+    let mut pb_settings = schema::PSettings {
+        bookmarks: Vec::new(),
+        attribute_types: Vec::new(),
+        configuration_sets: Vec::new(),
+    };
+
+    // Convert bookmarks
+    if let Some(bookmarks) = settings.get("bookmarks").and_then(|v| v.as_array()) {
+        for b in bookmarks {
+            pb_settings.bookmarks.push(schema::PBookmark {
+                label: b.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                pattern: b.get("pattern").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            });
+        }
+    }
+
+    // Convert attribute types
+    if let Some(attr_types) = settings.get("attributeTypes").and_then(|v| v.as_array()) {
+        for a in attr_types {
+            pb_settings.attribute_types.push(schema::PAttributeType {
+                id: a.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                column_label: a.get("columnLabel").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                source: a.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                target: a.get("target").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                attr_type: a.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            });
+        }
+    }
+
+    // Convert configuration sets
+    if let Some(config_sets) = settings.get("configurationSets").and_then(|v| v.as_array()) {
+        for c in config_sets {
+            pb_settings.configuration_sets.push(schema::PConfigurationSet {
+                key: c.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                uuid: c.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                data: c.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            });
+        }
+    }
+
+    Some(pb_settings)
 }
 
 /// Convert NaiveDate to days since epoch

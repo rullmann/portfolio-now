@@ -3,8 +3,8 @@
 //! Parses broker statements from Trade Republic.
 
 use super::{
-    extract_isin, parse_german_date, parse_german_decimal, BankParser, ParsedTransaction,
-    ParsedTransactionType,
+    extract_isin, parse_german_date, parse_german_decimal, BankParser, ParseContext,
+    ParsedTransaction, ParsedTransactionType,
 };
 use regex::Regex;
 
@@ -25,25 +25,34 @@ impl TradeRepublicParser {
         }
     }
 
-    fn parse_buy_sell(&self, content: &str) -> Vec<ParsedTransaction> {
+    fn parse_buy_sell(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
         // Trade Republic patterns - they have a very specific format
-        let is_buy = content.contains("Kauf") || content.contains("Order Kauf") || content.contains("Sparplanausführung");
+        let is_buy = content.contains("Kauf") || content.contains("Order Kauf")
+            || content.contains("Sparplanausführung") || content.contains("SPARPLAN")
+            || content.contains("WERTPAPIERABRECHNUNG");
         let is_sell = content.contains("Verkauf") || content.contains("Order Verkauf");
 
         if !is_buy && !is_sell {
             return transactions;
         }
 
-        // Trade Republic uses a cleaner format
-        let date_re = Regex::new(r"AUSF(?:Ü|U)HRUNG\s*(\d{2}\.\d{2}\.\d{4})").ok()
-            .or_else(|| Regex::new(r"Datum\s*(\d{2}\.\d{2}\.\d{4})").ok());
-        let _isin_re = Regex::new(r"ISIN:\s*([A-Z]{2}[A-Z0-9]{10})").ok()
-            .or_else(|| Regex::new(r"([A-Z]{2}[A-Z0-9]{10})").ok());
-        let shares_re = Regex::new(r"(?:Anzahl|St(?:ü|u)ck)\s*([\d.,]+)").ok();
-        let price_re = Regex::new(r"(?:Kurs|Ausf(?:ü|u)hrungskurs)\s*([\d.,]+)\s*EUR").ok();
-        let amount_re = Regex::new(r"Gesamt\s*-?\s*([\d.,]+)\s*EUR").ok();
+        // Trade Republic date patterns (case-insensitive)
+        // New format: "DATUM 02.01.2026"
+        // Old format: "AUSFÜHRUNG DD.MM.YYYY"
+        let date_patterns = [
+            r"(?i)DATUM\s+(\d{2}\.\d{2}\.\d{4})",
+            r"(?i)AUSF(?:Ü|U)HRUNG\s+(\d{2}\.\d{2}\.\d{4})",
+            r"(?i)am\s+(\d{2}\.\d{2}\.\d{4})",
+        ];
+
+        // New format: "ISIN: US67066G1040 1,535249 Stk. 162,84 EUR 250,00 EUR"
+        let detail_re = Regex::new(r"ISIN:\s*([A-Z]{2}[A-Z0-9]{10})\s+([\d.,]+)\s*Stk\.\s+([\d.,]+)\s*EUR\s+([\d.,]+)\s*EUR").ok();
+
+        // Fallback patterns
+        let shares_re = Regex::new(r"([\d.,]+)\s*Stk\.").ok();
+        let amount_re = Regex::new(r"(?i)GESAMT\s*-?\s*([\d.,]+)\s*EUR").ok();
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
@@ -58,59 +67,79 @@ impl TradeRepublicParser {
             taxes: 0.0,
             net_amount: 0.0,
             currency: "EUR".to_string(),
-            note: if content.contains("Sparplan") { Some("Sparplanausführung".to_string()) } else { None },
+            note: if content.contains("Sparplan") || content.contains("SPARPLAN") {
+                Some("Sparplanausführung".to_string())
+            } else {
+                None
+            },
             exchange_rate: None,
             forex_currency: None,
         };
 
-        // Extract date
-        if let Some(re) = date_re {
-            if let Some(caps) = re.captures(content) {
-                if let Some(date) = parse_german_date(&caps[1]) {
-                    txn.date = date;
+        // Extract date - try each pattern
+        for pattern in &date_patterns {
+            if let Ok(re) = Regex::new(pattern) {
+                if let Some(caps) = re.captures(content) {
+                    if let Some(date) = parse_german_date(&caps[1]) {
+                        txn.date = date;
+                        break;
+                    }
                 }
             }
         }
 
-        // Extract ISIN
-        txn.isin = extract_isin(content);
-
-        // Extract shares
-        if let Some(re) = &shares_re {
+        // Try the detailed pattern first (new Trade Republic format)
+        if let Some(re) = &detail_re {
             if let Some(caps) = re.captures(content) {
-                txn.shares = parse_german_decimal(&caps[1]);
+                txn.isin = Some(caps[1].to_string());
+                txn.shares = parse_german_decimal(&caps[2]);
+                txn.price_per_share = parse_german_decimal(&caps[3]);
+                let total = ctx.parse_amount("net_amount", &caps[4]);
+                txn.net_amount = total;
+                txn.gross_amount = total;
             }
         }
 
-        // Extract price
-        if let Some(re) = &price_re {
-            if let Some(caps) = re.captures(content) {
-                txn.price_per_share = parse_german_decimal(&caps[1]);
+        // Fallback: Extract ISIN separately
+        if txn.isin.is_none() {
+            txn.isin = extract_isin(content);
+        }
+
+        // Fallback: Extract shares
+        if txn.shares.is_none() {
+            if let Some(re) = &shares_re {
+                if let Some(caps) = re.captures(content) {
+                    txn.shares = parse_german_decimal(&caps[1]);
+                }
             }
         }
 
-        // Extract total amount
-        if let Some(re) = &amount_re {
-            if let Some(caps) = re.captures(content) {
-                let amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
-                txn.net_amount = amount;
-                txn.gross_amount = amount; // Trade Republic usually doesn't charge fees
+        // Fallback: Extract total amount from GESAMT line
+        if txn.net_amount == 0.0 {
+            if let Some(re) = &amount_re {
+                if let Some(caps) = re.captures(content) {
+                    let amount = ctx.parse_amount("net_amount", &caps[1]);
+                    txn.net_amount = amount;
+                    txn.gross_amount = amount;
+                }
             }
         }
 
-        // Calculate gross from shares * price if we have both
+        // Calculate gross from shares * price if we have both but no total
         if txn.gross_amount == 0.0 {
             if let (Some(shares), Some(price)) = (txn.shares, txn.price_per_share) {
                 txn.gross_amount = shares * price;
+                txn.net_amount = txn.gross_amount;
             }
         }
 
-        // Extract security name (usually the first prominent line)
-        let name_re = Regex::new(r"(?:Kauf|Verkauf|Sparplan)[^A-Za-z]*([A-Za-z][^\n]+)").ok();
+        // Extract security name - look for line before ISIN
+        // Pattern: Security name is on its own line, followed by ISIN line
+        let name_re = Regex::new(r"(?m)^([A-Z][A-Za-z0-9\s\.\-&]+)\n\s*ISIN:").ok();
         if let Some(re) = name_re {
             if let Some(caps) = re.captures(content) {
                 let name = caps[1].trim();
-                if !name.contains("ISIN") && !name.contains("Datum") {
+                if !name.contains("POSITION") && !name.contains("ÜBERSICHT") && name.len() < 100 {
                     txn.security_name = Some(name.to_string());
                 }
             }
@@ -123,7 +152,7 @@ impl TradeRepublicParser {
         transactions
     }
 
-    fn parse_dividends(&self, content: &str) -> Vec<ParsedTransaction> {
+    fn parse_dividends(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
         if !content.contains("Dividende")
@@ -172,19 +201,19 @@ impl TradeRepublicParser {
 
         if let Some(re) = &gross_re {
             if let Some(caps) = re.captures(content) {
-                txn.gross_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.gross_amount = ctx.parse_amount("gross_amount", &caps[1]);
             }
         }
 
         if let Some(re) = &tax_re {
             for caps in re.captures_iter(content) {
-                txn.taxes += parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.taxes += ctx.parse_amount("tax", &caps[1]);
             }
         }
 
         if let Some(re) = &net_re {
             if let Some(caps) = re.captures(content) {
-                txn.net_amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                txn.net_amount = ctx.parse_amount("net_amount", &caps[1]);
             }
         }
 
@@ -195,7 +224,7 @@ impl TradeRepublicParser {
         transactions
     }
 
-    fn parse_interest(&self, content: &str) -> Vec<ParsedTransaction> {
+    fn parse_interest(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
         if !content.contains("Zinsen") && !content.contains("ZINSEN") {
@@ -233,7 +262,7 @@ impl TradeRepublicParser {
 
         if let Some(re) = &amount_re {
             if let Some(caps) = re.captures(content) {
-                let amount = parse_german_decimal(&caps[1]).unwrap_or(0.0);
+                let amount = ctx.parse_amount("amount", &caps[1]);
                 txn.gross_amount = amount;
                 txn.net_amount = amount;
             }
@@ -254,12 +283,12 @@ impl BankParser for TradeRepublicParser {
             .any(|pattern| content.contains(pattern))
     }
 
-    fn parse(&self, content: &str) -> Result<Vec<ParsedTransaction>, String> {
+    fn parse(&self, content: &str, ctx: &mut ParseContext) -> Result<Vec<ParsedTransaction>, String> {
         let mut transactions = Vec::new();
 
-        transactions.extend(self.parse_buy_sell(content));
-        transactions.extend(self.parse_dividends(content));
-        transactions.extend(self.parse_interest(content));
+        transactions.extend(self.parse_buy_sell(content, ctx));
+        transactions.extend(self.parse_dividends(content, ctx));
+        transactions.extend(self.parse_interest(content, ctx));
 
         transactions.sort_by(|a, b| a.date.cmp(&b.date));
 

@@ -18,12 +18,13 @@ apps/desktop/
 │   └── lib/                # API, Types, Hooks
 └── src-tauri/              # Rust Backend
     └── src/
-        ├── commands/       # Tauri IPC Commands (20 Module)
+        ├── commands/       # Tauri IPC Commands (21 Module)
         ├── db/             # SQLite (rusqlite)
         ├── pp/             # Portfolio Performance Datenmodelle
         ├── protobuf/       # .portfolio Parser
         ├── quotes/         # Kursquellen (Yahoo, Finnhub, EZB, etc.)
-        └── fifo/           # FIFO Cost Basis
+        ├── fifo/           # FIFO Cost Basis
+        └── ai/             # KI-Analyse (Claude, GPT-4, Gemini)
 ```
 
 ## Tech Stack
@@ -118,6 +119,9 @@ GROUP BY security_id, owner_id
 - `preview_rebalance()`, `execute_rebalance()`
 - `record_stock_split()`, `record_spinoff()`, `record_merger()`
 
+### AI Chart Analysis
+- `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren (Claude, GPT-4, Gemini)
+
 ---
 
 ## Quote Provider
@@ -132,18 +136,29 @@ GROUP BY security_id, owner_id
 
 ---
 
+## AI Provider (Chart-Analyse)
+
+| Provider | API Key | Model | Beschreibung |
+|----------|---------|-------|--------------|
+| **Claude** | Ja | claude-sonnet-4-5-20250514 | Anthropic, sehr gute Chart-Analyse |
+| **GPT-4** | Ja | gpt-4o | OpenAI, gute visuelle Analyse |
+| **Gemini** | Ja | gemini-2.0-flash | Google, kostenloser Tier verfügbar |
+
+---
+
 ## SQLite Schema (Kerntabellen)
 
 ```sql
--- Securities
-pp_security (id, uuid, name, currency, isin, wkn, ticker, feed, is_retired, custom_logo)
+-- Securities (mit Attributes JSON)
+pp_security (id, uuid, name, currency, isin, wkn, ticker, feed, is_retired, custom_logo, attributes)
 
--- Accounts & Portfolios
-pp_account (id, uuid, name, currency, is_retired)
-pp_portfolio (id, uuid, name, reference_account_id, is_retired)
+-- Accounts & Portfolios (mit Attributes JSON)
+pp_account (id, uuid, name, currency, is_retired, attributes)
+pp_portfolio (id, uuid, name, reference_account_id, is_retired, attributes)
 
--- Transactions
-pp_txn (id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note)
+-- Transactions (mit Transfer-Tracking)
+pp_txn (id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note,
+        other_account_id, other_portfolio_id)
 pp_txn_unit (id, txn_id, unit_type, amount, currency, forex_amount, forex_currency, exchange_rate)
 pp_cross_entry (id, entry_type, from_txn_id, to_txn_id, portfolio_txn_id, account_txn_id)
 
@@ -156,6 +171,15 @@ pp_exchange_rate (base_currency, target_currency, date, rate PRIMARY KEY)
 pp_fifo_lot (id, security_id, portfolio_id, purchase_txn_id, purchase_date,
              original_shares, remaining_shares, gross_amount, net_amount, currency)
 pp_fifo_consumption (id, lot_id, sale_txn_id, shares_consumed, gross_amount, net_amount)
+
+-- Investment Plans (erweitert)
+pp_investment_plan (id, uuid, name, security_id, portfolio_id, account_id, amount, fees, taxes,
+                    interval, start_date, auto_generate, plan_type, note, attributes)
+
+-- Dashboards & Settings
+pp_dashboard (id, import_id, dashboard_id, name, columns_json, configuration_json)
+pp_settings (id, import_id, settings_json)
+pp_client_properties (id, import_id, key, value)
 ```
 
 ---
@@ -174,7 +198,7 @@ pp_fifo_consumption (id, lot_id, sale_txn_id, shares_consumed, gross_amount, net
 
 ```typescript
 // UI State (LocalStorage)
-useUIStore: { currentView, sidebarCollapsed, setCurrentView, toggleSidebar }
+useUIStore: { currentView, sidebarCollapsed, scrollTarget, setCurrentView, toggleSidebar, setScrollTarget }
 
 // App State
 useAppStore: { isLoading, error, setLoading, setError, clearError }
@@ -184,7 +208,11 @@ useSettingsStore: {
   language: 'de' | 'en',
   theme: 'light' | 'dark' | 'system',
   baseCurrency: string,
-  brandfetchApiKey, finnhubApiKey
+  // Quote Provider Keys
+  brandfetchApiKey, finnhubApiKey, coingeckoApiKey, alphaVantageApiKey, twelveDataApiKey,
+  // AI Provider
+  aiProvider: 'claude' | 'openai' | 'gemini',
+  anthropicApiKey, openaiApiKey, geminiApiKey
 }
 
 // Toast
@@ -203,14 +231,15 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 | Accounts | ✅ | CRUD, Balance-Tracking |
 | Transactions | ✅ | Filter, Pagination |
 | Holdings | ✅ | Donut-Chart mit Logos |
+| Dividends | ✅ | Dividenden-Übersicht mit Logos |
 | Watchlist | ✅ | Multiple Listen, Mini-Charts |
 | Taxonomies | ✅ | Hierarchischer Baum |
 | Benchmark | ✅ | Performance-Vergleich |
-| Charts | ✅ | Candlestick, RSI, MACD, Bollinger |
+| Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse |
 | Plans | ✅ | Sparpläne |
 | Reports | 🔄 | Backend fertig, UI in Arbeit |
 | Rebalancing | 🔄 | Backend fertig, UI in Arbeit |
-| Settings | ✅ | Sprache, Theme, API Keys |
+| Settings | ✅ | Sprache, Theme, API Keys, KI-Provider |
 
 ---
 
@@ -231,6 +260,23 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 - **Header:** `PPPBV1` (6 Bytes)
 - **Body:** Protocol Buffers (prost)
 - **Referenzen:** Index-basiert → UUID-Auflösung
+
+### Round-Trip Support (Import → Export)
+
+Folgende Daten überleben einen vollständigen Import/Export-Zyklus:
+
+| Entität | Felder |
+|---------|--------|
+| **Securities** | attributes, note, updated_at, latest_feed, latest_feed_url |
+| **Accounts** | attributes, updated_at |
+| **Portfolios** | attributes |
+| **Transactions** | other_account_uuid, other_portfolio_uuid (Transfer-Tracking) |
+| **Investment Plans** | fees, taxes, plan_type, note, attributes |
+| **Dashboards** | name, id, columns (mit widgets) |
+| **Settings** | bookmarks, attribute_types, configuration_sets |
+| **Properties** | key-value Paare |
+
+Siehe `apps/desktop/src-tauri/PP_IMPORT_EXPORT.md` für Details.
 
 ---
 

@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { BarChart3, RefreshCw, TrendingUp, Coins, FileText, PieChart } from 'lucide-react';
+import { BarChart3, RefreshCw, TrendingUp, Coins, FileText, PieChart, Download } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 import {
   generateDividendReport,
@@ -19,6 +19,7 @@ import type {
   PerformanceResult,
   PortfolioData,
 } from '../../lib/types';
+import { PdfExportModal } from '../../components/modals';
 
 type ReportType = 'performance' | 'dividends' | 'gains' | 'tax';
 
@@ -37,6 +38,7 @@ export function ReportsView() {
   const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
   // Report data
   const [performanceData, setPerformanceData] = useState<PerformanceResult | null>(null);
@@ -169,14 +171,14 @@ export function ReportsView() {
 
     const monthlyChartData = dividendData.byMonth.map(m => ({
       month: m.month,
-      gross: m.totalGross / 100,
-      taxes: m.totalTaxes / 100,
-      net: m.totalNet / 100,
+      gross: m.totalGross ,
+      taxes: m.totalTaxes ,
+      net: m.totalNet ,
     }));
 
     const securityPieData = dividendData.bySecurity.slice(0, 8).map(s => ({
       name: s.securityName,
-      value: s.totalNet / 100,
+      value: s.totalNet ,
     }));
 
     return (
@@ -186,19 +188,19 @@ export function ReportsView() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Brutto-Dividenden</div>
             <div className="text-2xl font-bold text-green-600">
-              {formatCurrency(dividendData.totalGross / 100, dividendData.currency)}
+              {formatCurrency(dividendData.totalGross , dividendData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Quellensteuer</div>
             <div className="text-2xl font-bold text-red-600">
-              -{formatCurrency(dividendData.totalTaxes / 100, dividendData.currency)}
+              -{formatCurrency(dividendData.totalTaxes , dividendData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Netto-Dividenden</div>
             <div className="text-2xl font-bold">
-              {formatCurrency(dividendData.totalNet / 100, dividendData.currency)}
+              {formatCurrency(dividendData.totalNet , dividendData.currency)}
             </div>
           </div>
         </div>
@@ -273,13 +275,13 @@ export function ReportsView() {
                       <td className="py-3 px-4">{formatDate(entry.date)}</td>
                       <td className="py-3 px-4 font-medium">{entry.securityName}</td>
                       <td className="py-3 px-4 text-right text-green-600">
-                        {formatCurrency(entry.grossAmount / 100, entry.currency)}
+                        {formatCurrency(entry.grossAmount , entry.currency)}
                       </td>
                       <td className="py-3 px-4 text-right text-red-600">
-                        -{formatCurrency(entry.taxes / 100, entry.currency)}
+                        -{formatCurrency(entry.taxes , entry.currency)}
                       </td>
                       <td className="py-3 px-4 text-right font-medium">
-                        {formatCurrency(entry.netAmount / 100, entry.currency)}
+                        {formatCurrency(entry.netAmount , entry.currency)}
                       </td>
                     </tr>
                   ))}
@@ -304,25 +306,25 @@ export function ReportsView() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Veräußerungserlöse</div>
             <div className="text-2xl font-bold">
-              {formatCurrency(gainsData.totalProceeds / 100, gainsData.currency)}
+              {formatCurrency(gainsData.totalProceeds , gainsData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Anschaffungskosten</div>
             <div className="text-2xl font-bold">
-              {formatCurrency(gainsData.totalCostBasis / 100, gainsData.currency)}
+              {formatCurrency(gainsData.totalCostBasis , gainsData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Realisierter Gewinn/Verlust</div>
             <div className={`text-2xl font-bold ${gainLoss ? 'text-green-600' : 'text-red-600'}`}>
-              {formatCurrency(gainsData.totalGain / 100, gainsData.currency)}
+              {formatCurrency(gainsData.totalGain , gainsData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Gebühren & Steuern</div>
             <div className="text-2xl font-bold text-red-600">
-              -{formatCurrency((gainsData.totalFees + gainsData.totalTaxes) / 100, gainsData.currency)}
+              -{formatCurrency((gainsData.totalFees + gainsData.totalTaxes) , gainsData.currency)}
             </div>
           </div>
         </div>
@@ -332,13 +334,13 @@ export function ReportsView() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Kurzfristige Gewinne (&lt;1 Jahr)</div>
             <div className={`text-xl font-bold ${gainsData.shortTermGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {formatCurrency(gainsData.shortTermGain / 100, gainsData.currency)}
+              {formatCurrency(gainsData.shortTermGain , gainsData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="text-sm text-muted-foreground">Langfristige Gewinne (&gt;1 Jahr)</div>
             <div className={`text-xl font-bold ${gainsData.longTermGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {formatCurrency(gainsData.longTermGain / 100, gainsData.currency)}
+              {formatCurrency(gainsData.longTermGain , gainsData.currency)}
             </div>
           </div>
         </div>
@@ -371,13 +373,13 @@ export function ReportsView() {
                       </td>
                       <td className="py-3 px-4 text-right">{item.saleCount}</td>
                       <td className="py-3 px-4 text-right">
-                        {formatCurrency(item.totalProceeds / 100)}
+                        {formatCurrency(item.totalProceeds )}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        {formatCurrency(item.totalCostBasis / 100)}
+                        {formatCurrency(item.totalCostBasis )}
                       </td>
                       <td className={`py-3 px-4 text-right font-medium ${item.totalGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(item.totalGain / 100)}
+                        {formatCurrency(item.totalGain )}
                       </td>
                     </tr>
                   ))}
@@ -404,11 +406,11 @@ export function ReportsView() {
               <div className="space-y-2">
                 <div className="flex justify-between">
                   <span>Brutto-Dividenden:</span>
-                  <span className="font-medium">{formatCurrency(taxData.dividendIncome / 100, taxData.currency)}</span>
+                  <span className="font-medium">{formatCurrency(taxData.dividendIncome , taxData.currency)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Einbehaltene Quellensteuer:</span>
-                  <span className="font-medium text-red-600">-{formatCurrency(taxData.dividendTaxesWithheld / 100, taxData.currency)}</span>
+                  <span className="font-medium text-red-600">-{formatCurrency(taxData.dividendTaxesWithheld , taxData.currency)}</span>
                 </div>
               </div>
             </div>
@@ -418,19 +420,19 @@ export function ReportsView() {
                 <div className="flex justify-between">
                   <span>Kurzfristige Gewinne:</span>
                   <span className={`font-medium ${taxData.shortTermGains >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatCurrency(taxData.shortTermGains / 100, taxData.currency)}
+                    {formatCurrency(taxData.shortTermGains , taxData.currency)}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Langfristige Gewinne:</span>
                   <span className={`font-medium ${taxData.longTermGains >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatCurrency(taxData.longTermGains / 100, taxData.currency)}
+                    {formatCurrency(taxData.longTermGains , taxData.currency)}
                   </span>
                 </div>
                 <div className="flex justify-between border-t border-border pt-2">
                   <span className="font-medium">Gesamte Kapitalerträge:</span>
                   <span className={`font-bold ${taxData.totalCapitalGains >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatCurrency(taxData.totalCapitalGains / 100, taxData.currency)}
+                    {formatCurrency(taxData.totalCapitalGains , taxData.currency)}
                   </span>
                 </div>
               </div>
@@ -443,13 +445,13 @@ export function ReportsView() {
           <div className="bg-card rounded-lg border border-border p-4">
             <h4 className="font-medium mb-2">Gebühren</h4>
             <div className="text-2xl font-bold text-red-600">
-              -{formatCurrency(taxData.totalFees / 100, taxData.currency)}
+              -{formatCurrency(taxData.totalFees , taxData.currency)}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <h4 className="font-medium mb-2">Gezahlte Kapitalertragssteuer</h4>
             <div className="text-2xl font-bold text-red-600">
-              -{formatCurrency(taxData.capitalGainsTaxes / 100, taxData.currency)}
+              -{formatCurrency(taxData.capitalGainsTaxes , taxData.currency)}
             </div>
           </div>
         </div>
@@ -465,14 +467,23 @@ export function ReportsView() {
           <BarChart3 className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold">Berichte</h1>
         </div>
-        <button
-          onClick={loadReport}
-          disabled={isLoading}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-          Bericht generieren
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setIsPdfModalOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors"
+          >
+            <Download size={16} />
+            PDF Export
+          </button>
+          <button
+            onClick={loadReport}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            Bericht generieren
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -599,6 +610,12 @@ export function ReportsView() {
           <p>Wählen Sie einen Berichtstyp und klicken Sie auf "Bericht generieren".</p>
         </div>
       )}
+
+      {/* PDF Export Modal */}
+      <PdfExportModal
+        isOpen={isPdfModalOpen}
+        onClose={() => setIsPdfModalOpen(false)}
+      />
     </div>
   );
 }

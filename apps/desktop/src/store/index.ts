@@ -16,6 +16,7 @@ export type View =
   | 'accounts'
   | 'transactions'
   | 'holdings'
+  | 'dividends'
   | 'asset-statement'
   | 'watchlist'
   | 'taxonomies'
@@ -41,6 +42,7 @@ export const navItems: NavItem[] = [
   { id: 'accounts', label: 'Konten', icon: 'Wallet', section: 'main' },
   { id: 'transactions', label: 'Buchungen', icon: 'ArrowRightLeft', section: 'main' },
   { id: 'holdings', label: 'Bestand', icon: 'PieChart', section: 'main' },
+  { id: 'dividends', label: 'Dividenden', icon: 'Coins', section: 'main' },
   { id: 'watchlist', label: 'Watchlist', icon: 'Eye', section: 'main' },
   // Analysis section
   { id: 'asset-statement', label: 'Vermögensaufstellung', icon: 'Table2', section: 'analysis' },
@@ -60,9 +62,11 @@ export const navItems: NavItem[] = [
 interface UIState {
   currentView: View;
   sidebarCollapsed: boolean;
+  scrollTarget: string | null;
   setCurrentView: (view: View) => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  setScrollTarget: (target: string | null) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -70,9 +74,11 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       currentView: 'dashboard',
       sidebarCollapsed: false,
+      scrollTarget: null,
       setCurrentView: (view) => set({ currentView: view }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      setScrollTarget: (target) => set({ scrollTarget: target }),
     }),
     {
       name: 'portfolio-ui-state',
@@ -100,45 +106,6 @@ export const useAppStore = create<AppState>()((set) => ({
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),
 }));
-
-// ============================================================================
-// Portfolio File State (Legacy - for direct file editing)
-// ============================================================================
-
-export interface PortfolioFileState {
-  currentFilePath: string | null;
-  hasUnsavedChanges: boolean;
-  setCurrentFilePath: (path: string | null) => void;
-  setHasUnsavedChanges: (hasChanges: boolean) => void;
-}
-
-export const usePortfolioFileStore = create<PortfolioFileState>()((set) => ({
-  currentFilePath: null,
-  hasUnsavedChanges: false,
-  setCurrentFilePath: (path) => set({ currentFilePath: path }),
-  setHasUnsavedChanges: (hasChanges) => set({ hasUnsavedChanges: hasChanges }),
-}));
-
-// ============================================================================
-// Data Mode State
-// ============================================================================
-
-interface DataModeState {
-  useDbData: boolean;
-  setUseDbData: (useDb: boolean) => void;
-}
-
-export const useDataModeStore = create<DataModeState>()(
-  persist(
-    (set) => ({
-      useDbData: true, // Default to DB mode
-      setUseDbData: (useDb) => set({ useDbData: useDb }),
-    }),
-    {
-      name: 'portfolio-data-mode',
-    }
-  )
-);
 
 // ============================================================================
 // Expanded Groups State (for UI drill-down)
@@ -195,6 +162,10 @@ interface SettingsState {
   lastSyncTime: string | null; // ISO string for persistence
   setLastSyncTime: (time: Date | null) => void;
 
+  // Transaction settings
+  deliveryMode: boolean; // When true: Buy→Delivery, Dividend→with withdrawal
+  setDeliveryMode: (value: boolean) => void;
+
   // Display settings
   language: 'de' | 'en';
   theme: 'light' | 'dark' | 'system';
@@ -203,7 +174,7 @@ interface SettingsState {
   setTheme: (theme: 'light' | 'dark' | 'system') => void;
   setBaseCurrency: (currency: string) => void;
 
-  // API Keys
+  // API Keys (Quote Providers)
   brandfetchApiKey: string;
   setBrandfetchApiKey: (key: string) => void;
   finnhubApiKey: string;
@@ -214,6 +185,16 @@ interface SettingsState {
   setAlphaVantageApiKey: (key: string) => void;
   twelveDataApiKey: string;
   setTwelveDataApiKey: (key: string) => void;
+
+  // AI Analysis Settings
+  aiProvider: 'claude' | 'openai' | 'gemini';
+  setAiProvider: (provider: 'claude' | 'openai' | 'gemini') => void;
+  anthropicApiKey: string;
+  setAnthropicApiKey: (key: string) => void;
+  openaiApiKey: string;
+  setOpenaiApiKey: (key: string) => void;
+  geminiApiKey: string;
+  setGeminiApiKey: (key: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -227,6 +208,10 @@ export const useSettingsStore = create<SettingsState>()(
       lastSyncTime: null,
       setLastSyncTime: (time) => set({ lastSyncTime: time ? time.toISOString() : null }),
 
+      // Transaction settings - default to normal mode (Buy with cash movement)
+      deliveryMode: false,
+      setDeliveryMode: (value) => set({ deliveryMode: value }),
+
       // Display settings
       language: 'de',
       theme: 'system',
@@ -235,7 +220,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme: theme }),
       setBaseCurrency: (currency) => set({ baseCurrency: currency }),
 
-      // API Keys
+      // API Keys (Quote Providers)
       brandfetchApiKey: '',
       setBrandfetchApiKey: (key) => set({ brandfetchApiKey: key }),
       finnhubApiKey: '',
@@ -246,9 +231,23 @@ export const useSettingsStore = create<SettingsState>()(
       setAlphaVantageApiKey: (key) => set({ alphaVantageApiKey: key }),
       twelveDataApiKey: '',
       setTwelveDataApiKey: (key) => set({ twelveDataApiKey: key }),
+
+      // AI Analysis Settings
+      aiProvider: 'claude',
+      setAiProvider: (provider) => set({ aiProvider: provider }),
+      anthropicApiKey: '',
+      setAnthropicApiKey: (key) => set({ anthropicApiKey: key }),
+      openaiApiKey: '',
+      setOpenaiApiKey: (key) => set({ openaiApiKey: key }),
+      geminiApiKey: '',
+      setGeminiApiKey: (key) => set({ geminiApiKey: key }),
     }),
     {
       name: 'portfolio-settings',
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...(persistedState as Partial<SettingsState>),
+      }),
     }
   )
 );

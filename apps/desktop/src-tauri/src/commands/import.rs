@@ -5,8 +5,9 @@
 
 use crate::db;
 use crate::pp::{
-    self, Account, Classification, Client, Portfolio, Security,
-    security::SecurityEventKind, taxonomy::Taxonomy, transaction::AccountTransaction,
+    self, Account, Classification, Client, Dashboard, InvestmentPlan, Portfolio, Security,
+    security::{SecurityEventKind, SecurityEventType},
+    taxonomy::Taxonomy, transaction::AccountTransaction,
     transaction::PortfolioTransaction,
 };
 use crate::protobuf;
@@ -315,6 +316,100 @@ fn save_client_to_db(path: &str, client: &Client, app: &AppHandle) -> Result<Imp
         }
     }
 
+    // Import investment plans
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            stage: "plans".to_string(),
+            message: "Importing investment plans...".to_string(),
+            percent: 81,
+            current: Some(0),
+            total: Some(client.plans.len()),
+        },
+    );
+
+    for (i, plan) in client.plans.iter().enumerate() {
+        if let Err(e) = insert_investment_plan(&tx, import_id, plan) {
+            warnings.push(format!("Investment plan {}: {}", plan.name, e));
+        }
+
+        if i % 5 == 0 {
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress {
+                    stage: "plans".to_string(),
+                    message: format!("Importing plan: {}", plan.name),
+                    percent: 81,
+                    current: Some(i),
+                    total: Some(client.plans.len()),
+                },
+            );
+        }
+    }
+
+    // Import client properties
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            stage: "properties".to_string(),
+            message: "Importing properties...".to_string(),
+            percent: 82,
+            current: None,
+            total: None,
+        },
+    );
+
+    if let Err(e) = insert_client_properties(&tx, import_id, client) {
+        warnings.push(format!("Client properties: {}", e));
+    }
+
+    // Import dashboards
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            stage: "dashboards".to_string(),
+            message: "Importing dashboards...".to_string(),
+            percent: 83,
+            current: Some(0),
+            total: Some(client.dashboards.len()),
+        },
+    );
+
+    for (i, dashboard) in client.dashboards.iter().enumerate() {
+        if let Err(e) = insert_dashboard(&tx, import_id, dashboard) {
+            warnings.push(format!("Dashboard {}: {}", dashboard.name, e));
+        }
+
+        if i % 2 == 0 {
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress {
+                    stage: "dashboards".to_string(),
+                    message: format!("Importing dashboard: {}", dashboard.name),
+                    percent: 83,
+                    current: Some(i),
+                    total: Some(client.dashboards.len()),
+                },
+            );
+        }
+    }
+
+    // Import settings
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            stage: "settings".to_string(),
+            message: "Importing settings...".to_string(),
+            percent: 84,
+            current: None,
+            total: None,
+        },
+    );
+
+    if let Err(e) = insert_settings(&tx, import_id, client) {
+        warnings.push(format!("Settings: {}", e));
+    }
+
     // Link cross-entries
     let _ = app.emit(
         "import-progress",
@@ -366,22 +461,40 @@ fn save_client_to_db(path: &str, client: &Client, app: &AppHandle) -> Result<Imp
 
 /// Insert a security into the database
 fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Security) -> Result<i64> {
+    // Serialize attributes to JSON
+    let attributes_json = if security.attributes.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&security.attributes).unwrap_or_default())
+    };
+
+    // Serialize properties to JSON
+    let properties_json = if security.properties.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&security.properties).unwrap_or_default())
+    };
+
     tx.execute(
-        "INSERT INTO pp_security (import_id, uuid, name, currency, online_id, isin, wkn, ticker, calendar, feed, feed_url, latest_feed, latest_feed_url, is_retired, note, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        "INSERT INTO pp_security (import_id, uuid, name, currency, target_currency, online_id, isin, wkn, ticker, calendar, feed, feed_url, latest_feed, latest_feed_url, is_retired, note, updated_at, attributes, properties)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
          ON CONFLICT(uuid) DO UPDATE SET
            name = excluded.name,
            currency = excluded.currency,
+           target_currency = excluded.target_currency,
            isin = excluded.isin,
            wkn = excluded.wkn,
            ticker = excluded.ticker,
            is_retired = excluded.is_retired,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           attributes = excluded.attributes,
+           properties = excluded.properties",
         params![
             import_id,
             security.uuid,
             security.name,
             security.currency,
+            security.target_currency,
             security.online_id,
             security.isin,
             security.wkn,
@@ -394,6 +507,8 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
             security.is_retired as i32,
             security.note,
             security.updated_at,
+            attributes_json,
+            properties_json,
         ],
     )?;
 
@@ -435,6 +550,7 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
     for event_kind in &security.events {
         match event_kind {
             SecurityEventKind::Event(event) => {
+                // Save to pp_security_event (for reference)
                 tx.execute(
                     "INSERT INTO pp_security_event (security_id, event_type, date, details, source, payment_date, amount, amount_currency)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -449,6 +565,31 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
                         Option::<String>::None,
                     ],
                 )?;
+
+                // Also save STOCK_SPLIT events to pp_corporate_action for unified tracking
+                if event.event_type == SecurityEventType::StockSplit {
+                    if let Some(ref details) = event.details {
+                        // Parse ratio from details (e.g., "4:1" -> numerator=4, denominator=1)
+                        let (num, denom) = parse_split_ratio(details);
+                        let action_type = if num > denom { "STOCK_SPLIT" } else { "REVERSE_SPLIT" };
+
+                        tx.execute(
+                            "INSERT OR IGNORE INTO pp_corporate_action
+                             (security_id, action_type, effective_date, ratio_from, ratio_to, source, confidence, is_confirmed)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                            params![
+                                security_id,
+                                action_type,
+                                event.date.to_string(),
+                                num,
+                                denom,
+                                "PP_IMPORT",
+                                1.0,  // High confidence for PP-imported data
+                                1,    // Confirmed since it comes from PP
+                            ],
+                        )?;
+                    }
+                }
             }
             SecurityEventKind::Dividend(dividend) => {
                 tx.execute(
@@ -474,14 +615,22 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
 
 /// Insert an account into the database
 fn insert_account(tx: &rusqlite::Transaction, import_id: i64, account: &Account) -> Result<i64> {
+    // Serialize attributes to JSON
+    let attributes_json = if account.attributes.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&account.attributes).unwrap_or_default())
+    };
+
     tx.execute(
-        "INSERT INTO pp_account (import_id, uuid, name, currency, is_retired, note, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO pp_account (import_id, uuid, name, currency, is_retired, note, updated_at, attributes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(uuid) DO UPDATE SET
            name = excluded.name,
            currency = excluded.currency,
            is_retired = excluded.is_retired,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           attributes = excluded.attributes",
         params![
             import_id,
             account.uuid,
@@ -490,6 +639,7 @@ fn insert_account(tx: &rusqlite::Transaction, import_id: i64, account: &Account)
             account.is_retired as i32,
             account.note,
             account.updated_at,
+            attributes_json,
         ],
     )?;
 
@@ -524,15 +674,27 @@ fn insert_account_transaction(
         .ok()
     });
 
+    // Find other account ID for transfers
+    let other_account_id: Option<i64> = txn.other_account_uuid.as_ref().and_then(|uuid| {
+        tx.query_row(
+            "SELECT id FROM pp_account WHERE uuid = ?1",
+            params![uuid],
+            |row| row.get(0),
+        )
+        .ok()
+    });
+
     tx.execute(
-        "INSERT INTO pp_txn (uuid, owner_type, owner_id, txn_type, date, amount, currency, shares, security_id, note, source, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO pp_txn (uuid, owner_type, owner_id, txn_type, date, amount, currency, shares, security_id, note, source, updated_at, other_account_id, other_updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(uuid) DO UPDATE SET
            txn_type = excluded.txn_type,
            date = excluded.date,
            amount = excluded.amount,
            shares = excluded.shares,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           other_account_id = excluded.other_account_id,
+           other_updated_at = excluded.other_updated_at",
         params![
             txn.uuid,
             "account",
@@ -546,6 +708,8 @@ fn insert_account_transaction(
             txn.note,
             txn.source,
             txn.updated_at,
+            other_account_id,
+            txn.other_updated_at,
         ],
     )?;
 
@@ -604,14 +768,22 @@ fn insert_portfolio(
         .ok()
     });
 
+    // Serialize attributes to JSON
+    let attributes_json = if portfolio.attributes.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&portfolio.attributes).unwrap_or_default())
+    };
+
     tx.execute(
-        "INSERT INTO pp_portfolio (import_id, uuid, name, reference_account_id, is_retired, note, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO pp_portfolio (import_id, uuid, name, reference_account_id, is_retired, note, updated_at, attributes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(uuid) DO UPDATE SET
            name = excluded.name,
            reference_account_id = excluded.reference_account_id,
            is_retired = excluded.is_retired,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           attributes = excluded.attributes",
         params![
             import_id,
             portfolio.uuid,
@@ -620,6 +792,7 @@ fn insert_portfolio(
             portfolio.is_retired as i32,
             portfolio.note,
             portfolio.updated_at,
+            attributes_json,
         ],
     )?;
 
@@ -654,15 +827,27 @@ fn insert_portfolio_transaction(
         .ok()
     });
 
+    // Find other portfolio ID for transfers
+    let other_portfolio_id: Option<i64> = txn.other_portfolio_uuid.as_ref().and_then(|uuid| {
+        tx.query_row(
+            "SELECT id FROM pp_portfolio WHERE uuid = ?1",
+            params![uuid],
+            |row| row.get(0),
+        )
+        .ok()
+    });
+
     tx.execute(
-        "INSERT INTO pp_txn (uuid, owner_type, owner_id, txn_type, date, amount, currency, shares, security_id, note, source, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO pp_txn (uuid, owner_type, owner_id, txn_type, date, amount, currency, shares, security_id, note, source, updated_at, other_portfolio_id, other_updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(uuid) DO UPDATE SET
            txn_type = excluded.txn_type,
            date = excluded.date,
            amount = excluded.amount,
            shares = excluded.shares,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           other_portfolio_id = excluded.other_portfolio_id,
+           other_updated_at = excluded.other_updated_at",
         params![
             txn.uuid,
             "portfolio",
@@ -676,6 +861,8 @@ fn insert_portfolio_transaction(
             txn.note,
             txn.source,
             txn.updated_at,
+            other_portfolio_id,
+            txn.other_updated_at,
         ],
     )?;
 
@@ -999,6 +1186,204 @@ pub struct ImportInfo {
     pub transactions_count: i32,
 }
 
+/// Insert an investment plan into the database
+fn insert_investment_plan(
+    tx: &rusqlite::Transaction,
+    import_id: i64,
+    plan: &InvestmentPlan,
+) -> Result<i64> {
+    // Ensure the table exists (created by commands/investment_plans.rs)
+    tx.execute(
+        "CREATE TABLE IF NOT EXISTS pp_investment_plan (
+            id INTEGER PRIMARY KEY,
+            import_id INTEGER,
+            name TEXT NOT NULL,
+            security_id INTEGER,
+            account_id INTEGER,
+            portfolio_id INTEGER,
+            interval TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            day_of_month INTEGER NOT NULL DEFAULT 1,
+            start_date TEXT,
+            end_date TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            fees INTEGER NOT NULL DEFAULT 0,
+            taxes INTEGER NOT NULL DEFAULT 0,
+            plan_type INTEGER NOT NULL DEFAULT 0,
+            auto_generate INTEGER NOT NULL DEFAULT 0,
+            attributes TEXT,
+            note TEXT,
+            uuid TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (security_id) REFERENCES pp_security(id),
+            FOREIGN KEY (account_id) REFERENCES pp_account(id),
+            FOREIGN KEY (portfolio_id) REFERENCES pp_portfolio(id)
+        )",
+        [],
+    )?;
+
+    // Find security ID if exists
+    let security_id: Option<i64> = plan.security_uuid.as_ref().and_then(|uuid| {
+        tx.query_row(
+            "SELECT id FROM pp_security WHERE uuid = ?1",
+            params![uuid],
+            |row| row.get(0),
+        )
+        .ok()
+    });
+
+    // Find account ID if exists
+    let account_id: Option<i64> = plan.account_uuid.as_ref().and_then(|uuid| {
+        tx.query_row(
+            "SELECT id FROM pp_account WHERE uuid = ?1",
+            params![uuid],
+            |row| row.get(0),
+        )
+        .ok()
+    });
+
+    // Find portfolio ID if exists
+    let portfolio_id: Option<i64> = plan.portfolio_uuid.as_ref().and_then(|uuid| {
+        tx.query_row(
+            "SELECT id FROM pp_portfolio WHERE uuid = ?1",
+            params![uuid],
+            |row| row.get(0),
+        )
+        .ok()
+    });
+
+    // Convert interval to string
+    // PP: <100 = months, >100 = weeks
+    let interval_str = if plan.interval >= 100 {
+        match plan.interval - 100 {
+            1 => "WEEKLY",
+            2 => "BIWEEKLY",
+            _ => "MONTHLY",
+        }
+    } else {
+        match plan.interval {
+            1 => "MONTHLY",
+            3 => "QUARTERLY",
+            12 => "YEARLY",
+            _ => "MONTHLY",
+        }
+    };
+
+    // Serialize attributes to JSON
+    let attributes_json = if plan.attributes.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&plan.attributes).unwrap_or_default())
+    };
+
+    // Serialize transactions to JSON
+    let transactions_json = if plan.transactions.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&plan.transactions).unwrap_or_default())
+    };
+
+    tx.execute(
+        "INSERT INTO pp_investment_plan (import_id, name, security_id, account_id, portfolio_id, interval, amount, start_date, fees, taxes, plan_type, auto_generate, attributes, note, is_active, transactions)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        params![
+            import_id,
+            plan.name,
+            security_id,
+            account_id,
+            portfolio_id,
+            interval_str,
+            plan.amount,
+            plan.start,
+            plan.fees,
+            plan.taxes,
+            plan.plan_type,
+            plan.auto_generate as i32,
+            attributes_json,
+            plan.note,
+            1, // is_active = true
+            transactions_json,
+        ],
+    )?;
+
+    Ok(tx.last_insert_rowid())
+}
+
+/// Insert client properties into the database
+fn insert_client_properties(
+    tx: &rusqlite::Transaction,
+    import_id: i64,
+    client: &Client,
+) -> Result<()> {
+    // Only process if properties is a valid object
+    if let Some(props) = client.properties.as_object() {
+        for (key, value) in props {
+            let value_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => value.to_string(),
+            };
+
+            tx.execute(
+                "INSERT OR REPLACE INTO pp_client_properties (import_id, key, value)
+                 VALUES (?1, ?2, ?3)",
+                params![import_id, key, value_str],
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Insert a dashboard into the database
+fn insert_dashboard(
+    tx: &rusqlite::Transaction,
+    import_id: i64,
+    dashboard: &Dashboard,
+) -> Result<i64> {
+    // Serialize columns to JSON
+    let columns_json = serde_json::to_string(&dashboard.columns).unwrap_or_default();
+
+    // Serialize configuration to JSON
+    let configuration_json = dashboard.configuration.to_string();
+
+    tx.execute(
+        "INSERT INTO pp_dashboard (import_id, dashboard_id, name, columns_json, configuration_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            import_id,
+            dashboard.id,
+            dashboard.name,
+            columns_json,
+            configuration_json,
+        ],
+    )?;
+
+    Ok(tx.last_insert_rowid())
+}
+
+/// Insert settings into the database
+fn insert_settings(
+    tx: &rusqlite::Transaction,
+    import_id: i64,
+    client: &Client,
+) -> Result<()> {
+    // Serialize settings to JSON
+    let settings_json = client.settings.to_string();
+
+    // Only insert if settings is not null
+    if !client.settings.is_null() {
+        tx.execute(
+            "INSERT OR REPLACE INTO pp_settings (import_id, settings_json)
+             VALUES (?1, ?2)",
+            params![import_id, settings_json],
+        )?;
+    }
+
+    Ok(())
+}
+
 /// Delete an import and all related data
 #[command]
 pub fn delete_import(import_id: i64) -> Result<(), String> {
@@ -1034,6 +1419,18 @@ fn save_exchange_rates(rates: &[ExchangeRate]) -> Result<()> {
 
     tx.commit()?;
     Ok(())
+}
+
+/// Parse a split ratio string like "4:1" into (numerator, denominator)
+fn parse_split_ratio(details: &str) -> (i32, i32) {
+    let parts: Vec<&str> = details.split(':').collect();
+    if parts.len() == 2 {
+        let num = parts[0].trim().parse::<i32>().unwrap_or(1);
+        let denom = parts[1].trim().parse::<i32>().unwrap_or(1);
+        (num.max(1), denom.max(1))
+    } else {
+        (1, 1) // Default if parsing fails
+    }
 }
 
 /// Rebuild all FIFO lots from transactions

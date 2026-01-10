@@ -2,16 +2,18 @@
  * Settings view for application configuration.
  */
 
-import { useState } from 'react';
-import { Eye, EyeOff, ExternalLink, Trash2 } from 'lucide-react';
-import { useSettingsStore } from '../../store';
+import { useState, useEffect } from 'react';
+import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles } from 'lucide-react';
+import { useSettingsStore, useUIStore, toast } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
-import { clearLogoCache } from '../../lib/api';
+import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
 
 export function SettingsView() {
   const {
     syncOnlyHeldSecurities,
     setSyncOnlyHeldSecurities,
+    deliveryMode,
+    setDeliveryMode,
     language,
     setLanguage,
     theme,
@@ -28,6 +30,14 @@ export function SettingsView() {
     setAlphaVantageApiKey,
     twelveDataApiKey,
     setTwelveDataApiKey,
+    aiProvider,
+    setAiProvider,
+    anthropicApiKey,
+    setAnthropicApiKey,
+    openaiApiKey,
+    setOpenaiApiKey,
+    geminiApiKey,
+    setGeminiApiKey,
   } = useSettingsStore();
 
   const [showBrandfetchKey, setShowBrandfetchKey] = useState(false);
@@ -35,8 +45,43 @@ export function SettingsView() {
   const [showCoingeckoKey, setShowCoingeckoKey] = useState(false);
   const [showAlphaVantageKey, setShowAlphaVantageKey] = useState(false);
   const [showTwelveDataKey, setShowTwelveDataKey] = useState(false);
+  const [showAiKey, setShowAiKey] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
+  const [isRebuilding, setIsRebuilding] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState<string | null>(null);
+
+  const { scrollTarget, setScrollTarget } = useUIStore();
+
+  // Scroll to target section if set
+  useEffect(() => {
+    if (scrollTarget) {
+      const element = document.getElementById(scrollTarget);
+      if (element) {
+        // Small delay to ensure the page is rendered
+        setTimeout(() => {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      }
+      setScrollTarget(null);
+    }
+  }, [scrollTarget, setScrollTarget]);
+
+  const handleRebuildFifo = async () => {
+    setIsRebuilding(true);
+    setRebuildResult(null);
+    try {
+      const result = await rebuildFifoLots();
+      setRebuildResult(`${result.securitiesProcessed} Securities verarbeitet, ${result.lotsCreated} aktive Lots`);
+      toast.success('FIFO-Daten erfolgreich neu berechnet');
+    } catch (err) {
+      const errorMsg = `Fehler: ${err instanceof Error ? err.message : String(err)}`;
+      setRebuildResult(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setIsRebuilding(false);
+    }
+  };
 
   const handleClearCache = async () => {
     setIsClearing(true);
@@ -97,6 +142,40 @@ export function SettingsView() {
               <option value="CHF">CHF - Schweizer Franken</option>
               <option value="GBP">GBP - Britisches Pfund</option>
             </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Transaction Settings */}
+      <div className="bg-card rounded-lg border border-border p-6">
+        <h2 className="text-lg font-semibold mb-4">Buchungen</h2>
+        <div className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Einlieferungsmodus</label>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Wenn aktiviert, werden neue Käufe standardmäßig als <strong>Einlieferung</strong> erfasst (ohne Kontobuchung).
+                Dividenden werden mit einer automatischen Ausbuchung vom Referenzkonto verknüpft, sodass der Kontostand unverändert bleibt.
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Nützlich wenn Sie Ihr Portfolio nur zur Bestandsverfolgung nutzen und die Geldbewegungen bei Ihrer Bank verwalten.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={deliveryMode}
+              onClick={() => setDeliveryMode(!deliveryMode)}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+                deliveryMode ? 'bg-primary' : 'bg-muted'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  deliveryMode ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>
@@ -287,6 +366,127 @@ export function SettingsView() {
         </div>
       </div>
 
+      {/* AI Analysis Settings */}
+      <div id="ai-analysis" className="bg-card rounded-lg border border-border p-6 scroll-mt-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles size={20} className="text-primary" />
+          <h2 className="text-lg font-semibold">KI-Analyse</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Nutze KI zur technischen Analyse deiner Charts. Die KI analysiert das Chartbild und gibt eine strukturierte Einschätzung.
+        </p>
+        <div className="space-y-4">
+          {/* Provider Selection */}
+          <div>
+            <label className="text-sm font-medium">KI-Anbieter</label>
+            <select
+              value={aiProvider}
+              onChange={(e) => {
+                setAiProvider(e.target.value as 'claude' | 'openai' | 'gemini');
+                setShowAiKey(false);
+              }}
+              className="mt-1 block w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
+            >
+              <option value="claude">Claude (Anthropic)</option>
+              <option value="openai">GPT-4 (OpenAI)</option>
+              <option value="gemini">Gemini (Google)</option>
+            </select>
+          </div>
+
+          {/* Dynamic API Key Field */}
+          <div className="pt-4 border-t border-border">
+            <label className="text-sm font-medium">
+              {aiProvider === 'claude' && 'Anthropic API Key'}
+              {aiProvider === 'openai' && 'OpenAI API Key'}
+              {aiProvider === 'gemini' && 'Google Gemini API Key'}
+            </label>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+              {aiProvider === 'claude' && (
+                <>
+                  Für Claude. Sehr gute Chart-Analyse und strukturierte Antworten.{' '}
+                  <button
+                    type="button"
+                    onClick={() => open('https://console.anthropic.com/')}
+                    className="text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    API Key erhalten
+                    <ExternalLink size={12} />
+                  </button>
+                </>
+              )}
+              {aiProvider === 'openai' && (
+                <>
+                  Für GPT-4 Vision. Gute visuelle Analyse-Fähigkeiten.{' '}
+                  <button
+                    type="button"
+                    onClick={() => open('https://platform.openai.com/api-keys')}
+                    className="text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    API Key erhalten
+                    <ExternalLink size={12} />
+                  </button>
+                </>
+              )}
+              {aiProvider === 'gemini' && (
+                <>
+                  Für Gemini. Kostenloser Tier verfügbar.{' '}
+                  <button
+                    type="button"
+                    onClick={() => open('https://aistudio.google.com/app/apikey')}
+                    className="text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    API Key erhalten
+                    <ExternalLink size={12} />
+                  </button>
+                </>
+              )}
+            </p>
+            <div className="relative max-w-md">
+              <input
+                type={showAiKey ? 'text' : 'password'}
+                value={
+                  aiProvider === 'claude'
+                    ? anthropicApiKey
+                    : aiProvider === 'openai'
+                      ? openaiApiKey
+                      : geminiApiKey
+                }
+                onChange={(e) => {
+                  if (aiProvider === 'claude') setAnthropicApiKey(e.target.value);
+                  else if (aiProvider === 'openai') setOpenaiApiKey(e.target.value);
+                  else setGeminiApiKey(e.target.value);
+                }}
+                placeholder={
+                  aiProvider === 'claude'
+                    ? 'sk-ant-...'
+                    : aiProvider === 'openai'
+                      ? 'sk-...'
+                      : 'AI...'
+                }
+                className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => setShowAiKey(!showAiKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+              >
+                {showAiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            {((aiProvider === 'claude' && anthropicApiKey) ||
+              (aiProvider === 'openai' && openaiApiKey) ||
+              (aiProvider === 'gemini' && geminiApiKey)) && (
+              <p className="text-xs text-green-600 mt-1">
+                API Key gespeichert.{' '}
+                {aiProvider === 'claude' && 'Claude'}
+                {aiProvider === 'openai' && 'GPT-4'}
+                {aiProvider === 'gemini' && 'Gemini'} ist als KI-Anbieter verfügbar.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Logo Settings */}
       <div className="bg-card rounded-lg border border-border p-6">
         <h2 className="text-lg font-semibold mb-4">Logos</h2>
@@ -350,6 +550,38 @@ export function SettingsView() {
                 }`}
               >
                 {cacheResult}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Data Maintenance */}
+      <div className="bg-card rounded-lg border border-border p-6">
+        <h2 className="text-lg font-semibold mb-4">Datenpflege</h2>
+        <div className="space-y-4">
+          {/* FIFO Rebuild */}
+          <div>
+            <label className="text-sm font-medium">FIFO Cost Basis</label>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-3">
+              Berechnet alle FIFO-Lots und Einstandskosten neu. Nützlich wenn Einstand oder Gewinn/Verlust nicht korrekt angezeigt werden.
+            </p>
+            <button
+              type="button"
+              onClick={handleRebuildFifo}
+              disabled={isRebuilding}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={isRebuilding ? 'animate-spin' : ''} />
+              {isRebuilding ? 'Berechne neu...' : 'FIFO neu berechnen'}
+            </button>
+            {rebuildResult && (
+              <p
+                className={`text-xs mt-2 ${
+                  rebuildResult.startsWith('Fehler') ? 'text-destructive' : 'text-green-600'
+                }`}
+              >
+                {rebuildResult}
               </p>
             )}
           </div>

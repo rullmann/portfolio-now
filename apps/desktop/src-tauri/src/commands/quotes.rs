@@ -762,3 +762,549 @@ fn save_exchange_rates_to_db(rates: &[ExchangeRate]) -> anyhow::Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+// ============== Stock Split Detection ==============
+
+/// Result of detecting stock splits for a security
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitDetectionResult {
+    pub security_id: i64,
+    pub security_name: String,
+    pub symbol: String,
+    pub splits_found: usize,
+    pub splits_new: usize,
+    pub splits: Vec<DetectedSplit>,
+}
+
+/// A detected stock split
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedSplit {
+    pub date: String,
+    pub ratio: String,
+    pub numerator: f64,
+    pub denominator: f64,
+    pub source: String,
+    pub is_new: bool,
+    pub is_applied: bool,
+}
+
+/// Detect stock splits for a single security using Yahoo Finance
+#[command]
+pub async fn detect_security_splits(
+    security_id: i64,
+) -> Result<SplitDetectionResult, String> {
+    let security = get_security_by_id(security_id).map_err(|e| e.to_string())?;
+
+    // Get symbol for Yahoo
+    let symbol = security.ticker
+        .or(security.isin.clone())
+        .ok_or_else(|| "Security has no ticker or ISIN".to_string())?;
+
+    // Fetch historical data with splits (max range for complete split history)
+    let from = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+    let to = chrono::Utc::now().date_naive();
+
+    let data = yahoo::fetch_historical_with_splits(&symbol, from, to, false)
+        .await
+        .map_err(|e| format!("Failed to fetch splits for {}: {}", symbol, e))?;
+
+    let mut detected_splits = Vec::new();
+    let mut new_count = 0;
+
+    for split in data.splits {
+        let is_new = !is_split_already_recorded(security_id, &split.date.to_string())?;
+        let is_applied = false; // Will be set after checking DB
+
+        if is_new {
+            // Save new split to database
+            save_split_to_db(security_id, &split, "YAHOO")?;
+            new_count += 1;
+        }
+
+        detected_splits.push(DetectedSplit {
+            date: split.date.to_string(),
+            ratio: split.ratio_str(),
+            numerator: split.numerator,
+            denominator: split.denominator,
+            source: "YAHOO".to_string(),
+            is_new,
+            is_applied,
+        });
+    }
+
+    log::info!(
+        "Split detection for {} ({}): {} found, {} new",
+        security.name, symbol, detected_splits.len(), new_count
+    );
+
+    Ok(SplitDetectionResult {
+        security_id,
+        security_name: security.name,
+        symbol,
+        splits_found: detected_splits.len(),
+        splits_new: new_count,
+        splits: detected_splits,
+    })
+}
+
+/// Detect stock splits for all Yahoo-based securities
+#[command]
+pub async fn detect_all_splits(
+    only_held: Option<bool>,
+) -> Result<Vec<SplitDetectionResult>, String> {
+    let securities = get_all_securities_for_sync(only_held.unwrap_or(true))
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+
+    for security in securities {
+        // Only process Yahoo-based securities
+        if !security.feed.to_uppercase().contains("YAHOO") {
+            continue;
+        }
+
+        match detect_security_splits(security.id).await {
+            Ok(result) => {
+                if result.splits_found > 0 {
+                    results.push(result);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to detect splits for {}: {}", security.name, e);
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// Get all recorded corporate actions for a security
+#[command]
+pub fn get_corporate_actions(
+    security_id: Option<i64>,
+) -> Result<Vec<CorporateActionRecord>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let sql = if security_id.is_some() {
+        "SELECT ca.id, ca.security_id, s.name, ca.action_type, ca.effective_date,
+                ca.ratio_from, ca.ratio_to, ca.old_identifier, ca.new_identifier,
+                ca.successor_security_id, ca.source, ca.confidence,
+                ca.is_applied, ca.is_confirmed, ca.note, ca.created_at
+         FROM pp_corporate_action ca
+         JOIN pp_security s ON s.id = ca.security_id
+         WHERE ca.security_id = ?1
+         ORDER BY ca.effective_date DESC"
+    } else {
+        "SELECT ca.id, ca.security_id, s.name, ca.action_type, ca.effective_date,
+                ca.ratio_from, ca.ratio_to, ca.old_identifier, ca.new_identifier,
+                ca.successor_security_id, ca.source, ca.confidence,
+                ca.is_applied, ca.is_confirmed, ca.note, ca.created_at
+         FROM pp_corporate_action ca
+         JOIN pp_security s ON s.id = ca.security_id
+         ORDER BY ca.effective_date DESC"
+    };
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+
+    let params: Vec<&dyn rusqlite::ToSql> = if let Some(id) = security_id.as_ref() {
+        vec![id as &dyn rusqlite::ToSql]
+    } else {
+        vec![]
+    };
+
+    let actions = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok(CorporateActionRecord {
+                id: row.get(0)?,
+                security_id: row.get(1)?,
+                security_name: row.get(2)?,
+                action_type: row.get(3)?,
+                effective_date: row.get(4)?,
+                ratio_from: row.get(5)?,
+                ratio_to: row.get(6)?,
+                old_identifier: row.get(7)?,
+                new_identifier: row.get(8)?,
+                successor_security_id: row.get(9)?,
+                source: row.get(10)?,
+                confidence: row.get(11)?,
+                is_applied: row.get(12)?,
+                is_confirmed: row.get(13)?,
+                note: row.get(14)?,
+                created_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(actions)
+}
+
+/// Corporate action record from database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorporateActionRecord {
+    pub id: i64,
+    pub security_id: i64,
+    pub security_name: String,
+    pub action_type: String,
+    pub effective_date: String,
+    pub ratio_from: Option<i32>,
+    pub ratio_to: Option<i32>,
+    pub old_identifier: Option<String>,
+    pub new_identifier: Option<String>,
+    pub successor_security_id: Option<i64>,
+    pub source: String,
+    pub confidence: Option<f64>,
+    pub is_applied: bool,
+    pub is_confirmed: bool,
+    pub note: Option<String>,
+    pub created_at: Option<String>,
+}
+
+// ============== Split Detection Helpers ==============
+
+fn is_split_already_recorded(security_id: i64, date: &str) -> Result<bool, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pp_corporate_action
+             WHERE security_id = ?1 AND effective_date = ?2
+             AND action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT')",
+            params![security_id, date],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(count > 0)
+}
+
+fn save_split_to_db(security_id: i64, split: &quotes::SplitEvent, source: &str) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let action_type = if split.is_forward_split() {
+        "STOCK_SPLIT"
+    } else {
+        "REVERSE_SPLIT"
+    };
+
+    conn.execute(
+        "INSERT INTO pp_corporate_action
+         (security_id, action_type, effective_date, ratio_from, ratio_to, source, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            security_id,
+            action_type,
+            split.date.to_string(),
+            split.numerator as i32,
+            split.denominator as i32,
+            source,
+            0.95  // High confidence for Yahoo data
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    log::info!(
+        "Saved {} {} for security {} on {}",
+        action_type, split.ratio_str(), security_id, split.date
+    );
+
+    Ok(())
+}
+
+// ============== Price Jump Heuristic ==============
+
+/// Known split ratios and their expected price change factors
+/// For a forward split n:1, price should drop to 1/n of original
+const SPLIT_RATIOS: [(i32, i32, f64, f64); 8] = [
+    // (numerator, denominator, min_factor, max_factor)
+    // Factor is new_price / old_price
+    (2, 1, 0.45, 0.55),   // 2:1 split → price ~50%
+    (3, 1, 0.30, 0.37),   // 3:1 split → price ~33%
+    (4, 1, 0.22, 0.28),   // 4:1 split → price ~25%
+    (5, 1, 0.17, 0.23),   // 5:1 split → price ~20%
+    (7, 1, 0.12, 0.17),   // 7:1 split → price ~14%
+    (10, 1, 0.08, 0.12),  // 10:1 split → price ~10%
+    (20, 1, 0.04, 0.06),  // 20:1 split → price ~5%
+    (50, 1, 0.015, 0.025),// 50:1 split → price ~2%
+];
+
+/// Result of a potential split detected by price heuristic
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeuristicSplitResult {
+    pub security_id: i64,
+    pub security_name: String,
+    pub date: String,
+    pub ratio: String,
+    pub numerator: i32,
+    pub denominator: i32,
+    pub price_before: f64,
+    pub price_after: f64,
+    pub price_change_factor: f64,
+    pub confidence: f64,
+    pub is_new: bool,
+}
+
+/// Result of heuristic split detection for all securities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeuristicDetectionResult {
+    pub securities_analyzed: usize,
+    pub potential_splits_found: usize,
+    pub new_splits_saved: usize,
+    pub splits: Vec<HeuristicSplitResult>,
+}
+
+/// Detect potential stock splits by analyzing price jumps in historical data
+#[command]
+pub fn detect_splits_by_price_heuristic(
+    security_id: Option<i64>,
+    min_confidence: Option<f64>,
+) -> Result<HeuristicDetectionResult, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let min_conf = min_confidence.unwrap_or(0.6);
+
+    // Get securities to analyze
+    let securities: Vec<(i64, String)> = if let Some(id) = security_id {
+        let name: String = conn
+            .query_row("SELECT name FROM pp_security WHERE id = ?1", params![id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        vec![(id, name)]
+    } else {
+        let mut stmt = conn
+            .prepare("SELECT id, name FROM pp_security WHERE is_retired = 0")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
+    };
+
+    let mut all_splits = Vec::new();
+    let mut new_count = 0;
+
+    for (sec_id, sec_name) in &securities {
+        // Get price history ordered by date
+        let mut stmt = conn
+            .prepare(
+                "SELECT date, value FROM pp_price
+                 WHERE security_id = ?1
+                 ORDER BY date ASC"
+            )
+            .map_err(|e| e.to_string())?;
+
+        let prices: Vec<(String, i64)> = stmt
+            .query_map(params![sec_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if prices.len() < 2 {
+            continue;
+        }
+
+        // Analyze consecutive prices for jumps
+        for window in prices.windows(2) {
+            let (_date_before, value_before) = &window[0];
+            let (date_after, value_after) = &window[1];
+
+            // Convert from scaled int (10^8) to f64
+            let price_before = *value_before as f64 / 100_000_000.0;
+            let price_after = *value_after as f64 / 100_000_000.0;
+
+            if price_before <= 0.0 {
+                continue;
+            }
+
+            let factor = price_after / price_before;
+
+            // Check if this matches a known split ratio
+            if let Some((num, denom, confidence)) = match_split_ratio(factor, min_conf) {
+                // Check if already recorded
+                if is_split_already_recorded(*sec_id, date_after)? {
+                    continue;
+                }
+
+                // Also check pp_security_event for PP-imported splits
+                let pp_event_exists: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM pp_security_event
+                         WHERE security_id = ?1 AND date = ?2 AND event_type = 'STOCK_SPLIT'",
+                        params![sec_id, date_after],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+
+                if pp_event_exists > 0 {
+                    continue;
+                }
+
+                // Save to database with lower confidence (heuristic detection)
+                save_heuristic_split_to_db(*sec_id, date_after, num, denom, confidence, price_before, price_after)?;
+                new_count += 1;
+
+                all_splits.push(HeuristicSplitResult {
+                    security_id: *sec_id,
+                    security_name: sec_name.clone(),
+                    date: date_after.clone(),
+                    ratio: format!("{}:{}", num, denom),
+                    numerator: num,
+                    denominator: denom,
+                    price_before,
+                    price_after,
+                    price_change_factor: factor,
+                    confidence,
+                    is_new: true,
+                });
+
+                log::info!(
+                    "Heuristic: Detected potential {}:{} split for {} on {} (price {} → {}, factor {:.3})",
+                    num, denom, sec_name, date_after, price_before, price_after, factor
+                );
+            }
+        }
+    }
+
+    Ok(HeuristicDetectionResult {
+        securities_analyzed: securities.len(),
+        potential_splits_found: all_splits.len(),
+        new_splits_saved: new_count,
+        splits: all_splits,
+    })
+}
+
+/// Match a price change factor to a known split ratio
+fn match_split_ratio(factor: f64, min_confidence: f64) -> Option<(i32, i32, f64)> {
+    for (num, denom, min_factor, max_factor) in SPLIT_RATIOS.iter() {
+        if factor >= *min_factor && factor <= *max_factor {
+            // Calculate confidence based on how close to ideal ratio
+            let ideal_factor = *denom as f64 / *num as f64;
+            let deviation = (factor - ideal_factor).abs() / ideal_factor;
+            let confidence = (1.0 - deviation * 2.0).max(0.5).min(0.85);
+
+            if confidence >= min_confidence {
+                return Some((*num, *denom, confidence));
+            }
+        }
+    }
+    None
+}
+
+/// Save a heuristically detected split to database
+fn save_heuristic_split_to_db(
+    security_id: i64,
+    date: &str,
+    numerator: i32,
+    denominator: i32,
+    confidence: f64,
+    price_before: f64,
+    price_after: f64,
+) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let note = format!(
+        "Heuristically detected: price {:.2} → {:.2} (factor {:.3})",
+        price_before, price_after, price_after / price_before
+    );
+
+    conn.execute(
+        "INSERT INTO pp_corporate_action
+         (security_id, action_type, effective_date, ratio_from, ratio_to, source, confidence, note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            security_id,
+            "STOCK_SPLIT",
+            date,
+            numerator,
+            denominator,
+            "DETECTED",
+            confidence,
+            note,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_match_split_ratio_4_to_1() {
+        // Apple 4:1 split: price drops to ~25%
+        let result = match_split_ratio(0.25, 0.5);
+        assert!(result.is_some());
+        let (num, denom, _conf) = result.unwrap();
+        assert_eq!(num, 4);
+        assert_eq!(denom, 1);
+    }
+
+    #[test]
+    fn test_match_split_ratio_5_to_1() {
+        // Tesla 5:1 split: price drops to ~20%
+        let result = match_split_ratio(0.20, 0.5);
+        assert!(result.is_some());
+        let (num, denom, _conf) = result.unwrap();
+        assert_eq!(num, 5);
+        assert_eq!(denom, 1);
+    }
+
+    #[test]
+    fn test_match_split_ratio_10_to_1() {
+        // Nvidia 10:1 split: price drops to ~10%
+        let result = match_split_ratio(0.10, 0.5);
+        assert!(result.is_some());
+        let (num, denom, _conf) = result.unwrap();
+        assert_eq!(num, 10);
+        assert_eq!(denom, 1);
+    }
+
+    #[test]
+    fn test_match_split_ratio_20_to_1() {
+        // Amazon 20:1 split: price drops to ~5%
+        let result = match_split_ratio(0.05, 0.5);
+        assert!(result.is_some());
+        let (num, denom, _conf) = result.unwrap();
+        assert_eq!(num, 20);
+        assert_eq!(denom, 1);
+    }
+
+    #[test]
+    fn test_no_match_for_normal_price_change() {
+        // Normal 15% drop is not a split
+        let result = match_split_ratio(0.85, 0.5);
+        assert!(result.is_none());
+
+        // Normal 30% drop could be market crash, not 3:1 split (outside range)
+        let result = match_split_ratio(0.70, 0.5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_confidence_calculation() {
+        // Exact 4:1 ratio (0.25) should have high confidence
+        let result = match_split_ratio(0.25, 0.5);
+        let (_, _, conf) = result.unwrap();
+        assert!(conf > 0.7);
+
+        // Slightly off (0.24) should still match but confidence is capped at 0.85
+        let result = match_split_ratio(0.24, 0.5);
+        let (_, _, conf) = result.unwrap();
+        assert!(conf >= 0.5);
+        assert!(conf <= 0.85);
+    }
+}

@@ -3,9 +3,11 @@
  */
 
 import { useState, useEffect } from 'react';
-import { FolderTree, Plus, ChevronRight, ChevronDown, Palette, Edit2 } from 'lucide-react';
-import { getTaxonomies, getClassificationTree, createStandardTaxonomies } from '../../lib/api';
+import { FolderTree, Plus, ChevronRight, ChevronDown, Edit2, Trash2, RefreshCw } from 'lucide-react';
+import { getTaxonomies, getClassificationTree, createStandardTaxonomies, deleteTaxonomy, deleteClassification } from '../../lib/api';
 import type { TaxonomyData, ClassificationData } from '../../lib/types';
+import { TaxonomyFormModal } from '../../components/modals';
+import { toast } from '../../store';
 
 export function TaxonomiesView() {
   const [taxonomies, setTaxonomies] = useState<TaxonomyData[]>([]);
@@ -14,6 +16,13 @@ export function TaxonomiesView() {
   const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Modal state
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<'taxonomy' | 'classification'>('taxonomy');
+  const [editingTaxonomy, setEditingTaxonomy] = useState<TaxonomyData | undefined>(undefined);
+  const [editingClassification, setEditingClassification] = useState<ClassificationData | undefined>(undefined);
+  const [parentClassificationId, setParentClassificationId] = useState<number | undefined>(undefined);
 
   const loadTaxonomies = async () => {
     try {
@@ -73,6 +82,91 @@ export function TaxonomiesView() {
     });
   };
 
+  // Modal handlers
+  const handleCreateTaxonomy = () => {
+    setModalMode('taxonomy');
+    setEditingTaxonomy(undefined);
+    setEditingClassification(undefined);
+    setParentClassificationId(undefined);
+    setIsModalOpen(true);
+  };
+
+  const handleEditTaxonomy = (taxonomy: TaxonomyData) => {
+    setModalMode('taxonomy');
+    setEditingTaxonomy(taxonomy);
+    setEditingClassification(undefined);
+    setParentClassificationId(undefined);
+    setIsModalOpen(true);
+  };
+
+  const handleCreateClassification = (parentId?: number) => {
+    if (!selectedTaxonomy) return;
+    setModalMode('classification');
+    setEditingTaxonomy(undefined);
+    setEditingClassification(undefined);
+    setParentClassificationId(parentId);
+    setIsModalOpen(true);
+  };
+
+  const handleEditClassification = (classification: ClassificationData, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setModalMode('classification');
+    setEditingTaxonomy(undefined);
+    setEditingClassification(classification);
+    setParentClassificationId(classification.parentId);
+    setIsModalOpen(true);
+  };
+
+  const handleDeleteTaxonomy = async (taxonomy: TaxonomyData, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Taxonomie "${taxonomy.name}" wirklich löschen?`)) return;
+    try {
+      await deleteTaxonomy(taxonomy.id);
+      toast.success('Taxonomie gelöscht');
+      if (selectedTaxonomy === taxonomy.id) {
+        setSelectedTaxonomy(null);
+        setClassificationTree([]);
+      }
+      await loadTaxonomies();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteClassification = async (classification: ClassificationData, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Klassifikation "${classification.name}" wirklich löschen?`)) return;
+    try {
+      await deleteClassification(classification.id);
+      toast.success('Klassifikation gelöscht');
+      if (selectedTaxonomy) {
+        await loadClassifications(selectedTaxonomy);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleModalClose = () => {
+    setIsModalOpen(false);
+    setEditingTaxonomy(undefined);
+    setEditingClassification(undefined);
+    setParentClassificationId(undefined);
+  };
+
+  const handleModalSuccess = async () => {
+    handleModalClose();
+    await loadTaxonomies();
+    if (selectedTaxonomy) {
+      await loadClassifications(selectedTaxonomy);
+    }
+    toast.success(
+      editingTaxonomy || editingClassification
+        ? 'Erfolgreich aktualisiert'
+        : 'Erfolgreich erstellt'
+    );
+  };
+
   const renderClassificationNode = (node: ClassificationData, depth: number = 0) => {
     const hasChildren = node.children && node.children.length > 0;
     const isExpanded = expandedNodes.has(node.id);
@@ -81,7 +175,7 @@ export function TaxonomiesView() {
     return (
       <div key={node.id}>
         <div
-          className={`flex items-center gap-2 py-2 px-3 hover:bg-muted/50 rounded-md cursor-pointer`}
+          className={`group flex items-center gap-2 py-2 px-3 hover:bg-muted/50 rounded-md cursor-pointer`}
           style={{ paddingLeft: `${depth * 20 + 12}px` }}
           onClick={() => hasChildren && toggleNode(node.id)}
         >
@@ -115,6 +209,33 @@ export function TaxonomiesView() {
               {node.assignmentsCount}
             </span>
           )}
+
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCreateClassification(node.id);
+              }}
+              className="p-1 hover:bg-background rounded-md"
+              title="Unterklassifikation hinzufügen"
+            >
+              <Plus size={14} className="text-muted-foreground" />
+            </button>
+            <button
+              onClick={(e) => handleEditClassification(node, e)}
+              className="p-1 hover:bg-background rounded-md"
+              title="Bearbeiten"
+            >
+              <Edit2 size={14} className="text-muted-foreground" />
+            </button>
+            <button
+              onClick={(e) => handleDeleteClassification(node, e)}
+              className="p-1 hover:bg-destructive/10 rounded-md"
+              title="Löschen"
+            >
+              <Trash2 size={14} className="text-destructive" />
+            </button>
+          </div>
         </div>
 
         {hasChildren && isExpanded && (
@@ -134,16 +255,34 @@ export function TaxonomiesView() {
           <FolderTree className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold">Klassifizierung</h1>
         </div>
-        {taxonomies.length === 0 && (
+        <div className="flex gap-2">
           <button
-            onClick={handleCreateStandardTaxonomies}
+            onClick={loadTaxonomies}
             disabled={isLoading}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors"
           >
-            <Plus size={16} />
-            Standard-Taxonomien erstellen
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            Aktualisieren
           </button>
-        )}
+          {taxonomies.length === 0 ? (
+            <button
+              onClick={handleCreateStandardTaxonomies}
+              disabled={isLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+            >
+              <Plus size={16} />
+              Standard-Taxonomien erstellen
+            </button>
+          ) : (
+            <button
+              onClick={handleCreateTaxonomy}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+            >
+              <Plus size={16} />
+              Neue Taxonomie
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -170,14 +309,43 @@ export function TaxonomiesView() {
               {taxonomies.map((taxonomy) => (
                 <div
                   key={taxonomy.id}
-                  className={`p-3 rounded-md cursor-pointer transition-colors ${
+                  className={`group p-3 rounded-md cursor-pointer transition-colors ${
                     selectedTaxonomy === taxonomy.id
                       ? 'bg-primary text-primary-foreground'
                       : 'hover:bg-muted'
                   }`}
                   onClick={() => setSelectedTaxonomy(taxonomy.id)}
                 >
-                  <div className="font-medium text-sm">{taxonomy.name}</div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-sm">{taxonomy.name}</div>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditTaxonomy(taxonomy);
+                        }}
+                        className={`p-1 rounded-md ${
+                          selectedTaxonomy === taxonomy.id
+                            ? 'hover:bg-primary-foreground/10'
+                            : 'hover:bg-muted'
+                        }`}
+                        title="Bearbeiten"
+                      >
+                        <Edit2 size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteTaxonomy(taxonomy, e)}
+                        className={`p-1 rounded-md ${
+                          selectedTaxonomy === taxonomy.id
+                            ? 'hover:bg-primary-foreground/10'
+                            : 'hover:bg-destructive/10'
+                        }`}
+                        title="Löschen"
+                      >
+                        <Trash2 size={12} className={selectedTaxonomy === taxonomy.id ? '' : 'text-destructive'} />
+                      </button>
+                    </div>
+                  </div>
                   <div className={`text-xs ${selectedTaxonomy === taxonomy.id ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
                     {taxonomy.classificationsCount} Klassifikationen
                     {taxonomy.source && ` · ${taxonomy.source}`}
@@ -207,11 +375,12 @@ export function TaxonomiesView() {
                       {taxonomies.find(t => t.id === selectedTaxonomy)?.name}
                     </h3>
                     <div className="flex gap-2">
-                      <button className="p-1.5 hover:bg-muted rounded-md" title="Bearbeiten">
-                        <Edit2 size={16} className="text-muted-foreground" />
-                      </button>
-                      <button className="p-1.5 hover:bg-muted rounded-md" title="Farben">
-                        <Palette size={16} className="text-muted-foreground" />
+                      <button
+                        onClick={() => handleCreateClassification()}
+                        className="flex items-center gap-1 px-2 py-1 text-sm hover:bg-muted rounded-md transition-colors"
+                      >
+                        <Plus size={14} />
+                        Klassifikation
                       </button>
                     </div>
                   </div>
@@ -223,6 +392,13 @@ export function TaxonomiesView() {
                 <div className="p-8 text-center text-muted-foreground">
                   <FolderTree className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>Diese Taxonomie hat noch keine Klassifikationen.</p>
+                  <button
+                    onClick={() => handleCreateClassification()}
+                    className="mt-4 flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors mx-auto"
+                  >
+                    <Plus size={16} />
+                    Klassifikation erstellen
+                  </button>
                 </div>
               )
             ) : (
@@ -234,6 +410,18 @@ export function TaxonomiesView() {
           </div>
         </div>
       </div>
+
+      {/* Taxonomy/Classification Form Modal */}
+      <TaxonomyFormModal
+        isOpen={isModalOpen}
+        onClose={handleModalClose}
+        onSuccess={handleModalSuccess}
+        mode={modalMode}
+        taxonomy={editingTaxonomy}
+        classification={editingClassification}
+        taxonomyId={selectedTaxonomy || undefined}
+        parentId={parentClassificationId}
+      />
     </div>
   );
 }

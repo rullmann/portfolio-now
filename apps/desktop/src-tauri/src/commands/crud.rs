@@ -1158,6 +1158,172 @@ pub fn delete_transaction(id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Update transaction request
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTransactionRequest {
+    pub date: Option<String>,
+    pub amount: Option<i64>,         // cents
+    pub shares: Option<i64>,         // scaled by 10^8
+    pub note: Option<String>,
+    pub fee_amount: Option<i64>,     // cents
+    pub tax_amount: Option<i64>,     // cents
+}
+
+/// Update an existing transaction
+/// Only updates date, amount, shares, note, and units (fees/taxes)
+/// Does not allow changing owner, type, or security (delete and recreate instead)
+#[command]
+pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Verify transaction exists and get info for FIFO rebuild
+    let txn_info: Option<(String, i64, Option<i64>, Option<i64>)> = conn
+        .query_row(
+            "SELECT owner_type, owner_id, security_id, cross_entry_id FROM pp_txn WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .ok();
+
+    let (owner_type, _owner_id, security_id, cross_entry_id) =
+        txn_info.ok_or_else(|| format!("Transaction with id {} not found", id))?;
+
+    // Build update query dynamically
+    let mut updates = Vec::new();
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(date) = &data.date {
+        updates.push("date = ?");
+        params_vec.push(Box::new(date.clone()));
+    }
+    if let Some(amount) = data.amount {
+        updates.push("amount = ?");
+        params_vec.push(Box::new(amount));
+    }
+    if let Some(shares) = data.shares {
+        updates.push("shares = ?");
+        params_vec.push(Box::new(shares));
+    }
+    if data.note.is_some() {
+        updates.push("note = ?");
+        params_vec.push(Box::new(data.note.clone()));
+    }
+
+    // Always update updated_at
+    updates.push("updated_at = datetime('now')");
+
+    if !updates.is_empty() {
+        let sql = format!(
+            "UPDATE pp_txn SET {} WHERE id = ?",
+            updates.join(", ")
+        );
+        params_vec.push(Box::new(id));
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        conn.execute(&sql, params_refs.as_slice())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Update fees and taxes in transaction units
+    // First, delete existing FEE and TAX units
+    conn.execute(
+        "DELETE FROM pp_txn_unit WHERE txn_id = ?1 AND unit_type IN ('FEE', 'TAX')",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Get currency from transaction
+    let currency: String = conn
+        .query_row(
+            "SELECT currency FROM pp_txn WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Add new FEE unit if specified
+    if let Some(fee) = data.fee_amount {
+        if fee > 0 {
+            conn.execute(
+                "INSERT INTO pp_txn_unit (txn_id, unit_type, amount, currency) VALUES (?1, 'FEE', ?2, ?3)",
+                params![id, fee, currency],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Add new TAX unit if specified
+    if let Some(tax) = data.tax_amount {
+        if tax > 0 {
+            conn.execute(
+                "INSERT INTO pp_txn_unit (txn_id, unit_type, amount, currency) VALUES (?1, 'TAX', ?2, ?3)",
+                params![id, tax, currency],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // If this is a BUY/SELL with cross-entry, update the linked account transaction too
+    if let Some(ce_id) = cross_entry_id {
+        let other_txn_id: Option<i64> = conn
+            .query_row(
+                r#"
+                SELECT CASE
+                    WHEN portfolio_txn_id = ?1 THEN account_txn_id
+                    WHEN account_txn_id = ?1 THEN portfolio_txn_id
+                    ELSE NULL
+                END
+                FROM pp_cross_entry WHERE id = ?2
+                "#,
+                params![id, ce_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(other_id) = other_txn_id {
+            // Update the linked transaction with same date and amount
+            let mut other_updates = Vec::new();
+            let mut other_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+            if let Some(date) = &data.date {
+                other_updates.push("date = ?");
+                other_params.push(Box::new(date.clone()));
+            }
+            if let Some(amount) = data.amount {
+                other_updates.push("amount = ?");
+                other_params.push(Box::new(amount));
+            }
+            other_updates.push("updated_at = datetime('now')");
+
+            if !other_updates.is_empty() {
+                let sql = format!(
+                    "UPDATE pp_txn SET {} WHERE id = ?",
+                    other_updates.join(", ")
+                );
+                other_params.push(Box::new(other_id));
+
+                let params_refs: Vec<&dyn rusqlite::ToSql> = other_params.iter().map(|b| b.as_ref()).collect();
+                conn.execute(&sql, params_refs.as_slice())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // Rebuild FIFO lots if this was a portfolio transaction with a security
+    if owner_type == "portfolio" && security_id.is_some() {
+        let sec_id = security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
+            log::warn!("Failed to rebuild FIFO lots after update: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
 /// Get a single transaction by ID
 #[command]
 pub fn get_transaction(id: i64) -> Result<TransactionResult, String> {

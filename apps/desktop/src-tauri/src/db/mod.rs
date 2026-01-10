@@ -410,6 +410,38 @@ pub fn init_database(path: &Path) -> Result<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        -- Corporate Actions (stock splits, mergers, ISIN changes)
+        -- Used for automatic detection and tracking of corporate events
+        CREATE TABLE IF NOT EXISTS pp_corporate_action (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            security_id INTEGER NOT NULL,
+            action_type TEXT NOT NULL CHECK(action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT', 'ISIN_CHANGE', 'MERGER', 'SPINOFF', 'SYMBOL_CHANGE')),
+            effective_date TEXT NOT NULL,
+            -- For splits: ratio numerator (e.g., 4 for 4:1 split)
+            ratio_from INTEGER,
+            -- For splits: ratio denominator (e.g., 1 for 4:1 split)
+            ratio_to INTEGER,
+            -- For ISIN/symbol changes
+            old_identifier TEXT,
+            new_identifier TEXT,
+            -- For mergers/spinoffs: successor security
+            successor_security_id INTEGER,
+            -- Data source and confidence
+            source TEXT NOT NULL CHECK(source IN ('YAHOO', 'PP_IMPORT', 'DETECTED', 'USER')),
+            confidence REAL DEFAULT 1.0,
+            -- Tracking
+            is_applied INTEGER NOT NULL DEFAULT 0,
+            is_confirmed INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE,
+            FOREIGN KEY (successor_security_id) REFERENCES pp_security(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pp_corporate_action_security ON pp_corporate_action(security_id);
+        CREATE INDEX IF NOT EXISTS idx_pp_corporate_action_date ON pp_corporate_action(effective_date);
+        CREATE INDEX IF NOT EXISTS idx_pp_corporate_action_applied ON pp_corporate_action(is_applied);
         "#,
     )?;
 
@@ -438,6 +470,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             }
         }
         false
+    }
+
+    // Helper to check if a table exists
+    fn table_exists(conn: &Connection, table: &str) -> bool {
+        conn.query_row(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |_| Ok(()),
+        )
+        .is_ok()
     }
 
     // Migration: Add is_retired column to pp_portfolio if missing
@@ -489,6 +531,184 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if !column_exists(conn, "pp_security", "custom_logo") {
         conn.execute("ALTER TABLE pp_security ADD COLUMN custom_logo TEXT", [])?;
         log::info!("Migration: Added custom_logo column to pp_security");
+    }
+
+    // Migration: Create pp_corporate_action table if missing
+    if !table_exists(conn, "pp_corporate_action") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_corporate_action (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                security_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL CHECK(action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT', 'ISIN_CHANGE', 'MERGER', 'SPINOFF', 'SYMBOL_CHANGE')),
+                effective_date TEXT NOT NULL,
+                ratio_from INTEGER,
+                ratio_to INTEGER,
+                old_identifier TEXT,
+                new_identifier TEXT,
+                successor_security_id INTEGER,
+                source TEXT NOT NULL CHECK(source IN ('YAHOO', 'PP_IMPORT', 'DETECTED', 'USER')),
+                confidence REAL DEFAULT 1.0,
+                is_applied INTEGER NOT NULL DEFAULT 0,
+                is_confirmed INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE,
+                FOREIGN KEY (successor_security_id) REFERENCES pp_security(id) ON DELETE SET NULL
+            );
+            CREATE INDEX idx_pp_corporate_action_security ON pp_corporate_action(security_id);
+            CREATE INDEX idx_pp_corporate_action_date ON pp_corporate_action(effective_date);
+            CREATE INDEX idx_pp_corporate_action_applied ON pp_corporate_action(is_applied);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_corporate_action table");
+    }
+
+    // Migration: Add attributes column to pp_security (stores JSON)
+    if !column_exists(conn, "pp_security", "attributes") {
+        conn.execute("ALTER TABLE pp_security ADD COLUMN attributes TEXT", [])?;
+        log::info!("Migration: Added attributes column to pp_security");
+    }
+
+    // Migration: Add attributes column to pp_account (stores JSON)
+    if !column_exists(conn, "pp_account", "attributes") {
+        conn.execute("ALTER TABLE pp_account ADD COLUMN attributes TEXT", [])?;
+        log::info!("Migration: Added attributes column to pp_account");
+    }
+
+    // Migration: Add attributes column to pp_portfolio (stores JSON)
+    if !column_exists(conn, "pp_portfolio", "attributes") {
+        conn.execute("ALTER TABLE pp_portfolio ADD COLUMN attributes TEXT", [])?;
+        log::info!("Migration: Added attributes column to pp_portfolio");
+    }
+
+    // Migration: Add other_account_id and other_portfolio_id to pp_txn for transfer tracking
+    if !column_exists(conn, "pp_txn", "other_account_id") {
+        conn.execute("ALTER TABLE pp_txn ADD COLUMN other_account_id INTEGER", [])?;
+        log::info!("Migration: Added other_account_id column to pp_txn");
+    }
+
+    if !column_exists(conn, "pp_txn", "other_portfolio_id") {
+        conn.execute("ALTER TABLE pp_txn ADD COLUMN other_portfolio_id INTEGER", [])?;
+        log::info!("Migration: Added other_portfolio_id column to pp_txn");
+    }
+
+    // Migration: Create pp_client_properties table for client-level key-value settings
+    if !table_exists(conn, "pp_client_properties") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_client_properties (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_id INTEGER,
+                key TEXT NOT NULL,
+                value TEXT,
+                UNIQUE(import_id, key),
+                FOREIGN KEY (import_id) REFERENCES pp_import(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_client_properties_import ON pp_client_properties(import_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_client_properties table");
+    }
+
+    // Migration: Create pp_dashboard table for dashboard configurations
+    if !table_exists(conn, "pp_dashboard") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_dashboard (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_id INTEGER,
+                dashboard_id TEXT,
+                name TEXT NOT NULL,
+                columns_json TEXT,
+                configuration_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (import_id) REFERENCES pp_import(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_dashboard_import ON pp_dashboard(import_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_dashboard table");
+    }
+
+    // Migration: Create pp_settings table for client settings
+    if !table_exists(conn, "pp_settings") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_id INTEGER,
+                settings_json TEXT,
+                UNIQUE(import_id),
+                FOREIGN KEY (import_id) REFERENCES pp_import(id) ON DELETE CASCADE
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_settings table");
+    }
+
+    // Migration: Add PP-specific fields to pp_investment_plan if table exists
+    if table_exists(conn, "pp_investment_plan") {
+        // Add fees column
+        if !column_exists(conn, "pp_investment_plan", "fees") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN fees INTEGER NOT NULL DEFAULT 0", [])?;
+            log::info!("Migration: Added fees column to pp_investment_plan");
+        }
+        // Add taxes column
+        if !column_exists(conn, "pp_investment_plan", "taxes") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN taxes INTEGER NOT NULL DEFAULT 0", [])?;
+            log::info!("Migration: Added taxes column to pp_investment_plan");
+        }
+        // Add plan_type column (PURCHASE_OR_DELIVERY=0, DEPOSIT=1, REMOVAL=2, INTEREST=3)
+        if !column_exists(conn, "pp_investment_plan", "plan_type") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN plan_type INTEGER NOT NULL DEFAULT 0", [])?;
+            log::info!("Migration: Added plan_type column to pp_investment_plan");
+        }
+        // Add auto_generate column
+        if !column_exists(conn, "pp_investment_plan", "auto_generate") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN auto_generate INTEGER NOT NULL DEFAULT 0", [])?;
+            log::info!("Migration: Added auto_generate column to pp_investment_plan");
+        }
+        // Add attributes column (JSON)
+        if !column_exists(conn, "pp_investment_plan", "attributes") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN attributes TEXT", [])?;
+            log::info!("Migration: Added attributes column to pp_investment_plan");
+        }
+        // Add note column
+        if !column_exists(conn, "pp_investment_plan", "note") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN note TEXT", [])?;
+            log::info!("Migration: Added note column to pp_investment_plan");
+        }
+        // Add uuid column for PP import tracking
+        if !column_exists(conn, "pp_investment_plan", "uuid") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN uuid TEXT", [])?;
+            log::info!("Migration: Added uuid column to pp_investment_plan");
+        }
+        // Add transactions column (JSON array of generated transaction UUIDs)
+        if !column_exists(conn, "pp_investment_plan", "transactions") {
+            conn.execute("ALTER TABLE pp_investment_plan ADD COLUMN transactions TEXT", [])?;
+            log::info!("Migration: Added transactions column to pp_investment_plan");
+        }
+    }
+
+    // Migration: Add target_currency and properties to pp_security
+    if table_exists(conn, "pp_security") {
+        if !column_exists(conn, "pp_security", "target_currency") {
+            conn.execute("ALTER TABLE pp_security ADD COLUMN target_currency TEXT", [])?;
+            log::info!("Migration: Added target_currency column to pp_security");
+        }
+        if !column_exists(conn, "pp_security", "properties") {
+            conn.execute("ALTER TABLE pp_security ADD COLUMN properties TEXT", [])?;
+            log::info!("Migration: Added properties column to pp_security");
+        }
+    }
+
+    // Migration: Add other_updated_at to pp_txn
+    if table_exists(conn, "pp_txn") {
+        if !column_exists(conn, "pp_txn", "other_updated_at") {
+            conn.execute("ALTER TABLE pp_txn ADD COLUMN other_updated_at TEXT", [])?;
+            log::info!("Migration: Added other_updated_at column to pp_txn");
+        }
     }
 
     Ok(())

@@ -3,9 +3,106 @@
  */
 
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X, ChevronRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import type { AccountData, CreateAccountRequest, UpdateAccountRequest } from '../../lib/types';
 import { createAccount, updateAccount } from '../../lib/api';
+
+// Key-Value entry for attributes
+interface KeyValueEntry {
+  key: string;
+  value: string;
+}
+
+// Helper functions for converting between Record and array of entries
+function recordToEntries(record: Record<string, string> | undefined): KeyValueEntry[] {
+  if (!record) return [];
+  return Object.entries(record).map(([key, value]) => ({ key, value }));
+}
+
+function entriesToRecord(entries: KeyValueEntry[]): Record<string, string> | undefined {
+  const filtered = entries.filter((e) => e.key.trim() !== '');
+  if (filtered.length === 0) return undefined;
+  return Object.fromEntries(filtered.map((e) => [e.key, e.value]));
+}
+
+// Collapsible Key-Value Editor component
+function KeyValueEditor({
+  title,
+  entries,
+  onChange,
+  expanded,
+  onToggleExpand,
+}: {
+  title: string;
+  entries: KeyValueEntry[];
+  onChange: (entries: KeyValueEntry[]) => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const addEntry = () => {
+    onChange([...entries, { key: '', value: '' }]);
+  };
+
+  const removeEntry = (index: number) => {
+    onChange(entries.filter((_, i) => i !== index));
+  };
+
+  const updateEntry = (index: number, field: 'key' | 'value', value: string) => {
+    const newEntries = [...entries];
+    newEntries[index] = { ...newEntries[index], [field]: value };
+    onChange(newEntries);
+  };
+
+  return (
+    <div className="border border-border rounded-md">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className="w-full flex items-center gap-2 p-3 text-sm font-medium hover:bg-muted/50 transition-colors"
+      >
+        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        {title} ({entries.length})
+      </button>
+      {expanded && (
+        <div className="p-3 pt-0 space-y-2">
+          {entries.map((entry, index) => (
+            <div key={index} className="flex gap-2">
+              <input
+                type="text"
+                value={entry.key}
+                onChange={(e) => updateEntry(index, 'key', e.target.value)}
+                placeholder="Schlüssel"
+                className="flex-1 px-2 py-1 text-sm border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <input
+                type="text"
+                value={entry.value}
+                onChange={(e) => updateEntry(index, 'value', e.target.value)}
+                placeholder="Wert"
+                className="flex-1 px-2 py-1 text-sm border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <button
+                type="button"
+                onClick={() => removeEntry(index)}
+                className="p-1 text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addEntry}
+            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors"
+          >
+            <Plus size={14} />
+            Attribut hinzufügen
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface AccountFormModalProps {
   isOpen: boolean;
@@ -23,8 +120,11 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
     name: '',
     currency: 'EUR',
     note: '',
+    isRetired: false,
   });
 
+  const [attributes, setAttributes] = useState<KeyValueEntry[]>([]);
+  const [attributesExpanded, setAttributesExpanded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,15 +135,20 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
         setFormData({
           name: account.name || '',
           currency: account.currency || 'EUR',
-          note: '',
+          note: account.note || '',
+          isRetired: account.isRetired || false,
         });
+        setAttributes(recordToEntries(account.attributes));
       } else {
         setFormData({
           name: '',
           currency: 'EUR',
           note: '',
+          isRetired: false,
         });
+        setAttributes([]);
       }
+      setAttributesExpanded(false);
       setError(null);
     }
   }, [isOpen, account]);
@@ -64,6 +169,8 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
           name: formData.name || undefined,
           currency: formData.currency || undefined,
           note: formData.note || undefined,
+          isRetired: formData.isRetired,
+          attributes: entriesToRecord(attributes),
         };
         await updateAccount(account.id, updateData);
       } else {
@@ -71,6 +178,7 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
           name: formData.name,
           currency: formData.currency,
           note: formData.note || undefined,
+          attributes: entriesToRecord(attributes),
         };
         await createAccount(createData);
       }
@@ -161,6 +269,31 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
               placeholder="Optionale Notizen..."
             />
           </div>
+
+          {/* Is Retired (only in edit mode) */}
+          {isEditMode && (
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="isRetired"
+                checked={formData.isRetired}
+                onChange={(e) => setFormData((prev) => ({ ...prev, isRetired: e.target.checked }))}
+                className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+              />
+              <label htmlFor="isRetired" className="text-sm font-medium">
+                Inaktiv (Retired)
+              </label>
+            </div>
+          )}
+
+          {/* Attributes */}
+          <KeyValueEditor
+            title="Attribute"
+            entries={attributes}
+            onChange={setAttributes}
+            expanded={attributesExpanded}
+            onToggleExpand={() => setAttributesExpanded(!attributesExpanded)}
+          />
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4 border-t border-border">

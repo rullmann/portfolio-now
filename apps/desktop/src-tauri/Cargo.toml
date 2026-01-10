@@ -104,6 +104,10 @@ path = "src/bin/check_retired.rs"
 name = "rebuild_fifo"
 path = "src/bin/rebuild_fifo.rs"
 
+[[bin]]
+name = "pdf_extractor"
+path = "src/bin/pdf_extractor.rs"
+
 [profile.dev]
 incremental = true
 
@@ -111,5 +115,5 @@ incremental = true
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+panic = "unwind"
 strip = true

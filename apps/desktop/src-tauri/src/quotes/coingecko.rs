@@ -345,7 +345,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires network
     async fn test_fetch_bitcoin_price() {
-        let result = fetch_quote("bitcoin", "EUR").await;
+        let result = fetch_quote("bitcoin", "EUR", None).await;
         assert!(result.is_ok());
         let quote = result.unwrap();
         assert!(quote.quote.close > 0.0);

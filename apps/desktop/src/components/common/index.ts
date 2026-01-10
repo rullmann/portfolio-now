@@ -12,3 +12,4 @@ export {
   DashboardSkeleton,
 } from './Skeleton';
 export { DropdownMenu, DropdownItem, DropdownDivider } from './DropdownMenu';
+export { ErrorBoundary } from './ErrorBoundary';

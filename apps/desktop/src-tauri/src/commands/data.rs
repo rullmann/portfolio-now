@@ -589,41 +589,107 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
     let today = Utc::now().date_naive();
 
     // STEP 1: Calculate holdings using transaction sums (PP PortfolioSnapshot logic)
+    // CRITICAL FIX: Calculate value PER security_id first, convert to base currency,
+    // then aggregate by ISIN. This ensures correct values when multiple securities
+    // share the same ISIN but have different prices or currencies.
     // shares = SUM(BUY/TRANSFER_IN/DELIVERY_INBOUND) - SUM(SELL/TRANSFER_OUT/DELIVERY_OUTBOUND)
-    let holdings_sql = "
-        WITH portfolio_holdings AS (
-            SELECT
-                COALESCE(s.isin, s.uuid) as identifier,
-                MAX(s.id) as security_id,
-                MAX(s.name) as name,
-                MAX(s.currency) as currency,
-                MAX(s.custom_logo) as custom_logo,
-                SUM(CASE
-                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
-                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
-                    ELSE 0
-                END) as net_shares
-            FROM pp_txn t
-            JOIN pp_portfolio p ON p.id = t.owner_id AND t.owner_type = 'portfolio'
-            JOIN pp_security s ON s.id = t.security_id
-            WHERE t.shares IS NOT NULL
-            GROUP BY COALESCE(s.isin, s.uuid)
-            HAVING net_shares > 0
-        )
+    let security_holdings_sql = "
         SELECT
-            ph.identifier,
-            ph.name,
-            ph.currency,
-            ph.security_id,
-            ph.net_shares,
-            lp.value as latest_price,
-            ph.custom_logo
-        FROM portfolio_holdings ph
-        LEFT JOIN pp_latest_price lp ON lp.security_id = ph.security_id
-        ORDER BY ph.net_shares * COALESCE(lp.value, 0) DESC
+            s.id as security_id,
+            COALESCE(s.isin, s.uuid) as identifier,
+            s.name,
+            s.currency,
+            s.custom_logo,
+            SUM(CASE
+                WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                ELSE 0
+            END) as net_shares,
+            lp.value as latest_price
+        FROM pp_txn t
+        JOIN pp_portfolio p ON p.id = t.owner_id AND t.owner_type = 'portfolio'
+        JOIN pp_security s ON s.id = t.security_id
+        LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+        WHERE t.shares IS NOT NULL
+        GROUP BY s.id
+        HAVING net_shares > 0
+        ORDER BY net_shares * COALESCE(lp.value, 0) DESC
     ";
 
-    let mut holdings_stmt = conn.prepare(holdings_sql).map_err(|e| e.to_string())?;
+    // Structure to hold security-level data before ISIN aggregation
+    struct SecurityHolding {
+        security_id: i64,
+        identifier: String,
+        name: String,
+        currency: String,
+        custom_logo: Option<String>,
+        shares: f64,
+        price: Option<f64>,
+        value_in_base: Option<f64>,
+    }
+
+    let mut security_holdings: Vec<SecurityHolding> = Vec::new();
+    {
+        let mut stmt = conn.prepare(security_holdings_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,      // security_id
+                    row.get::<_, String>(1)?,   // identifier
+                    row.get::<_, String>(2)?,   // name
+                    row.get::<_, String>(3)?,   // currency
+                    row.get::<_, Option<String>>(4)?, // custom_logo
+                    row.get::<_, i64>(5)?,      // net_shares
+                    row.get::<_, Option<i64>>(6)?, // latest_price
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for row in rows.flatten() {
+            let (security_id, identifier, name, security_currency, custom_logo, shares_raw, price_raw) = row;
+            let shares = shares::to_decimal(shares_raw);
+            let price = price_raw.map(|p| {
+                let price_decimal = prices::to_decimal(p);
+                // GBX/GBp (British Pence) needs to be divided by 100 to get GBP equivalent
+                if security_currency == "GBX" || security_currency == "GBp" {
+                    price_decimal / 100.0
+                } else {
+                    price_decimal
+                }
+            });
+
+            // Calculate value in security currency (for GBX, price is now in GBP)
+            let value_in_security_currency = price.map(|p| p * shares);
+
+            // For currency conversion: GBX/GBp values are now in GBP
+            let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                "GBP"
+            } else {
+                &security_currency
+            };
+
+            // Convert to base currency
+            let value_in_base = if convert_currency == base_currency {
+                value_in_security_currency
+            } else {
+                value_in_security_currency.map(|v| {
+                    currency::convert(conn, v, convert_currency, &base_currency, today)
+                        .unwrap_or(v)
+                })
+            };
+
+            security_holdings.push(SecurityHolding {
+                security_id,
+                identifier,
+                name,
+                currency: security_currency,
+                custom_logo,
+                shares,
+                price,
+                value_in_base,
+            });
+        }
+    }
 
     // STEP 2: Get cost basis from FIFO lots (separate from share count!)
     // Include currency to enable conversion to base currency
@@ -696,42 +762,43 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
         }
     }
 
-    // Build holdings with transaction-based shares and FIFO-based cost basis
-    // First, collect raw data
-    let raw_holdings: Vec<_> = holdings_stmt
-        .query_map([], |row| {
-            let identifier: String = row.get(0)?;
-            let name: String = row.get(1)?;
-            let currency: String = row.get(2)?;
-            let security_id: i64 = row.get(3)?;
-            let shares_raw: i64 = row.get(4)?;
-            let latest_price_raw: Option<i64> = row.get(5)?;
-            let custom_logo: Option<String> = row.get(6)?;
+    // STEP 4: Aggregate security holdings by ISIN
+    // Group by identifier and sum shares/values (values already converted to base currency)
+    let mut isin_groups: std::collections::HashMap<String, Vec<&SecurityHolding>> =
+        std::collections::HashMap::new();
+    for holding in &security_holdings {
+        isin_groups
+            .entry(holding.identifier.clone())
+            .or_default()
+            .push(holding);
+    }
 
-            Ok((identifier, name, currency, security_id, shares_raw, latest_price_raw, custom_logo))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    // Then process with currency conversion
-    let mut holdings: Vec<AggregatedHolding> = raw_holdings
+    // Build aggregated holdings from groups
+    let mut holdings: Vec<AggregatedHolding> = isin_groups
         .into_iter()
-        .map(|(identifier, name, security_currency, security_id, shares_raw, latest_price_raw, custom_logo)| {
-            let total_shares = shares::to_decimal(shares_raw);
-            let current_price = latest_price_raw.map(prices::to_decimal);
+        .map(|(identifier, group)| {
+            // Sum shares and values across all securities with this ISIN
+            let total_shares: f64 = group.iter().map(|h| h.shares).sum();
+            let total_value: Option<f64> = {
+                let values: Vec<f64> = group.iter().filter_map(|h| h.value_in_base).collect();
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(values.iter().sum())
+                }
+            };
 
-            // Calculate value in security's currency first
-            let value_in_security_currency = current_price.map(|p| p * total_shares);
+            // Use the security with most shares for display properties
+            let primary = group
+                .iter()
+                .max_by(|a, b| a.shares.partial_cmp(&b.shares).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap();
 
-            // Convert to base currency if different
-            let current_value = if security_currency == base_currency {
-                value_in_security_currency
+            // Calculate weighted average price in base currency (for display)
+            let current_price = if total_shares > 0.0 {
+                total_value.map(|v| v / total_shares)
             } else {
-                value_in_security_currency.map(|v| {
-                    currency::convert(conn, v, &security_currency, &base_currency, today)
-                        .unwrap_or(v) // Fallback to unconverted if no rate found
-                })
+                primary.price
             };
 
             // Get cost basis from FIFO map and convert to base currency
@@ -756,7 +823,7 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
                 None
             };
 
-            let gain_loss = current_value.map(|v| v - cost_basis);
+            let gain_loss = total_value.map(|v| v - cost_basis);
             let gain_loss_percent = if cost_basis > 0.0 {
                 gain_loss.map(|g| (g / cost_basis) * 100.0)
             } else {
@@ -778,24 +845,32 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
 
             AggregatedHolding {
                 isin: identifier,
-                name,
-                currency: security_currency,
-                security_id,
+                name: primary.name.clone(),
+                currency: primary.currency.clone(),
+                security_id: primary.security_id,
                 total_shares,
                 current_price,
-                current_value,
+                current_value: total_value,
                 cost_basis,
                 purchase_price,
                 gain_loss,
                 gain_loss_percent,
                 dividends_total,
                 portfolios: Vec::new(),
-                custom_logo,
+                custom_logo: primary.custom_logo.clone(),
             }
         })
         .collect();
 
-    // STEP 4: Get per-portfolio breakdown using transaction sums (NOT FIFO lots!)
+    // Sort by value descending
+    holdings.sort_by(|a, b| {
+        b.current_value
+            .unwrap_or(0.0)
+            .partial_cmp(&a.current_value.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // STEP 5: Get per-portfolio breakdown using transaction sums (NOT FIFO lots!)
     let portfolio_sql = "
         SELECT
             COALESCE(s.isin, s.uuid) as identifier,
@@ -983,94 +1058,218 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    // Get current holdings (shares per security) using transaction sums
-    let holdings_sql = r#"
+    // STEP 1: Get all portfolio transactions sorted by date
+    // This gives us the timeline of share changes
+    let txn_sql = r#"
         SELECT
-            s.id as security_id,
-            SUM(CASE
+            t.security_id,
+            date(t.date) as txn_date,
+            CASE
                 WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
                 WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
                 ELSE 0
-            END) as net_shares
+            END as share_change
         FROM pp_txn t
-        JOIN pp_portfolio p ON p.id = t.owner_id AND t.owner_type = 'portfolio'
-        JOIN pp_security s ON s.id = t.security_id
-        WHERE t.shares IS NOT NULL
-        GROUP BY s.id
-        HAVING net_shares > 0
+        WHERE t.owner_type = 'portfolio'
+          AND t.shares IS NOT NULL
+          AND t.security_id IS NOT NULL
+        ORDER BY txn_date, t.id
     "#;
 
-    let mut holdings: Vec<(i64, i64)> = Vec::new();
+    // Build cumulative shares by security and date
+    // security_id -> (date -> cumulative_shares after all transactions on that date)
+    let mut share_changes: Vec<(i64, String, i64)> = Vec::new();
     {
-        let mut stmt = conn.prepare(holdings_sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-            .map_err(|e| e.to_string())?;
-
-        for row in rows {
-            if let Ok((security_id, net_shares)) = row {
-                holdings.push((security_id, net_shares));
-            }
-        }
-    }
-
-    if holdings.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // Get prices for last 365 days for all securities with holdings
-    let security_ids: Vec<String> = holdings.iter().map(|(id, _)| id.to_string()).collect();
-    let security_ids_str = security_ids.join(",");
-
-    let prices_sql = format!(
-        r#"
-        SELECT date, security_id, value
-        FROM pp_price
-        WHERE security_id IN ({})
-          AND date >= date('now', '-365 days')
-        ORDER BY date
-        "#,
-        security_ids_str
-    );
-
-    // Build a map of security_id -> shares
-    let shares_map: std::collections::HashMap<i64, i64> =
-        holdings.iter().cloned().collect();
-
-    // Build date -> total value map
-    let mut value_by_date: std::collections::BTreeMap<String, f64> =
-        std::collections::BTreeMap::new();
-
-    // Track last known price for each security
-    let mut last_price: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-
-    {
-        let mut stmt = conn.prepare(&prices_sql).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(txn_sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
 
         for row in rows {
-            if let Ok((date, security_id, price)) = row {
-                last_price.insert(security_id, price);
-
-                // Calculate total portfolio value for this date
-                let total: f64 = shares_map
-                    .iter()
-                    .map(|(sec_id, share_count)| {
-                        let price_val = last_price.get(sec_id).copied().unwrap_or(0);
-                        shares::to_decimal(*share_count) * prices::to_decimal(price_val)
-                    })
-                    .sum();
-
-                value_by_date.insert(date, total);
+            if let Ok(data) = row {
+                share_changes.push(data);
             }
+        }
+    }
+
+    if share_changes.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // STEP 2: Build cumulative shares timeline per security
+    // For each security, we store (date, cumulative_shares) ordered by date
+    let mut security_timelines: std::collections::HashMap<i64, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    let mut security_cumulative: std::collections::HashMap<i64, i64> =
+        std::collections::HashMap::new();
+
+    for (security_id, date, change) in &share_changes {
+        let cumulative = security_cumulative.entry(*security_id).or_insert(0);
+        *cumulative += change;
+
+        let timeline = security_timelines.entry(*security_id).or_default();
+        // Update or add entry for this date
+        if let Some(last) = timeline.last_mut() {
+            if last.0 == *date {
+                last.1 = *cumulative;
+            } else {
+                timeline.push((date.clone(), *cumulative));
+            }
+        } else {
+            timeline.push((date.clone(), *cumulative));
+        }
+    }
+
+    // Get all security IDs that have holdings at some point
+    let all_security_ids: Vec<i64> = security_timelines.keys().cloned().collect();
+    if all_security_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let security_ids_str = all_security_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // STEP 2b: Load currency for each security (needed for GBX/GBp correction)
+    let currencies_sql = format!(
+        r#"SELECT id, currency FROM pp_security WHERE id IN ({})"#,
+        security_ids_str
+    );
+    let mut security_currencies: std::collections::HashMap<i64, String> =
+        std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare(&currencies_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            if let Ok((id, currency)) = row {
+                security_currencies.insert(id, currency);
+            }
+        }
+    }
+
+    // STEP 3: Get all prices for these securities
+    let prices_sql = format!(
+        r#"
+        SELECT security_id, date, value
+        FROM pp_price
+        WHERE security_id IN ({})
+        ORDER BY date
+        "#,
+        security_ids_str
+    );
+
+    // Build price timeline per security
+    let mut price_by_security_date: std::collections::HashMap<i64, std::collections::BTreeMap<String, i64>> =
+        std::collections::HashMap::new();
+
+    {
+        let mut stmt = conn.prepare(&prices_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            if let Ok((security_id, date, price)) = row {
+                price_by_security_date
+                    .entry(security_id)
+                    .or_default()
+                    .insert(date, price);
+            }
+        }
+    }
+
+    // STEP 4: For each date with price data, calculate portfolio value
+    // using the shares held AT THAT DATE
+
+    // Collect all unique dates from prices
+    let mut all_dates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for prices in price_by_security_date.values() {
+        for date in prices.keys() {
+            all_dates.insert(date.clone());
+        }
+    }
+
+    // Helper: Get shares held on a specific date for a security
+    let get_shares_on_date = |security_id: i64, target_date: &str| -> i64 {
+        if let Some(timeline) = security_timelines.get(&security_id) {
+            // Find the last entry <= target_date
+            let mut result = 0i64;
+            for (date, shares) in timeline {
+                if date.as_str() <= target_date {
+                    result = *shares;
+                } else {
+                    break;
+                }
+            }
+            result
+        } else {
+            0
+        }
+    };
+
+    // Helper: Get price on a specific date for a security (use last known)
+    let mut last_known_price: std::collections::HashMap<i64, i64> =
+        std::collections::HashMap::new();
+
+    let mut value_by_date: std::collections::BTreeMap<String, f64> =
+        std::collections::BTreeMap::new();
+
+    for date in all_dates {
+        // Update last known prices for all securities that have a price on this date
+        for (&security_id, prices) in &price_by_security_date {
+            if let Some(&price) = prices.get(&date) {
+                last_known_price.insert(security_id, price);
+            }
+        }
+
+        // Calculate total value on this date
+        let total: f64 = all_security_ids
+            .iter()
+            .map(|&security_id| {
+                let shares = get_shares_on_date(security_id, &date);
+                let price = last_known_price.get(&security_id).copied().unwrap_or(0);
+                let price_decimal = prices::to_decimal(price);
+
+                // GBX/GBp (British Pence) needs to be divided by 100 to get GBP equivalent
+                let currency = security_currencies
+                    .get(&security_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let adjusted_price = if currency == "GBX" || currency == "GBp" {
+                    price_decimal / 100.0
+                } else {
+                    price_decimal
+                };
+
+                shares::to_decimal(shares) * adjusted_price
+            })
+            .sum();
+
+        // Only include dates where we have some value
+        if total > 0.0 {
+            value_by_date.insert(date, total);
         }
     }
 
@@ -1083,8 +1282,9 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
     Ok(result)
 }
 
-/// Get cost basis history showing how the Einstand (cost basis) evolved over time
-/// Uses FIFO lots with monthly aggregation for smoother visualization
+/// Get invested capital history showing cumulative net investment over time
+/// Invested Capital = Sum of all inbound amounts - Sum of all outbound amounts
+/// This shows how much money was actually put into the portfolio (net of withdrawals)
 #[command]
 pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
@@ -1092,58 +1292,39 @@ pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    // Get the current actual cost basis from FIFO lots (this is the ground truth)
-    let current_cost_basis: f64 = conn
-        .query_row(
-            r#"SELECT COALESCE(SUM(
-                CASE WHEN original_shares > 0 THEN
-                    remaining_shares * 1.0 / original_shares * gross_amount
-                ELSE 0 END
-            ), 0) / 100.0 FROM pp_fifo_lot WHERE remaining_shares > 0"#,
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0.0);
-
-    // Get purchase events aggregated by MONTH (YYYY-MM format, use last day of month)
-    let purchases_sql = r#"
+    // Get all inbound transactions (BUY, DELIVERY_INBOUND, TRANSFER_IN)
+    // amount is stored in cents, so divide by 100
+    let inbound_sql = r#"
         SELECT
-            strftime('%Y-%m', purchase_date) || '-' ||
-            CASE strftime('%m', purchase_date)
-                WHEN '01' THEN '31' WHEN '02' THEN '28' WHEN '03' THEN '31'
-                WHEN '04' THEN '30' WHEN '05' THEN '31' WHEN '06' THEN '30'
-                WHEN '07' THEN '31' WHEN '08' THEN '31' WHEN '09' THEN '30'
-                WHEN '10' THEN '31' WHEN '11' THEN '30' WHEN '12' THEN '31'
-            END as month_end,
-            SUM(gross_amount) / 100.0 as amount
-        FROM pp_fifo_lot
-        GROUP BY strftime('%Y-%m', purchase_date)
-        ORDER BY month_end ASC
+            date,
+            SUM(amount) / 100.0 as total_amount
+        FROM pp_txn
+        WHERE owner_type = 'portfolio'
+          AND txn_type IN ('BUY', 'DELIVERY_INBOUND', 'TRANSFER_IN')
+          AND amount IS NOT NULL
+        GROUP BY date
+        ORDER BY date ASC
     "#;
 
-    // Get sale events aggregated by MONTH
-    let sales_sql = r#"
+    // Get all outbound transactions (SELL, DELIVERY_OUTBOUND, TRANSFER_OUT)
+    let outbound_sql = r#"
         SELECT
-            strftime('%Y-%m', t.date) || '-' ||
-            CASE strftime('%m', t.date)
-                WHEN '01' THEN '31' WHEN '02' THEN '28' WHEN '03' THEN '31'
-                WHEN '04' THEN '30' WHEN '05' THEN '31' WHEN '06' THEN '30'
-                WHEN '07' THEN '31' WHEN '08' THEN '31' WHEN '09' THEN '30'
-                WHEN '10' THEN '31' WHEN '11' THEN '30' WHEN '12' THEN '31'
-            END as month_end,
-            SUM(ABS(t.amount)) / 100.0 as amount
-        FROM pp_txn t
-        WHERE t.owner_type = 'portfolio'
-          AND t.txn_type IN ('SELL', 'DELIVERY_OUTBOUND')
-          AND t.shares IS NOT NULL
-        GROUP BY strftime('%Y-%m', t.date)
-        ORDER BY month_end ASC
+            date,
+            SUM(amount) / 100.0 as total_amount
+        FROM pp_txn
+        WHERE owner_type = 'portfolio'
+          AND txn_type IN ('SELL', 'DELIVERY_OUTBOUND', 'TRANSFER_OUT')
+          AND amount IS NOT NULL
+        GROUP BY date
+        ORDER BY date ASC
     "#;
 
-    // Collect purchase events (monthly)
+    // Collect events: (date, amount, is_inbound)
     let mut events: Vec<(String, f64, bool)> = Vec::new();
+
+    // Collect inbound events (BUY, DELIVERY_INBOUND, TRANSFER_IN)
     {
-        let mut stmt = conn.prepare(purchases_sql).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(inbound_sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
             .map_err(|e| e.to_string())?;
@@ -1155,9 +1336,9 @@ pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String
         }
     }
 
-    // Collect sale events (monthly)
+    // Collect outbound events (SELL, DELIVERY_OUTBOUND, TRANSFER_OUT)
     {
-        let mut stmt = conn.prepare(sales_sql).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(outbound_sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
             .map_err(|e| e.to_string())?;
@@ -1172,36 +1353,25 @@ pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String
     // Sort by date
     events.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Calculate total purchases and total sales proceeds
-    let total_purchases: f64 = events.iter().filter(|e| e.2).map(|e| e.1).sum();
-    let total_sales: f64 = events.iter().filter(|e| !e.2).map(|e| e.1).sum();
-
-    // The cost basis consumed by sales is: total_purchases - current_cost_basis
-    let consumed_cost_basis = total_purchases - current_cost_basis;
-
-    // Scale factor: how much of sale proceeds represents cost basis (vs. gain/loss)
-    let sale_to_cost_ratio = if total_sales > 0.0 {
-        consumed_cost_basis / total_sales
-    } else {
-        0.0
-    };
-
-    // Build cumulative cost basis by month
-    let mut cost_basis_by_month: std::collections::BTreeMap<String, f64> =
+    // Build cumulative invested capital by date
+    let mut invested_by_date: std::collections::BTreeMap<String, f64> =
         std::collections::BTreeMap::new();
     let mut cumulative: f64 = 0.0;
 
-    for (date, amount, is_purchase) in events {
-        if is_purchase {
+    for (date, amount, is_inbound) in events {
+        if is_inbound {
+            // Inbound: money flows into portfolio (increases invested capital)
             cumulative += amount;
         } else {
-            cumulative -= amount * sale_to_cost_ratio;
+            // Outbound: money flows out of portfolio (decreases invested capital)
+            cumulative -= amount;
         }
-        cost_basis_by_month.insert(date, cumulative.max(0.0));
+        // Invested capital can be negative if you've withdrawn more than invested
+        invested_by_date.insert(date, cumulative);
     }
 
     // Convert to vector
-    let result: Vec<PortfolioValuePoint> = cost_basis_by_month
+    let result: Vec<PortfolioValuePoint> = invested_by_date
         .into_iter()
         .map(|(date, value)| PortfolioValuePoint { date, value })
         .collect();

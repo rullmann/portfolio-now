@@ -1,3 +1,4 @@
+pub mod ai;
 mod commands;
 pub mod currency;
 pub mod db;
@@ -58,6 +59,11 @@ pub fn run() {
             commands::quotes::fetch_historical_exchange_rates,
             commands::quotes::get_available_quote_providers,
             commands::quotes::search_external_securities,
+            // Corporate Actions (Stock Splits, etc.)
+            commands::quotes::detect_security_splits,
+            commands::quotes::detect_all_splits,
+            commands::quotes::get_corporate_actions,
+            commands::quotes::detect_splits_by_price_heuristic,
             // New PP Import commands
             commands::import::import_pp_file,
             commands::import::get_imports,
@@ -94,6 +100,7 @@ pub fn run() {
             commands::crud::delete_pp_portfolio,
             // Transaction CRUD
             commands::crud::create_transaction,
+            commands::crud::update_transaction,
             commands::crud::delete_transaction,
             commands::crud::get_transaction,
             // Performance
@@ -195,6 +202,8 @@ pub fn run() {
             commands::pdf_export::export_performance_pdf,
             commands::pdf_export::export_dividend_pdf,
             commands::pdf_export::export_tax_report_pdf,
+            // AI Chart Analysis
+            commands::ai::analyze_chart_with_ai,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

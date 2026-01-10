@@ -3,8 +3,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ChangeEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe } from 'lucide-react';
-import type { SecurityData } from '../../lib/types';
+import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft } from 'lucide-react';
+import type { SecurityData, TransactionData } from '../../lib/types';
 import {
   getSecurities,
   deleteSecurity,
@@ -15,8 +15,10 @@ import {
   saveLogoToCache,
   uploadSecurityLogo,
   deleteSecurityLogo,
+  getTransactions,
+  deleteTransaction,
 } from '../../lib/api';
-import { SecurityFormModal, SecurityPriceModal } from '../../components/modals';
+import { SecurityFormModal, SecurityPriceModal, TransactionFormModal } from '../../components/modals';
 import { formatCurrency } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
@@ -61,27 +63,9 @@ class SecuritiesErrorBoundary extends Component<{ children: ReactNode }, ErrorBo
   }
 }
 
-// Legacy types for direct file viewing
-interface LegacySecurity {
-  uuid: string;
-  name: string;
-  currency: string;
-  isin?: string | null;
-  ticker?: string | null;
-  wkn?: string | null;
-}
-
-interface PortfolioFile {
-  securities?: LegacySecurity[];
-}
-
-interface SecuritiesViewProps {
-  portfolioFile: PortfolioFile | null;
-}
-
 type StatusFilter = 'all' | 'withHoldings' | 'withoutHoldings' | 'retired';
 
-export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
+export function SecuritiesView() {
   const [dbSecurities, setDbSecurities] = useState<SecurityData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +79,14 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [priceModalSecurity, setPriceModalSecurity] = useState<SecurityData | null>(null);
   const [logos, setLogos] = useState<Map<number, LogoData>>(new Map());
+
+  // Transaction detail state
+  const [selectedSecurity, setSelectedSecurity] = useState<SecurityData | null>(null);
+  const [securityTransactions, setSecurityTransactions] = useState<TransactionData[]>([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(false);
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<TransactionData | null>(null);
+  const [deletingTxnId, setDeletingTxnId] = useState<number | null>(null);
   const [uploadingLogoId, setUploadingLogoId] = useState<number | null>(null);
   const [logoMenuOpen, setLogoMenuOpen] = useState<number | null>(null);
   const [recentlyUploadedLogos, setRecentlyUploadedLogos] = useState<Set<number>>(new Set());
@@ -139,27 +131,28 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
   }, [loadSecurities]);
 
   // Load logos for securities (cache-first strategy)
+  // Works even without API key - will load from local cache
   useEffect(() => {
     const loadLogos = async () => {
-      if (dbSecurities.length === 0 || !brandfetchApiKey) {
+      if (dbSecurities.length === 0) {
         return;
       }
 
       try {
-        // Get logo URLs for all securities
+        // Get logo URLs for all securities (works with or without API key)
         const securitiesToFetch = dbSecurities.map((s) => ({
           id: s.id,
           ticker: s.ticker || undefined,
           name: s.name || '',
         }));
 
-        const results = await fetchLogosBatch(brandfetchApiKey, securitiesToFetch);
+        const results = await fetchLogosBatch(brandfetchApiKey || '', securitiesToFetch);
         const newLogos = new Map<number, LogoData>();
         const toCacheMap = new Map<number, { url: string; domain: string }>();
 
         // For each result, check cache first
         for (const result of results) {
-          if (result.logoUrl && result.domain) {
+          if (result.domain) {
             // Try to get from cache first
             const cachedData = await getCachedLogoData(result.domain);
 
@@ -170,7 +163,7 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
                 domain: result.domain,
                 isFresh: false,
               });
-            } else {
+            } else if (result.logoUrl) {
               // Use CDN URL and mark for caching (green border)
               newLogos.set(result.securityId, {
                 url: result.logoUrl,
@@ -240,6 +233,81 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
   const handleCreate = () => {
     setEditingSecurity(null);
     setIsModalOpen(true);
+  };
+
+  // Load transactions for selected security
+  const loadSecurityTransactions = useCallback(async (securityId: number) => {
+    setIsLoadingTransactions(true);
+    try {
+      const txns = await getTransactions({ securityId });
+      setSecurityTransactions(txns);
+    } catch (err) {
+      console.error('Failed to load transactions:', err);
+      setSecurityTransactions([]);
+    } finally {
+      setIsLoadingTransactions(false);
+    }
+  }, []);
+
+  // Handle security selection (toggle)
+  const handleSelectSecurity = (security: SecurityData) => {
+    if (selectedSecurity?.id === security.id) {
+      // Deselect
+      setSelectedSecurity(null);
+      setSecurityTransactions([]);
+    } else {
+      // Select and load transactions
+      setSelectedSecurity(security);
+      loadSecurityTransactions(security.id);
+    }
+  };
+
+  // Handle transaction delete
+  const handleDeleteTransaction = async (txn: TransactionData) => {
+    if (!confirm(`Buchung vom ${new Date(txn.date).toLocaleDateString('de-DE')} wirklich löschen?`)) {
+      return;
+    }
+
+    setDeletingTxnId(txn.id);
+    try {
+      await deleteTransaction(txn.id);
+      // Reload transactions and securities (holdings may have changed)
+      if (selectedSecurity) {
+        await loadSecurityTransactions(selectedSecurity.id);
+      }
+      await loadSecurities();
+      setSuccess('Buchung gelöscht');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingTxnId(null);
+    }
+  };
+
+  // Handle new transaction for selected security
+  const handleAddTransaction = () => {
+    setEditingTransaction(null);
+    setIsTransactionModalOpen(true);
+  };
+
+  // Handle edit transaction
+  const handleEditTransaction = (txn: TransactionData) => {
+    setEditingTransaction(txn);
+    setIsTransactionModalOpen(true);
+  };
+
+  const handleTransactionModalClose = () => {
+    setIsTransactionModalOpen(false);
+    setEditingTransaction(null);
+  };
+
+  const handleTransactionModalSuccess = () => {
+    // Reload transactions and securities
+    if (selectedSecurity) {
+      loadSecurityTransactions(selectedSecurity.id);
+    }
+    loadSecurities();
   };
 
   // Logo upload handlers
@@ -415,10 +483,6 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
     }
   };
 
-  // Use DB data if available, otherwise fall back to legacy file data
-  const hasDbData = dbSecurities.length > 0;
-  const legacySecurities = portfolioFile?.securities || [];
-
   // Filter securities based on status and search query
   const filteredSecurities = dbSecurities.filter((security) => {
     // Status filter
@@ -489,7 +553,7 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
       </div>
 
       {/* Filter bar */}
-      {hasDbData && (
+      {dbSecurities.length > 0 && (
         <div className="flex flex-wrap items-center gap-3">
           {/* Search input */}
           <input
@@ -567,7 +631,7 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
           <div className="p-6 text-center text-muted-foreground">
             Lade Wertpapiere...
           </div>
-        ) : hasDbData ? (
+        ) : dbSecurities.length > 0 ? (
           /* Database securities table */
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -594,9 +658,10 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
                 ) : filteredSecurities.map((security) => (
                   <tr
                     key={security.id}
-                    className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors ${
+                    onClick={() => handleSelectSecurity(security)}
+                    className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
                       security.isRetired ? 'opacity-60' : ''
-                    }`}
+                    } ${selectedSecurity?.id === security.id ? 'bg-primary/10' : ''}`}
                   >
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
@@ -703,7 +768,10 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
                         })()}
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => setPriceModalSecurity(security)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPriceModalSecurity(security);
+                            }}
                             className={`text-left hover:text-primary hover:underline transition-colors ${
                               security.isRetired ? 'text-muted-foreground line-through' : ''
                             }`}
@@ -771,7 +839,10 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
                     <td className="py-3 px-4">
                       <div className="flex justify-end gap-1">
                         <button
-                          onClick={() => handleSyncSingleSecurity(security.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSyncSingleSecurity(security.id);
+                          }}
                           disabled={syncingSecurityId === security.id || !security.feed}
                           className="p-1.5 hover:bg-muted rounded-md transition-colors disabled:opacity-50"
                           title={security.feed ? 'Kurs abrufen' : 'Keine Kursquelle konfiguriert'}
@@ -786,14 +857,20 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
                           />
                         </button>
                         <button
-                          onClick={() => handleEdit(security)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEdit(security);
+                          }}
                           className="p-1.5 hover:bg-muted rounded-md transition-colors"
                           title="Bearbeiten"
                         >
                           <Pencil size={16} className="text-muted-foreground" />
                         </button>
                         <button
-                          onClick={() => handleDelete(security)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(security);
+                          }}
                           disabled={deletingId === security.id}
                           className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50"
                           title="Löschen"
@@ -814,45 +891,159 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
               </tbody>
             </table>
           </div>
-        ) : legacySecurities.length > 0 ? (
-          /* Legacy file securities table */
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="text-left py-3 px-4 font-medium">Name</th>
-                  <th className="text-left py-3 px-4 font-medium">ISIN</th>
-                  <th className="text-left py-3 px-4 font-medium">Ticker</th>
-                  <th className="text-left py-3 px-4 font-medium">Währung</th>
-                </tr>
-              </thead>
-              <tbody>
-                {legacySecurities.map((security, index) => (
-                  <tr
-                    key={security.uuid || `sec-${index}`}
-                    className="border-b border-border last:border-0"
-                  >
-                    <td className="py-3 px-4">{security.name || 'Unbekannt'}</td>
-                    <td className="py-3 px-4 font-mono text-muted-foreground">
-                      {security.isin || '-'}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-muted-foreground">
-                      {security.ticker || '-'}
-                    </td>
-                    <td className="py-3 px-4 text-muted-foreground">
-                      {security.currency}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         ) : (
           <div className="p-6 text-center text-muted-foreground">
             Keine Wertpapiere vorhanden. Importieren Sie eine .portfolio Datei oder erstellen Sie ein neues Wertpapier.
           </div>
         )}
       </div>
+
+      {/* Transaction Detail Panel */}
+      {selectedSecurity && (
+        <div className="bg-card rounded-lg border border-border">
+          {/* Panel Header */}
+          <div className="flex items-center justify-between p-4 border-b border-border bg-muted/30">
+            <div className="flex items-center gap-3">
+              <ArrowRightLeft size={18} className="text-primary" />
+              <div>
+                <h3 className="font-medium">{selectedSecurity.name}</h3>
+                <p className="text-xs text-muted-foreground">
+                  {securityTransactions.length} Buchung{securityTransactions.length !== 1 ? 'en' : ''}
+                  {selectedSecurity.isin && ` • ${selectedSecurity.isin}`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAddTransaction}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+              >
+                <Plus size={14} />
+                Buchung hinzufügen
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedSecurity(null);
+                  setSecurityTransactions([]);
+                }}
+                className="p-1.5 hover:bg-muted rounded-md transition-colors"
+                title="Schließen"
+              >
+                <ChevronUp size={18} className="text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+
+          {/* Transactions Table */}
+          <div className="overflow-x-auto max-h-80">
+            {isLoadingTransactions ? (
+              <div className="p-6 text-center text-muted-foreground">
+                Lade Buchungen...
+              </div>
+            ) : securityTransactions.length === 0 ? (
+              <div className="p-6 text-center text-muted-foreground">
+                Keine Buchungen für dieses Wertpapier vorhanden.
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30 sticky top-0">
+                    <th className="text-left py-2 px-4 font-medium">Datum</th>
+                    <th className="text-left py-2 px-4 font-medium">Typ</th>
+                    <th className="text-left py-2 px-4 font-medium">Depot/Konto</th>
+                    <th className="text-right py-2 px-4 font-medium">Stück</th>
+                    <th className="text-right py-2 px-4 font-medium">Betrag</th>
+                    <th className="text-right py-2 px-4 font-medium">Gebühren</th>
+                    <th className="text-right py-2 px-4 font-medium">Steuern</th>
+                    <th className="text-left py-2 px-4 font-medium">Notiz</th>
+                    <th className="text-right py-2 px-4 font-medium">Aktionen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {securityTransactions.map((txn) => {
+                    const txnTypeLabels: Record<string, { label: string; color: string }> = {
+                      BUY: { label: 'Kauf', color: 'text-green-600' },
+                      SELL: { label: 'Verkauf', color: 'text-red-600' },
+                      DIVIDENDS: { label: 'Dividende', color: 'text-blue-600' },
+                      DELIVERY_INBOUND: { label: 'Einlieferung', color: 'text-green-600' },
+                      DELIVERY_OUTBOUND: { label: 'Auslieferung', color: 'text-red-600' },
+                      TRANSFER_IN: { label: 'Übertrag Ein', color: 'text-green-600' },
+                      TRANSFER_OUT: { label: 'Übertrag Aus', color: 'text-red-600' },
+                    };
+                    const typeInfo = txnTypeLabels[txn.txnType] || { label: txn.txnType, color: '' };
+
+                    return (
+                      <tr
+                        key={txn.id}
+                        className="border-b border-border last:border-0 hover:bg-muted/20"
+                      >
+                        <td className="py-2 px-4 tabular-nums">
+                          {new Date(txn.date).toLocaleDateString('de-DE')}
+                        </td>
+                        <td className={`py-2 px-4 font-medium ${typeInfo.color}`}>
+                          {typeInfo.label}
+                        </td>
+                        <td className="py-2 px-4 text-muted-foreground">
+                          {txn.ownerName}
+                        </td>
+                        <td className="py-2 px-4 text-right tabular-nums">
+                          {txn.shares
+                            ? txn.shares.toLocaleString('de-DE', { maximumFractionDigits: 4 })
+                            : '-'}
+                        </td>
+                        <td className="py-2 px-4 text-right tabular-nums font-medium">
+                          {formatCurrency(txn.amount, txn.currency)}
+                        </td>
+                        <td className="py-2 px-4 text-right tabular-nums text-muted-foreground">
+                          {txn.fees > 0 ? formatCurrency(txn.fees, txn.currency) : '-'}
+                        </td>
+                        <td className="py-2 px-4 text-right tabular-nums text-muted-foreground">
+                          {txn.taxes > 0 ? formatCurrency(txn.taxes, txn.currency) : '-'}
+                        </td>
+                        <td className="py-2 px-4 text-muted-foreground text-xs max-w-[200px] truncate">
+                          {txn.note || '-'}
+                        </td>
+                        <td className="py-2 px-4">
+                          <div className="flex justify-end gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditTransaction(txn);
+                              }}
+                              className="p-1 hover:bg-muted rounded transition-colors"
+                              title="Bearbeiten"
+                            >
+                              <Pencil size={14} className="text-muted-foreground" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTransaction(txn);
+                              }}
+                              disabled={deletingTxnId === txn.id}
+                              className="p-1 hover:bg-destructive/10 rounded transition-colors disabled:opacity-50"
+                              title="Löschen"
+                            >
+                              <Trash2
+                                size={14}
+                                className={
+                                  deletingTxnId === txn.id
+                                    ? 'text-muted-foreground animate-pulse'
+                                    : 'text-destructive'
+                                }
+                              />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Security Form Modal */}
       <SecurityFormModal
@@ -868,15 +1059,24 @@ export function SecuritiesView({ portfolioFile }: SecuritiesViewProps) {
         onClose={() => setPriceModalSecurity(null)}
         security={priceModalSecurity}
       />
+
+      {/* Transaction Form Modal */}
+      <TransactionFormModal
+        isOpen={isTransactionModalOpen}
+        onClose={handleTransactionModalClose}
+        onSuccess={handleTransactionModalSuccess}
+        defaultSecurityId={selectedSecurity?.id}
+        transaction={editingTransaction || undefined}
+      />
     </div>
   );
 }
 
 // Wrapped export with error boundary
-export function SecuritiesViewWithErrorBoundary(props: SecuritiesViewProps) {
+export function SecuritiesViewWithErrorBoundary() {
   return (
     <SecuritiesErrorBoundary>
-      <SecuritiesView {...props} />
+      <SecuritiesView />
     </SecuritiesErrorBoundary>
   );
 }

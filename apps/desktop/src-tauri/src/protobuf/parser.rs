@@ -11,6 +11,7 @@ use zip::ZipArchive;
 use super::schema::{self, PClient};
 use crate::pp::{
     common::{ForexInfo, Money},
+    security::{DividendEvent, SecurityEvent, SecurityEventKind, SecurityEventType},
     taxonomy::{Classification, ClassificationAssignment},
     transaction::{
         AccountTransaction, AccountTransactionType, CrossEntry, CrossEntryType,
@@ -211,12 +212,88 @@ fn convert_client(pb: &PClient) -> Result<Client> {
         client.taxonomies.push(taxonomy);
     }
 
-    // Note: Watchlists and Investment plans are not present in current file format
+    // Convert watchlists
+    for pb_wl in &pb.watchlists {
+        let watchlist = crate::pp::Watchlist {
+            name: pb_wl.name.clone(),
+            security_uuids: pb_wl.securities.clone(),
+        };
+        client.watchlists.push(watchlist);
+    }
+
+    // Convert investment plans
+    for pb_plan in &pb.plans {
+        // Convert date from epoch days to date string
+        let start_date = if pb_plan.date > 0 {
+            days_to_date(pb_plan.date).map(|d| d.to_string())
+        } else {
+            None
+        };
+
+        let plan = crate::pp::InvestmentPlan {
+            name: pb_plan.name.clone(),
+            security_uuid: pb_plan.security.clone(),
+            portfolio_uuid: pb_plan.portfolio.clone(),
+            account_uuid: pb_plan.account.clone(),
+            amount: pb_plan.amount,
+            fees: pb_plan.fees,
+            taxes: pb_plan.taxes,
+            interval: pb_plan.interval,
+            start: start_date,
+            auto_generate: pb_plan.auto_generate,
+            plan_type: pb_plan.plan_type,
+            note: pb_plan.note.clone(),
+            attributes: convert_attributes(&pb_plan.attributes),
+            transactions: pb_plan.transactions.clone(),
+        };
+        client.plans.push(plan);
+    }
 
     // Convert dashboards
     for pb_dash in &pb.dashboards {
         let dashboard = convert_dashboard(pb_dash)?;
         client.dashboards.push(dashboard);
+    }
+
+    // Convert properties to JSON
+    if !pb.properties.is_empty() {
+        let props: std::collections::HashMap<String, String> = pb
+            .properties
+            .iter()
+            .map(|p| (p.key.clone(), p.value.clone()))
+            .collect();
+        client.properties = serde_json::to_value(props).unwrap_or(serde_json::Value::Null);
+    }
+
+    // Convert settings to JSON
+    if let Some(ref settings) = pb.settings {
+        let settings_obj = serde_json::json!({
+            "bookmarks": settings.bookmarks.iter().map(|b| {
+                serde_json::json!({
+                    "label": b.label,
+                    "pattern": b.pattern
+                })
+            }).collect::<Vec<_>>(),
+            "attributeTypes": settings.attribute_types.iter().map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "name": a.name,
+                    "columnLabel": a.column_label,
+                    "source": a.source,
+                    "target": a.target,
+                    "type": a.attr_type
+                })
+            }).collect::<Vec<_>>(),
+            "configurationSets": settings.configuration_sets.iter().map(|c| {
+                serde_json::json!({
+                    "key": c.key,
+                    "uuid": c.uuid,
+                    "name": c.name,
+                    "data": c.data
+                })
+            }).collect::<Vec<_>>()
+        });
+        client.settings = settings_obj;
     }
 
     Ok(client)
@@ -228,6 +305,7 @@ fn convert_security(pb: &schema::PSecurity) -> Result<Security> {
     let currency = pb.currency_code.clone().unwrap_or_default();
     let mut sec = Security::new(pb.uuid.clone(), pb.name.clone(), currency);
 
+    sec.target_currency = pb.target_currency_code.clone();
     sec.online_id = pb.online_id.clone();
     sec.isin = pb.isin.clone();
     sec.wkn = pb.wkn.clone();
@@ -235,6 +313,23 @@ fn convert_security(pb: &schema::PSecurity) -> Result<Security> {
     sec.calendar = pb.calendar.clone();
     sec.feed = pb.feed.clone();
     sec.feed_url = pb.feed_url.clone();
+    sec.latest_feed = pb.latest_feed.clone();
+    sec.latest_feed_url = pb.latest_feed_url.clone();
+    sec.is_retired = pb.is_retired;
+    sec.note = pb.note.clone();
+
+    // Convert updated_at timestamp
+    if let Some(ts) = &pb.updated_at {
+        if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+            sec.updated_at = Some(dt.format("%Y-%m-%dT%H:%M:%S").to_string());
+        }
+    }
+
+    // Convert attributes
+    sec.attributes = convert_attributes(&pb.attributes);
+
+    // Convert properties (separate from attributes)
+    sec.properties = convert_attributes(&pb.properties);
 
     // Convert prices
     for pb_price in &pb.prices {
@@ -264,7 +359,41 @@ fn convert_security(pb: &schema::PSecurity) -> Result<Security> {
         });
     }
 
+    // Convert security events (stock splits, dividends, notes)
+    for pb_event in &pb.events {
+        if let Some(event) = convert_security_event(pb_event) {
+            sec.events.push(event);
+        }
+    }
+
     Ok(sec)
+}
+
+/// Convert PKeyValue list to HashMap
+fn convert_attributes(attrs: &[schema::PKeyValue]) -> std::collections::HashMap<String, String> {
+    let mut result = std::collections::HashMap::new();
+    for kv in attrs {
+        if let Some(ref val) = kv.value {
+            if let Some(ref kind) = val.kind {
+                let value_str = match kind {
+                    schema::PAnyValueKind::String(s) => s.clone(),
+                    schema::PAnyValueKind::Int32(i) => i.to_string(),
+                    schema::PAnyValueKind::Int64(i) => i.to_string(),
+                    schema::PAnyValueKind::Double(d) => d.to_string(),
+                    schema::PAnyValueKind::Bool(b) => b.to_string(),
+                    schema::PAnyValueKind::Null(_) => String::new(),
+                    schema::PAnyValueKind::Map(_) => {
+                        // Skip nested maps for now
+                        continue;
+                    }
+                };
+                if !kv.key.is_empty() {
+                    result.insert(kv.key.clone(), value_str);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Convert days since epoch to NaiveDate
@@ -282,11 +411,58 @@ fn days_to_datetime(days: i64) -> Option<NaiveDateTime> {
     days_to_date(days).map(|d| d.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
 }
 
+/// Convert protobuf SecurityEvent to pp::SecurityEventKind
+fn convert_security_event(pb: &schema::PSecurityEvent) -> Option<SecurityEventKind> {
+    let date = days_to_date(pb.date)?;
+
+    use super::schema::event_type::*;
+    match pb.event_type {
+        STOCK_SPLIT => Some(SecurityEventKind::Event(SecurityEvent {
+            date,
+            event_type: SecurityEventType::StockSplit,
+            details: if pb.details.is_empty() {
+                None
+            } else {
+                Some(pb.details.clone())
+            },
+        })),
+        NOTE => Some(SecurityEventKind::Event(SecurityEvent {
+            date,
+            event_type: SecurityEventType::Note,
+            details: if pb.details.is_empty() {
+                None
+            } else {
+                Some(pb.details.clone())
+            },
+        })),
+        DIVIDEND_PAYMENT => Some(SecurityEventKind::Dividend(DividendEvent {
+            date,
+            source: pb.source.clone(),
+            payment_date: None, // Could be extracted from pb.data if needed
+            amount: None,       // Could be extracted from pb.data if needed
+        })),
+        _ => None,
+    }
+}
+
 /// Convert protobuf Account to pp::Account
 fn convert_account(pb: &schema::PAccount) -> Result<Account> {
-    let acc = Account::new(pb.uuid.clone(), pb.name.clone(), pb.currency_code.clone());
-    // Note: Transactions are simplified in this file format
-    // They only contain timestamp and amount, not full transaction details
+    let mut acc = Account::new(pb.uuid.clone(), pb.name.clone(), pb.currency_code.clone());
+
+    acc.is_retired = pb.is_retired;
+    acc.note = pb.note.clone();
+
+    // Convert updated_at timestamp
+    if let Some(ts) = &pb.updated_at {
+        if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+            acc.updated_at = Some(dt.format("%Y-%m-%dT%H:%M:%S").to_string());
+        }
+    }
+
+    // Convert attributes
+    acc.attributes = convert_attributes(&pb.attributes);
+
+    // Note: Transactions are added from PClient.transactions
     Ok(acc)
 }
 
@@ -313,6 +489,9 @@ fn convert_portfolio(pb: &schema::PPortfolio) -> Result<Portfolio> {
             port.updated_at = Some(dt.format("%Y-%m-%dT%H:%M:%S").to_string());
         }
     }
+
+    // Convert attributes
+    port.attributes = convert_attributes(&pb.attributes);
 
     // Transactions will be added from PClient.transactions
     Ok(port)
@@ -371,10 +550,16 @@ fn convert_transaction(
     tx.security_uuid = pb.security.clone();
     tx.source = pb.source.clone();
     tx.note = pb.note.clone();
+    tx.other_portfolio_uuid = pb.other_portfolio.clone();
 
     // Convert updated_at timestamp
     if let Some(ref updated) = pb.updated_at {
         tx.updated_at = Some(format_timestamp(updated));
+    }
+
+    // Convert other_updated_at timestamp (cross-entry)
+    if let Some(ref other_updated) = pb.other_updated_at {
+        tx.other_updated_at = Some(format_timestamp(other_updated));
     }
 
     // Convert transaction units (fees, taxes, gross value)
@@ -449,10 +634,16 @@ fn convert_account_transaction(pb: &schema::PTransaction) -> Result<Option<Accou
     tx.shares = pb.shares;
     tx.source = pb.source.clone();
     tx.note = pb.note.clone();
+    tx.other_account_uuid = pb.other_account.clone();
 
     // Convert updated_at timestamp
     if let Some(ref updated) = pb.updated_at {
         tx.updated_at = Some(format_timestamp(updated));
+    }
+
+    // Convert other_updated_at timestamp (cross-entry)
+    if let Some(ref other_updated) = pb.other_updated_at {
+        tx.other_updated_at = Some(format_timestamp(other_updated));
     }
 
     // Convert transaction units (fees, taxes, gross value)
@@ -740,6 +931,65 @@ mod tests {
         assert_eq!(d.day(), 1);
     }
 
+    /// DIAGNOSTIC TEST: Dump raw protobuf values to investigate scaling issue
+    /// Run with: cargo test test_dump_raw_protobuf_values -- --nocapture
+    #[test]
+    fn test_dump_raw_protobuf_values() {
+        let path = PathBuf::from("/Users/ricoullmann/Documents/PP/Portfolio.portfolio");
+        if !path.exists() {
+            println!("Test file not found, skipping");
+            return;
+        }
+
+        use std::io::Read;
+        use prost::Message;
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut data_file = archive.by_name("data.portfolio").unwrap();
+        let mut data = Vec::new();
+        data_file.read_to_end(&mut data).unwrap();
+
+        let proto_data = &data[6..];
+        let pb = schema::PClient::decode(proto_data).unwrap();
+
+        println!("\n=== RAW PROTOBUF TRANSACTION VALUES ===");
+        println!("Looking for transactions with fees/taxes...\n");
+
+        let mut found_with_units = 0;
+        for tx in &pb.transactions {
+            if !tx.units.is_empty() {
+                found_with_units += 1;
+                if found_with_units <= 10 { // Show first 10
+                    println!("Transaction UUID: {}", tx.uuid);
+                    println!("  Type: {} (0=PURCHASE, 1=SALE, 8=DIVIDEND)", tx.transaction_type);
+                    println!("  Raw amount: {} (should be cents, e.g., 10050 = 100.50 EUR)", tx.amount);
+                    println!("  Currency: {}", tx.currency_code);
+                    println!("  Shares: {:?} (should be x10^8)", tx.shares);
+
+                    for unit in &tx.units {
+                        let unit_type_str = match unit.unit_type {
+                            0 => "GROSS_VALUE",
+                            1 => "TAX",
+                            2 => "FEE",
+                            _ => "UNKNOWN",
+                        };
+                        println!("  Unit: {} = {} {} (raw value)",
+                            unit_type_str,
+                            unit.amount,
+                            unit.currency_code);
+
+                        // Show expected value
+                        let expected_euros = unit.amount as f64 / 100.0;
+                        println!("         Expected EUR if cents: {:.2}", expected_euros);
+                    }
+                    println!();
+                }
+            }
+        }
+        println!("Total transactions with units: {}", found_with_units);
+    }
+
     #[test]
     fn test_parse_real_file() {
         let path = PathBuf::from("/Users/ricoullmann/Documents/PP/Portfolio.portfolio");
@@ -799,6 +1049,27 @@ mod tests {
                             println!("  {}: {}", tx_type, count);
                         }
                     }
+
+                    // Analyze security events (stock splits, dividends)
+                    println!("\n=== SECURITY EVENTS ===");
+                    let mut total_events = 0;
+                    for security in &client.securities {
+                        if !security.events.is_empty() {
+                            println!("\n{} ({} events):", security.name, security.events.len());
+                            for event in &security.events {
+                                match event {
+                                    crate::pp::security::SecurityEventKind::Event(e) => {
+                                        println!("  {} {:?} {:?}", e.date, e.event_type, e.details);
+                                    }
+                                    crate::pp::security::SecurityEventKind::Dividend(d) => {
+                                        println!("  {} DIVIDEND {:?}", d.date, d.amount);
+                                    }
+                                }
+                            }
+                            total_events += security.events.len();
+                        }
+                    }
+                    println!("\nTotal events: {}", total_events);
 
                     assert!(!client.securities.is_empty() || !client.accounts.is_empty());
                 }

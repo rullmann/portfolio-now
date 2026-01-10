@@ -84,11 +84,13 @@ pub fn calculate_performance(
     let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
         .map_err(|e| e.to_string())?;
 
-    // Calculate total invested
-    let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
+    // Calculate total invested (negative cash flows = money invested)
+    let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount < 0.0).map(|cf| -cf.amount).sum();
 
-    // Calculate absolute gain
-    let total_withdrawn: f64 = cash_flows.iter().filter(|cf| cf.amount < 0.0).map(|cf| -cf.amount).sum();
+    // Calculate total withdrawn (positive cash flows = money withdrawn)
+    let total_withdrawn: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
+
+    // Absolute gain = current value + withdrawals - investments
     let absolute_gain = current_value + total_withdrawn - total_invested;
 
     Ok(PerformanceResult {
@@ -168,6 +170,7 @@ fn get_first_transaction_date(
 }
 
 /// Helper: Get cash flows for IRR
+/// Considers both account-level (DEPOSIT/REMOVAL) and portfolio-level (BUY/SELL/DELIVERY) transactions
 fn get_cash_flows_for_irr(
     conn: &rusqlite::Connection,
     portfolio_id: Option<i64>,
@@ -178,9 +181,57 @@ fn get_cash_flows_for_irr(
 
     let mut cash_flows = Vec::new();
 
-    // Get deposits and withdrawals from accounts linked to portfolios
+    let portfolio_filter = portfolio_id
+        .map(|id| format!("AND owner_id = {}", id))
+        .unwrap_or_default();
+
+    // Get cash flows from portfolio transactions (BUY/SELL/DELIVERY)
+    // These represent actual money in/out of the portfolio
+    let portfolio_sql = format!(
+        r#"
+        SELECT date, txn_type, amount
+        FROM pp_txn
+        WHERE owner_type = 'portfolio'
+          AND txn_type IN ('BUY', 'SELL', 'DELIVERY_INBOUND', 'DELIVERY_OUTBOUND')
+          AND amount IS NOT NULL
+          AND date(date) >= ?1 AND date(date) <= ?2
+          {}
+        ORDER BY date
+        "#,
+        portfolio_filter
+    );
+
+    let mut stmt = conn.prepare(&portfolio_sql)?;
+    let rows = stmt.query_map(
+        params![start_date.to_string(), end_date.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+
+    for row in rows.flatten() {
+        let (date_str, txn_type, amount) = row;
+        if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+            let amount_f = amount as f64 / 100.0;
+            // For IRR: inflows are negative (money going INTO portfolio), outflows are positive
+            let cf_amount = match txn_type.as_str() {
+                "BUY" | "DELIVERY_INBOUND" => -amount_f,  // Money invested (negative cash flow)
+                "SELL" | "DELIVERY_OUTBOUND" => amount_f, // Money withdrawn (positive cash flow)
+                _ => 0.0,
+            };
+            if cf_amount != 0.0 {
+                cash_flows.push(performance::CashFlow { date, amount: cf_amount });
+            }
+        }
+    }
+
+    // Also check for account-level DEPOSIT/REMOVAL (for portfolios with linked accounts)
     if let Some(pid) = portfolio_id {
-        let sql = r#"
+        let account_sql = r#"
             SELECT t.date, t.txn_type, t.amount
             FROM pp_txn t
             JOIN pp_portfolio p ON p.reference_account_id = t.owner_id
@@ -191,7 +242,7 @@ fn get_cash_flows_for_irr(
             ORDER BY t.date
         "#;
 
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare(account_sql)?;
         let rows = stmt.query_map(
             params![pid, start_date.to_string(), end_date.to_string()],
             |row| {
@@ -208,44 +259,8 @@ fn get_cash_flows_for_irr(
             if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
                 let amount_f = amount as f64 / 100.0;
                 let cf_amount = match txn_type.as_str() {
-                    "DEPOSIT" => amount_f,
-                    "REMOVAL" => -amount_f,
-                    _ => 0.0,
-                };
-                if cf_amount != 0.0 {
-                    cash_flows.push(performance::CashFlow { date, amount: cf_amount });
-                }
-            }
-        }
-    } else {
-        let sql = r#"
-            SELECT date, txn_type, amount
-            FROM pp_txn
-            WHERE owner_type = 'account'
-              AND txn_type IN ('DEPOSIT', 'REMOVAL')
-              AND date(date) >= ?1 AND date(date) <= ?2
-            ORDER BY date
-        "#;
-
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(
-            params![start_date.to_string(), end_date.to_string()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )?;
-
-        for row in rows.flatten() {
-            let (date_str, txn_type, amount) = row;
-            if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-                let amount_f = amount as f64 / 100.0;
-                let cf_amount = match txn_type.as_str() {
-                    "DEPOSIT" => amount_f,
-                    "REMOVAL" => -amount_f,
+                    "DEPOSIT" => -amount_f,  // Money invested
+                    "REMOVAL" => amount_f,   // Money withdrawn
                     _ => 0.0,
                 };
                 if cf_amount != 0.0 {
@@ -254,6 +269,9 @@ fn get_cash_flows_for_irr(
             }
         }
     }
+
+    // Sort by date
+    cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
     Ok(cash_flows)
 }

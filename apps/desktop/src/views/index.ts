@@ -5,6 +5,7 @@ export { SecuritiesView, SecuritiesViewWithErrorBoundary } from './Securities';
 export { AccountsView } from './Accounts';
 export { TransactionsView } from './Transactions';
 export { HoldingsView } from './Holdings';
+export { DividendsView } from './Dividends';
 export { AssetStatementView } from './AssetStatement';
 export { WatchlistView } from './Watchlist';
 export { TaxonomiesView } from './Taxonomies';
@@ -17,12 +18,6 @@ export { SettingsView } from './Settings';
 
 // Export types
 export type {
-  PortfolioFile,
   AggregatedHolding,
   PortfolioData,
-  Security,
-  Account,
-  Portfolio,
-  Holding,
-  GroupedHolding,
 } from './types';

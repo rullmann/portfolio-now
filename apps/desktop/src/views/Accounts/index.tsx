@@ -10,31 +10,7 @@ import { AccountFormModal } from '../../components/modals';
 import { formatCurrency } from '../../lib/types';
 import { AccountCardSkeleton } from '../../components/common';
 
-// Legacy types for direct file viewing
-interface LegacyAccountTransaction {
-  uuid: string;
-  date: string;
-  transactionType: string;
-  amount: { amount: number; currency: string };
-  shares?: number | null;
-}
-
-interface LegacyAccount {
-  uuid: string;
-  name: string;
-  currency: string;
-  transactions: LegacyAccountTransaction[];
-}
-
-interface PortfolioFile {
-  accounts?: LegacyAccount[];
-}
-
-interface AccountsViewProps {
-  portfolioFile: PortfolioFile | null;
-}
-
-export function AccountsView({ portfolioFile }: AccountsViewProps) {
+export function AccountsView() {
   const [dbAccounts, setDbAccounts] = useState<AccountData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,16 +72,12 @@ export function AccountsView({ portfolioFile }: AccountsViewProps) {
     loadAccounts();
   };
 
-  // Use DB data if available, otherwise fall back to legacy file data
-  const hasDbData = dbAccounts.length > 0;
-  const legacyAccounts = portfolioFile?.accounts || [];
-
   return (
     <div className="space-y-4">
       {/* Header with actions */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">
-          Konten ({hasDbData ? dbAccounts.length : legacyAccounts.length})
+          Konten ({dbAccounts.length})
         </h2>
         <div className="flex gap-2">
           <button
@@ -144,8 +116,8 @@ export function AccountsView({ portfolioFile }: AccountsViewProps) {
           <AccountCardSkeleton />
           <AccountCardSkeleton />
         </div>
-      ) : hasDbData ? (
-        /* Database accounts grid */
+      ) : dbAccounts.length > 0 ? (
+        /* Accounts grid */
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {dbAccounts.map((account) => (
             <div
@@ -208,29 +180,6 @@ export function AccountsView({ portfolioFile }: AccountsViewProps) {
                     </span>
                   </div>
                 )}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : legacyAccounts.length > 0 ? (
-        /* Legacy file accounts */
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {legacyAccounts.map((account, index) => (
-            <div
-              key={account.uuid || `acc-${index}`}
-              className="bg-card rounded-lg border border-border p-4"
-            >
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-primary/10 rounded-lg">
-                  <Wallet size={20} className="text-primary" />
-                </div>
-                <div>
-                  <h3 className="font-medium">{account.name || 'Unbenannt'}</h3>
-                  <p className="text-sm text-muted-foreground">{account.currency}</p>
-                </div>
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {account.transactions?.length || 0} Buchungen
               </div>
             </div>
           ))}

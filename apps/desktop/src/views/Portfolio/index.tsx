@@ -5,55 +5,27 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Briefcase } from 'lucide-react';
 import type { PortfolioData } from '../../lib/types';
-import { getPortfolios, deletePPPortfolio, getPortfolioHistory } from '../../lib/api';
+import { getPortfolios, deletePPPortfolio } from '../../lib/api';
 import { PortfolioFormModal } from '../../components/modals';
-import { TradingViewPortfolioChart } from '../../components/charts';
-
-// Legacy types for direct file viewing
-interface LegacyPortfolioTransaction {
-  uuid: string;
-  date: string;
-  transactionType: string;
-  amount: { amount: number; currency: string };
-  shares: number;
-  securityUuid?: string | null;
-}
-
-interface LegacyPortfolio {
-  uuid: string;
-  name: string;
-  referenceAccountUuid?: string | null;
-  transactions: LegacyPortfolioTransaction[];
-}
-
-interface PortfolioFile {
-  portfolios?: LegacyPortfolio[];
-}
 
 interface PortfolioViewProps {
-  portfolioFile: PortfolioFile | null;
-  dbPortfolios?: PortfolioData[]; // Optional for backward compatibility
+  dbPortfolios?: PortfolioData[];
 }
 
-export function PortfolioView({ portfolioFile, dbPortfolios: initialDbPortfolios }: PortfolioViewProps) {
+export function PortfolioView({ dbPortfolios: initialDbPortfolios }: PortfolioViewProps) {
   const [dbPortfolios, setDbPortfolios] = useState<PortfolioData[]>(initialDbPortfolios || []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPortfolio, setEditingPortfolio] = useState<PortfolioData | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [portfolioHistory, setPortfolioHistory] = useState<Array<{ date: string; value: number }>>([]);
 
   const loadPortfolios = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [data, history] = await Promise.all([
-        getPortfolios(),
-        getPortfolioHistory().catch(() => []),
-      ]);
+      const data = await getPortfolios();
       setDbPortfolios(data);
-      setPortfolioHistory(history);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -102,16 +74,12 @@ export function PortfolioView({ portfolioFile, dbPortfolios: initialDbPortfolios
     loadPortfolios();
   };
 
-  // Use DB data if available, otherwise fall back to legacy file data
-  const hasDbData = dbPortfolios.length > 0;
-  const legacyPortfolios = portfolioFile?.portfolios || [];
-
   return (
     <div className="space-y-4">
       {/* Header with actions */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">
-          Portfolios ({hasDbData ? dbPortfolios.length : legacyPortfolios.length})
+          Portfolios ({dbPortfolios.length})
         </h2>
         <div className="flex gap-2">
           <button
@@ -140,20 +108,13 @@ export function PortfolioView({ portfolioFile, dbPortfolios: initialDbPortfolios
         </div>
       )}
 
-      {/* Portfolio Value Chart */}
-      {portfolioHistory.length > 0 && (
-        <div className="bg-card rounded-lg border border-border p-6">
-          <TradingViewPortfolioChart data={portfolioHistory} height={280} />
-        </div>
-      )}
-
       {/* Main content */}
       {isLoading && dbPortfolios.length === 0 ? (
         <div className="bg-card rounded-lg border border-border p-6 text-center text-muted-foreground">
           Lade Portfolios...
         </div>
-      ) : hasDbData ? (
-        /* Database portfolios grid */
+      ) : dbPortfolios.length > 0 ? (
+        /* Portfolios grid */
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {dbPortfolios.map((portfolio) => (
             <div
@@ -222,31 +183,9 @@ export function PortfolioView({ portfolioFile, dbPortfolios: initialDbPortfolios
             </div>
           ))}
         </div>
-      ) : legacyPortfolios.length > 0 ? (
-        /* Legacy file portfolios */
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {legacyPortfolios.map((portfolio, index) => (
-            <div
-              key={portfolio.uuid || `portfolio-${index}`}
-              className="bg-card rounded-lg border border-border p-4"
-            >
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-primary/10 rounded-lg">
-                  <Briefcase size={20} className="text-primary" />
-                </div>
-                <div>
-                  <h3 className="font-medium">{portfolio.name || 'Unbenannt'}</h3>
-                </div>
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {portfolio.transactions?.length || 0} Transaktionen
-              </div>
-            </div>
-          ))}
-        </div>
       ) : (
         <div className="bg-card rounded-lg border border-border p-6 text-center text-muted-foreground">
-          Keine Portfolios vorhanden. Importieren Sie eine .portfolio Datei oder erstellen Sie ein neues Portfolio.
+          Keine Portfolios vorhanden. Erstellen Sie ein neues Portfolio oder importieren Sie eine PP-Datei.
         </div>
       )}
 

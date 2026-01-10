@@ -3,23 +3,29 @@
  *
  * Refactored modular structure:
  * - Store: Zustand for global state management
+ * - TanStack Query: Server state management with caching
  * - Layout: Sidebar, Header, ErrorBanner, LoadingIndicator
  * - Views: Dashboard, Portfolio, Securities, Accounts, Transactions, Reports, Settings
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import './index.css';
+
+// TanStack Query
+import { queryClient, invalidateAllQueries } from './lib/queries';
+
+// Error Handling
+import { setGlobalErrorHandler } from './lib/errors';
+import { toast } from './store';
 
 // Store
 import {
   useUIStore,
   useAppStore,
-  usePortfolioFileStore,
-  useDataModeStore,
   useSettingsStore,
-  toast,
 } from './store';
 
 // Layout components
@@ -39,6 +45,7 @@ import {
   AccountsView,
   TransactionsView,
   HoldingsView,
+  DividendsView,
   AssetStatementView,
   WatchlistView,
   TaxonomiesView,
@@ -51,7 +58,7 @@ import {
 } from './views';
 
 // Types
-import type { PortfolioFile, AggregatedHolding, PortfolioData } from './views';
+import type { AggregatedHolding, PortfolioData } from './views';
 
 // ============================================================================
 // Main App Component
@@ -60,12 +67,7 @@ import type { PortfolioFile, AggregatedHolding, PortfolioData } from './views';
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { currentFilePath, setCurrentFilePath, setHasUnsavedChanges } = usePortfolioFileStore();
-  const { setUseDbData } = useDataModeStore();
   const { theme } = useSettingsStore();
-
-  // Legacy portfolio file state (for direct file editing)
-  const [portfolioFile, setPortfolioFile] = useState<PortfolioFile | null>(null);
 
   // ============================================================================
   // Theme Management
@@ -116,7 +118,7 @@ function App() {
   // Data Loading
   // ============================================================================
 
-  const loadDbHoldings = useCallback(async () => {
+  const loadDbData = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -143,157 +145,34 @@ function App() {
       } catch (investedErr) {
         console.warn('Could not load invested capital history:', investedErr);
       }
-
-      setUseDbData(true);
     } catch (err) {
-      setError(`Fehler beim Laden der Holdings: ${err}`);
+      setError(`Fehler beim Laden der Daten: ${err}`);
     } finally {
       setLoading(false);
     }
-  }, [setLoading, setError, setUseDbData]);
+  }, [setLoading, setError]);
 
   // Load DB data on mount
   useEffect(() => {
-    loadDbHoldings();
-  }, [loadDbHoldings]);
+    loadDbData();
+  }, [loadDbData]);
 
-  // Sync quotes on startup
+  // Set up global error handler
   useEffect(() => {
-    const syncQuotesOnStartup = async () => {
-      try {
-        // Small delay to let UI render first
-        await new Promise(resolve => setTimeout(resolve, 1000));
+    setGlobalErrorHandler((error) => {
+      // Show toast for user-facing errors
+      toast.error(error.message);
+      // Also set the app error state for persistent display
+      setError(error.message);
+    });
+  }, [setError]);
 
-        const result = await invoke<{ total: number; success: number; errors: number }>('sync_all_prices', {
-          onlyHeld: false, // Sync all securities including watchlist
-          apiKeys: null,
-        });
-
-        if (result.success > 0) {
-          toast.success(`${result.success} Kurse aktualisiert`);
-          // Reload holdings to update values
-          loadDbHoldings();
-        }
-        if (result.errors > 0) {
-          console.warn(`${result.errors} Kurse konnten nicht aktualisiert werden`);
-        }
-      } catch (err) {
-        console.warn('Quote sync on startup failed:', err);
-      }
-    };
-
-    syncQuotesOnStartup();
-  }, []); // Only run once on mount
 
   // ============================================================================
-  // File Operations
+  // Import Handler
   // ============================================================================
 
-  const handleNewFile = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const newPortfolio = await invoke<PortfolioFile>('create_new_portfolio', {
-        baseCurrency: 'EUR',
-      });
-      setPortfolioFile(newPortfolio);
-      setCurrentFilePath(null);
-      setHasUnsavedChanges(true);
-    } catch (err) {
-      setError(`Fehler beim Erstellen: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [setLoading, setError, setCurrentFilePath, setHasUnsavedChanges]);
-
-  const handleOpenFile = useCallback(async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [
-          { name: 'Portfolio Performance', extensions: ['portfolio'] },
-          { name: 'Alle Dateien', extensions: ['*'] },
-        ],
-      });
-
-      if (selected) {
-        setLoading(true);
-        setError(null);
-        const result = await invoke<{ path: string; portfolio: PortfolioFile }>('open_portfolio_file', {
-          path: selected,
-        });
-        setPortfolioFile(result.portfolio);
-        setCurrentFilePath(result.path);
-        setHasUnsavedChanges(false);
-      }
-    } catch (err) {
-      setError(`Fehler beim Öffnen: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [setLoading, setError, setCurrentFilePath, setHasUnsavedChanges]);
-
-  const handleSaveFile = useCallback(async () => {
-    if (!portfolioFile) return;
-
-    try {
-      let savePath = currentFilePath;
-
-      if (!savePath) {
-        const selected = await save({
-          filters: [
-            { name: 'Portfolio Performance', extensions: ['portfolio'] },
-          ],
-          defaultPath: 'portfolio.portfolio',
-        });
-        if (!selected) return;
-        savePath = selected;
-      }
-
-      setLoading(true);
-      setError(null);
-      await invoke('save_portfolio_file', {
-        path: savePath,
-        portfolio: portfolioFile,
-      });
-      setCurrentFilePath(savePath);
-      setHasUnsavedChanges(false);
-    } catch (err) {
-      setError(`Fehler beim Speichern: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [portfolioFile, currentFilePath, setLoading, setError, setCurrentFilePath, setHasUnsavedChanges]);
-
-  const handleSaveAsFile = useCallback(async () => {
-    if (!portfolioFile) return;
-
-    try {
-      const selected = await save({
-        filters: [
-          { name: 'Portfolio Performance', extensions: ['portfolio'] },
-        ],
-        defaultPath: currentFilePath || 'portfolio.portfolio',
-      });
-
-      if (selected) {
-        setLoading(true);
-        setError(null);
-        await invoke('save_portfolio_file', {
-          path: selected,
-          portfolio: portfolioFile,
-        });
-        setCurrentFilePath(selected);
-        setHasUnsavedChanges(false);
-      }
-    } catch (err) {
-      setError(`Fehler beim Speichern: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [portfolioFile, currentFilePath, setLoading, setError, setCurrentFilePath, setHasUnsavedChanges]);
-
-  const handleImportToDb = useCallback(async () => {
+  const handleImportPP = useCallback(async () => {
     try {
       const selected = await open({
         multiple: false,
@@ -308,15 +187,20 @@ function App() {
 
         await invoke('import_pp_file', { path: selected });
 
-        // Reload holdings
-        await loadDbHoldings();
+        // Invalidate all TanStack Query caches
+        invalidateAllQueries();
+
+        // Reload data
+        await loadDbData();
+
+        toast.success('Import erfolgreich abgeschlossen');
       }
     } catch (err) {
       setError(`Fehler beim Import: ${err}`);
     } finally {
       setLoading(false);
     }
-  }, [loadDbHoldings, setLoading, setError]);
+  }, [loadDbData, setLoading, setError]);
 
   // ============================================================================
   // View Router
@@ -327,26 +211,26 @@ function App() {
       case 'dashboard':
         return (
           <DashboardView
-            portfolioFile={portfolioFile}
             dbHoldings={dbHoldings}
             dbPortfolios={dbPortfolios}
             dbPortfolioHistory={dbPortfolioHistory}
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
-            onOpenFile={handleOpenFile}
-            onImportToDb={handleImportToDb}
-            onRefreshHoldings={loadDbHoldings}
+            onImportPP={handleImportPP}
+            onRefresh={loadDbData}
           />
         );
       case 'portfolio':
-        return <PortfolioView portfolioFile={portfolioFile} dbPortfolios={dbPortfolios} />;
+        return <PortfolioView dbPortfolios={dbPortfolios} />;
       case 'securities':
-        return <SecuritiesView portfolioFile={portfolioFile} />;
+        return <SecuritiesView />;
       case 'accounts':
-        return <AccountsView portfolioFile={portfolioFile} />;
+        return <AccountsView />;
       case 'transactions':
-        return <TransactionsView portfolioFile={portfolioFile} />;
+        return <TransactionsView />;
       case 'holdings':
         return <HoldingsView dbHoldings={dbHoldings} dbPortfolios={dbPortfolios} />;
+      case 'dividends':
+        return <DividendsView />;
       case 'asset-statement':
         return <AssetStatementView dbHoldings={dbHoldings} dbPortfolios={dbPortfolios} />;
       case 'watchlist':
@@ -368,14 +252,12 @@ function App() {
       default:
         return (
           <DashboardView
-            portfolioFile={portfolioFile}
             dbHoldings={dbHoldings}
             dbPortfolios={dbPortfolios}
             dbPortfolioHistory={dbPortfolioHistory}
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
-            onOpenFile={handleOpenFile}
-            onImportToDb={handleImportToDb}
-            onRefreshHoldings={loadDbHoldings}
+            onImportPP={handleImportPP}
+            onRefresh={loadDbData}
           />
         );
     }
@@ -386,43 +268,40 @@ function App() {
   // ============================================================================
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* Skip link for keyboard users */}
-      <a href="#main-content" className="skip-link">
-        Zum Hauptinhalt springen
-      </a>
+    <QueryClientProvider client={queryClient}>
+      <div className="flex h-screen bg-background">
+        {/* Skip link for keyboard users */}
+        <a href="#main-content" className="skip-link">
+          Zum Hauptinhalt springen
+        </a>
 
-      {/* Sidebar */}
-      <Sidebar />
+        {/* Sidebar */}
+        <Sidebar />
 
-      {/* Main Content */}
-      <main id="main-content" className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <Header
-          onNewFile={handleNewFile}
-          onOpenFile={handleOpenFile}
-          onSaveFile={handleSaveFile}
-          onSaveAsFile={handleSaveAsFile}
-          onImportToDb={handleImportToDb}
-          onRefresh={loadDbHoldings}
-          hasPortfolioFile={!!portfolioFile}
-        />
+        {/* Main Content */}
+        <main id="main-content" className="flex-1 flex flex-col overflow-hidden">
+          {/* Header */}
+          <Header
+            onImportPP={handleImportPP}
+            onRefresh={loadDbData}
+          />
 
-        {/* Error Banner */}
-        <ErrorBanner />
+          {/* Error Banner */}
+          <ErrorBanner />
 
-        {/* Loading Indicator */}
-        <LoadingIndicator />
+          {/* Loading Indicator */}
+          <LoadingIndicator />
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-auto p-4">
-          {renderView()}
-        </div>
-      </main>
+          {/* Content Area */}
+          <div className="flex-1 overflow-auto p-4">
+            {renderView()}
+          </div>
+        </main>
 
-      {/* Toast notifications */}
-      <ToastContainer />
-    </div>
+        {/* Toast notifications */}
+        <ToastContainer />
+      </div>
+    </QueryClientProvider>
   );
 }
 

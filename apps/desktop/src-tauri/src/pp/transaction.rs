@@ -287,6 +287,10 @@ pub struct AccountTransaction {
     pub source: Option<String>,
     /// Last update timestamp
     pub updated_at: Option<String>,
+    /// Target account UUID for transfers
+    pub other_account_uuid: Option<String>,
+    /// Cross-entry update timestamp
+    pub other_updated_at: Option<String>,
 }
 
 impl AccountTransaction {
@@ -308,6 +312,8 @@ impl AccountTransaction {
             note: None,
             source: None,
             updated_at: None,
+            other_account_uuid: None,
+            other_updated_at: None,
         }
     }
 
@@ -352,6 +358,10 @@ pub struct PortfolioTransaction {
     pub source: Option<String>,
     /// Last update timestamp
     pub updated_at: Option<String>,
+    /// Target portfolio UUID for transfers
+    pub other_portfolio_uuid: Option<String>,
+    /// Cross-entry update timestamp
+    pub other_updated_at: Option<String>,
 }
 
 impl PortfolioTransaction {
@@ -374,6 +384,8 @@ impl PortfolioTransaction {
             note: None,
             source: None,
             updated_at: None,
+            other_portfolio_uuid: None,
+            other_updated_at: None,
         }
     }
 

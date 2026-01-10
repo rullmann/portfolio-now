@@ -68,6 +68,20 @@ pub async fn fetch_historical(
     to: NaiveDate,
     adjusted: bool,
 ) -> Result<Vec<Quote>> {
+    let result = fetch_historical_with_splits(symbol, from, to, adjusted).await?;
+    Ok(result.quotes)
+}
+
+/// Historische Kurse MIT Split-Events abrufen
+///
+/// Verwendet Yahoo's `events=history,splits` Parameter um sowohl Kurse
+/// als auch Stock-Split Events zu erhalten.
+pub async fn fetch_historical_with_splits(
+    symbol: &str,
+    from: NaiveDate,
+    to: NaiveDate,
+    adjusted: bool,
+) -> Result<super::HistoricalDataWithSplits> {
     // Yahoo verwendet Unix-Timestamps
     let from_ts = from
         .and_hms_opt(0, 0, 0)
@@ -78,13 +92,14 @@ pub async fn fetch_historical(
         .map(|dt| dt.and_utc().timestamp())
         .unwrap_or(0);
 
+    // Wichtig: events=history,splits um Split-Events zu erhalten
     let url = format!(
-        "{}?period1={}&period2={}&interval=1d&events=history",
+        "{}?period1={}&period2={}&interval=1d&events=history,splits",
         symbol_url(symbol),
         from_ts,
         to_ts
     );
-    log::debug!("Fetching Yahoo historical for {} from {}", symbol, url);
+    log::debug!("Fetching Yahoo historical with splits for {} from {}", symbol, url);
 
     let client = create_client()?;
     let response = client
@@ -113,7 +128,89 @@ pub async fn fetch_historical(
         return Err(anyhow!("Yahoo API error for {}: {} - {}", symbol, code, desc));
     }
 
-    parse_historical_quotes(&data, adjusted)
+    // Parse quotes
+    let quotes = parse_historical_quotes(&data, adjusted)?;
+
+    // Parse split events
+    let splits = parse_split_events(&data);
+
+    if !splits.is_empty() {
+        log::info!("Found {} split events for {}", splits.len(), symbol);
+        for split in &splits {
+            log::info!("  Split on {}: {}", split.date, split.ratio_str());
+        }
+    }
+
+    Ok(super::HistoricalDataWithSplits { quotes, splits })
+}
+
+/// Split-Events aus Yahoo Response parsen
+///
+/// Yahoo liefert Splits im Format:
+/// ```json
+/// "events": {
+///   "splits": {
+///     "1598880600": {
+///       "date": 1598880600,
+///       "numerator": 4.0,
+///       "denominator": 1.0,
+///       "splitRatio": "4:1"
+///     }
+///   }
+/// }
+/// ```
+fn parse_split_events(data: &serde_json::Value) -> Vec<super::SplitEvent> {
+    let mut splits = Vec::new();
+
+    let events = match data
+        .get("chart")
+        .and_then(|c| c.get("result"))
+        .and_then(|r| r.get(0))
+        .and_then(|r| r.get("events"))
+        .and_then(|e| e.get("splits"))
+        .and_then(|s| s.as_object())
+    {
+        Some(e) => e,
+        None => return splits,
+    };
+
+    for (_timestamp_key, split_data) in events {
+        // Parse timestamp
+        let timestamp = match split_data.get("date").and_then(|d| d.as_i64()) {
+            Some(ts) => ts,
+            None => continue,
+        };
+
+        let date = match chrono::DateTime::from_timestamp(timestamp, 0) {
+            Some(dt) => dt.date_naive(),
+            None => continue,
+        };
+
+        // Parse numerator and denominator
+        let numerator = split_data
+            .get("numerator")
+            .and_then(|n| n.as_f64())
+            .unwrap_or(1.0);
+        let denominator = split_data
+            .get("denominator")
+            .and_then(|d| d.as_f64())
+            .unwrap_or(1.0);
+
+        // Skip invalid splits
+        if denominator == 0.0 || numerator == 0.0 {
+            continue;
+        }
+
+        splits.push(super::SplitEvent {
+            date,
+            numerator,
+            denominator,
+        });
+    }
+
+    // Sort by date
+    splits.sort_by_key(|s| s.date);
+    splits
 }
 
 /// Symbol URL erstellen (encoded)
@@ -366,6 +463,7 @@ pub async fn search(query: &str) -> Result<Vec<YahooSearchResult>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[tokio::test]
     async fn test_search() {
@@ -403,5 +501,55 @@ mod tests {
         let quotes = result.unwrap();
         assert!(!quotes.is_empty());
         println!("Got {} historical quotes for AAPL", quotes.len());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_historical_with_splits_apple() {
+        // Apple hatte einen 4:1 Split am 2020-08-31
+        let from = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2020, 12, 31).unwrap();
+
+        let result = fetch_historical_with_splits("AAPL", from, to, false).await;
+        assert!(result.is_ok(), "Failed to fetch with splits: {:?}", result.err());
+
+        let data = result.unwrap();
+        assert!(!data.quotes.is_empty(), "No quotes returned");
+
+        // Should find the 4:1 split
+        println!("Found {} splits for AAPL in 2020:", data.splits.len());
+        for split in &data.splits {
+            println!("  {} - {} (multiplier: {})", split.date, split.ratio_str(), split.multiplier());
+        }
+
+        // Apple 4:1 split on Aug 31, 2020
+        let aug_split = data.splits.iter().find(|s| s.date.month() == 8 && s.date.year() == 2020);
+        assert!(aug_split.is_some(), "Apple 4:1 split not found");
+
+        let split = aug_split.unwrap();
+        assert!((split.multiplier() - 4.0).abs() < 0.01, "Expected 4:1 split, got {}", split.ratio_str());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_historical_with_splits_amazon() {
+        // Amazon hatte einen 20:1 Split am 2022-06-06
+        let from = NaiveDate::from_ymd_opt(2022, 1, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2022, 12, 31).unwrap();
+
+        let result = fetch_historical_with_splits("AMZN", from, to, false).await;
+        assert!(result.is_ok(), "Failed to fetch with splits: {:?}", result.err());
+
+        let data = result.unwrap();
+
+        println!("Found {} splits for AMZN in 2022:", data.splits.len());
+        for split in &data.splits {
+            println!("  {} - {} (multiplier: {})", split.date, split.ratio_str(), split.multiplier());
+        }
+
+        // Amazon 20:1 split on June 6, 2022
+        let june_split = data.splits.iter().find(|s| s.date.month() == 6 && s.date.year() == 2022);
+        assert!(june_split.is_some(), "Amazon 20:1 split not found");
+
+        let split = june_split.unwrap();
+        assert!((split.multiplier() - 20.0).abs() < 0.01, "Expected 20:1 split, got {}", split.ratio_str());
     }
 }

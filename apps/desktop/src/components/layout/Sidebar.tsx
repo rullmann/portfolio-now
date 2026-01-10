@@ -22,6 +22,7 @@ import {
   PieChart,
   Table2,
   CandlestickChart,
+  Coins,
 } from 'lucide-react';
 import { useUIStore, navItems, type NavItem } from '../../store';
 
@@ -41,6 +42,7 @@ const iconComponents = {
   PieChart,
   Table2,
   CandlestickChart,
+  Coins,
 };
 
 function getIcon(iconName: string) {

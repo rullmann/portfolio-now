@@ -54,6 +54,47 @@ pub struct ExchangeRate {
     pub rate: f64,
 }
 
+/// Stock Split Event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitEvent {
+    pub date: NaiveDate,
+    /// New shares per old share (e.g., 4.0 for a 4:1 split)
+    pub numerator: f64,
+    /// Old shares (usually 1.0)
+    pub denominator: f64,
+}
+
+impl SplitEvent {
+    /// Get the split ratio as "numerator:denominator" string (e.g., "4:1")
+    pub fn ratio_str(&self) -> String {
+        format!("{}:{}", self.numerator as i32, self.denominator as i32)
+    }
+
+    /// Get the split multiplier (how many new shares per old share)
+    pub fn multiplier(&self) -> f64 {
+        self.numerator / self.denominator
+    }
+
+    /// Check if this is a forward split (more shares after)
+    pub fn is_forward_split(&self) -> bool {
+        self.numerator > self.denominator
+    }
+
+    /// Check if this is a reverse split (fewer shares after)
+    pub fn is_reverse_split(&self) -> bool {
+        self.numerator < self.denominator
+    }
+}
+
+/// Result of fetching historical data with split events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalDataWithSplits {
+    pub quotes: Vec<Quote>,
+    pub splits: Vec<SplitEvent>,
+}
+
 /// Provider-Typ für die Konfiguration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

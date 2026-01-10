@@ -69,6 +69,7 @@ export interface SecurityData {
   uuid: string;
   name: string;
   currency: string;
+  targetCurrency?: string;  // Target currency for conversion (PP field)
   isin?: string;
   wkn?: string;
   ticker?: string;
@@ -83,6 +84,9 @@ export interface SecurityData {
   pricesCount: number;
   currentHoldings: number; // Total shares held across all portfolios
   customLogo?: string; // Base64-encoded custom logo
+  note?: string;
+  attributes?: Record<string, string>;  // Custom attributes (PP field)
+  properties?: Record<string, string>;  // System properties (PP field)
 }
 
 export interface AccountData {
@@ -93,6 +97,9 @@ export interface AccountData {
   isRetired: boolean;
   transactionsCount: number;
   balance: number;
+  note?: string;
+  updatedAt?: string;
+  attributes?: Record<string, string>;  // Custom attributes (PP field)
 }
 
 export interface PortfolioData {
@@ -100,9 +107,13 @@ export interface PortfolioData {
   uuid: string;
   name: string;
   referenceAccountName: string | null;
+  referenceAccountId?: number;
   isRetired: boolean;
   transactionsCount: number;
   holdingsCount: number;
+  note?: string;
+  updatedAt?: string;
+  attributes?: Record<string, string>;  // Custom attributes (PP field)
 }
 
 export interface TransactionData {
@@ -110,17 +121,27 @@ export interface TransactionData {
   uuid: string;
   ownerType: string;
   ownerName: string;
+  ownerId: number;
   txnType: string;
   date: string;
   amount: number;
   currency: string;
   shares?: number;
+  securityId?: number;
   securityName?: string;
   securityUuid?: string;
   note?: string;
   fees: number;
   taxes: number;
   hasForex: boolean;
+  source?: string;
+  updatedAt?: string;
+  // Transfer tracking (PP fields)
+  otherAccountId?: number;
+  otherAccountUuid?: string;
+  otherPortfolioId?: number;
+  otherPortfolioUuid?: string;
+  otherUpdatedAt?: string;
 }
 
 export interface PriceData {
@@ -305,6 +326,7 @@ export function isPositiveTransaction(type: string): boolean {
 export interface CreateSecurityRequest {
   name: string;
   currency: string;
+  targetCurrency?: string;  // Target currency for conversion
   isin?: string;
   wkn?: string;
   ticker?: string;
@@ -313,11 +335,14 @@ export interface CreateSecurityRequest {
   latestFeed?: string;     // Provider for current quotes
   latestFeedUrl?: string;  // URL/suffix for current quotes
   note?: string;
+  attributes?: Record<string, string>;
+  properties?: Record<string, string>;
 }
 
 export interface UpdateSecurityRequest {
   name?: string;
   currency?: string;
+  targetCurrency?: string;  // Target currency for conversion
   isin?: string;
   wkn?: string;
   ticker?: string;
@@ -327,6 +352,8 @@ export interface UpdateSecurityRequest {
   latestFeedUrl?: string;  // URL/suffix for current quotes
   note?: string;
   isRetired?: boolean;
+  attributes?: Record<string, string>;
+  properties?: Record<string, string>;
 }
 
 export interface SecurityResult {
@@ -349,6 +376,7 @@ export interface CreateAccountRequest {
   name: string;
   currency: string;
   note?: string;
+  attributes?: Record<string, string>;
 }
 
 export interface UpdateAccountRequest {
@@ -356,6 +384,7 @@ export interface UpdateAccountRequest {
   currency?: string;
   note?: string;
   isRetired?: boolean;
+  attributes?: Record<string, string>;
 }
 
 export interface AccountResult {
@@ -371,6 +400,7 @@ export interface CreatePortfolioRequest {
   name: string;
   referenceAccountId?: number;
   note?: string;
+  attributes?: Record<string, string>;
 }
 
 export interface UpdatePortfolioRequest {
@@ -378,6 +408,7 @@ export interface UpdatePortfolioRequest {
   referenceAccountId?: number;
   note?: string;
   isRetired?: boolean;
+  attributes?: Record<string, string>;
 }
 
 export interface PortfolioResult {
@@ -414,6 +445,8 @@ export interface CreateTransactionRequest {
   note?: string;
   units?: TransactionUnitData[];
   referenceAccountId?: number; // For portfolio BUY/SELL
+  otherAccountId?: number;     // For TRANSFER_IN/OUT (account transfers)
+  otherPortfolioId?: number;   // For TRANSFER_IN/OUT (portfolio transfers)
 }
 
 export interface TransactionResult {
@@ -803,6 +836,7 @@ export interface ApplyStockSplitRequest {
   ratioFrom: number;
   ratioTo: number;
   adjustPrices: boolean;
+  adjustFifo?: boolean;
   note?: string;
 }
 
@@ -874,12 +908,22 @@ export interface SecurityMatch {
   existingName?: string;
 }
 
+export interface PotentialDuplicate {
+  transactionIndex: number;
+  existingTxnId: number;
+  date: string;
+  amount: number;
+  securityName?: string;
+  txnType: string;
+}
+
 export interface PdfImportPreview {
   bank: string;
   transactions: ParsedTransaction[];
   warnings: string[];
   newSecurities: SecurityMatch[];
   matchedSecurities: SecurityMatch[];
+  potentialDuplicates: PotentialDuplicate[];
 }
 
 export interface PdfImportResult {
@@ -1008,4 +1052,79 @@ export interface BenchmarkDataPoint {
   portfolioReturn: number;
   benchmarkValue: number;
   benchmarkReturn: number;
+}
+
+// ============================================================================
+// Aggregated Holdings Types (for get_all_holdings)
+// ============================================================================
+
+export interface AggregatedHolding {
+  isin: string;
+  name: string;
+  currency: string;
+  totalShares: number;
+  currentPrice?: number;
+  currentValue?: number;
+  totalCostBasis: number;
+  gainLoss?: number;
+  gainLossPercent?: number;
+  securityIds: number[];
+  customLogo?: string;
+  ticker?: string;
+  latestPriceDate?: string;
+}
+
+// ============================================================================
+// PDF Export Types
+// ============================================================================
+
+export interface PdfExportResult {
+  success: boolean;
+  path: string;
+  pages: number;
+  error?: string;
+}
+
+// ============================================================================
+// Stock Split Detection Types
+// ============================================================================
+
+export interface DetectedSplit {
+  securityId: number;
+  securityName: string;
+  date: string;
+  suggestedRatio: string;
+  priceBeforeNormalized: number;
+  priceAfterNormalized: number;
+  confidence: number;
+}
+
+export interface SplitDetectionResult {
+  detectedSplits: DetectedSplit[];
+  errors: string[];
+}
+
+// ============================================================================
+// Portfolio Value History Types
+// ============================================================================
+
+export interface PortfolioValuePoint {
+  date: string;
+  value: number;
+  investedCapital?: number;
+}
+
+export interface InvestedCapitalPoint {
+  date: string;
+  amount: number;
+}
+
+// ============================================================================
+// FIFO Rebuild Types
+// ============================================================================
+
+export interface RebuildFifoResult {
+  securitiesProcessed: number;
+  lotsCreated: number;
+  consumptionsCreated: number;
 }

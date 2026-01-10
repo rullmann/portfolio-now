@@ -4,11 +4,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Database, Plus, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
-import { useDataModeStore } from '../../store';
+import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText } from 'lucide-react';
 import { getTransactionTypeLabel } from '../../lib/types';
 import { deleteTransaction } from '../../lib/api';
-import { TransactionFormModal } from '../../components/modals';
+import { TransactionFormModal, PdfImportModal } from '../../components/modals';
 import { TableSkeleton } from '../../components/common';
 
 // Types
@@ -30,34 +29,10 @@ interface TransactionData {
   hasForex: boolean;
 }
 
-interface AccountTransaction {
-  uuid: string;
-  date: string;
-  transactionType: string;
-  amount: { amount: number; currency: string };
-  shares?: number | null;
-}
-
-interface Account {
-  uuid: string;
-  name: string;
-  currency: string;
-  transactions: AccountTransaction[];
-}
-
-interface PortfolioFile {
-  accounts?: Account[];
-}
-
-interface TransactionsViewProps {
-  portfolioFile: PortfolioFile | null;
-}
-
 const POSITIVE_TYPES = ['BUY', 'DELIVERY_INBOUND', 'TRANSFER_IN', 'DEPOSIT', 'DIVIDENDS', 'INTEREST', 'FEES_REFUND', 'TAX_REFUND'];
 const NEGATIVE_TYPES = ['SELL', 'DELIVERY_OUTBOUND', 'TRANSFER_OUT', 'REMOVAL', 'FEES', 'TAXES', 'INTEREST_CHARGE'];
 
-export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
-  const { useDbData } = useDataModeStore();
+export function TransactionsView() {
   const [dbTransactions, setDbTransactions] = useState<TransactionData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,12 +40,11 @@ export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
   const [filterTxnType, setFilterTxnType] = useState<string>('all');
   const [displayLimit, setDisplayLimit] = useState(100);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isPdfImportOpen, setIsPdfImportOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // Load transactions from database
   const loadTransactions = useCallback(async () => {
-    if (!useDbData) return;
-
     setIsLoading(true);
     setError(null);
     try {
@@ -88,7 +62,7 @@ export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [useDbData]);
+  }, []);
 
   useEffect(() => {
     loadTransactions();
@@ -128,10 +102,8 @@ export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
     loadTransactions();
   };
 
-  // Show DB-based transactions
-  if (useDbData) {
-    // Filter transactions by type
-    const filteredTransactions = dbTransactions.filter(tx => {
+  // Filter transactions by type
+  const filteredTransactions = dbTransactions.filter(tx => {
       if (filterOwnerType !== 'all' && tx.ownerType !== filterOwnerType) return false;
       if (filterTxnType !== 'all' && tx.txnType !== filterTxnType) return false;
       return true;
@@ -155,6 +127,14 @@ export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
             >
               <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
               Aktualisieren
+            </button>
+            <button
+              onClick={() => setIsPdfImportOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+              title="Bankdokumente (PDF) importieren"
+            >
+              <FileText size={16} />
+              PDF Import
             </button>
             <button
               onClick={handleCreate}
@@ -306,67 +286,16 @@ export function TransactionsView({ portfolioFile }: TransactionsViewProps) {
           onClose={handleModalClose}
           onSuccess={handleModalSuccess}
         />
+
+        {/* PDF Import Modal */}
+        <PdfImportModal
+          isOpen={isPdfImportOpen}
+          onClose={() => setIsPdfImportOpen(false)}
+          onSuccess={() => {
+            setIsPdfImportOpen(false);
+            loadTransactions();
+          }}
+        />
       </div>
     );
-  }
-
-  if (!portfolioFile) {
-    return (
-      <div className="bg-card rounded-lg border border-border p-6">
-        <h2 className="text-lg font-semibold mb-4">Buchungen</h2>
-        <p className="text-muted-foreground">
-          Öffnen Sie eine .portfolio Datei oder importieren Sie sie in die Datenbank, um Buchungen anzuzeigen.
-        </p>
-      </div>
-    );
-  }
-
-  // Collect all transactions from all accounts
-  const allTransactions: Array<AccountTransaction & { accountName: string; index: number }> = [];
-  let txIndex = 0;
-  for (const account of portfolioFile.accounts || []) {
-    for (const tx of account.transactions || []) {
-      allTransactions.push({ ...tx, accountName: account.name || 'Unbenannt', index: txIndex++ });
-    }
-  }
-
-  // Sort by date descending
-  allTransactions.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-
-  return (
-    <div className="bg-card rounded-lg border border-border p-6">
-      <h2 className="text-lg font-semibold mb-4">Buchungen ({allTransactions.length})</h2>
-      {allTransactions.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="text-left py-2 font-medium">Datum</th>
-                <th className="text-left py-2 font-medium">Typ</th>
-                <th className="text-left py-2 font-medium">Konto</th>
-                <th className="text-right py-2 font-medium">Betrag</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allTransactions.slice(0, 50).map((tx) => (
-                <tr key={tx.uuid || `tx-${tx.index}`} className="border-b border-border last:border-0">
-                  <td className="py-2">{tx.date || '-'}</td>
-                  <td className="py-2">{tx.transactionType || '-'}</td>
-                  <td className="py-2 text-muted-foreground">{tx.accountName}</td>
-                  <td className="py-2 text-right">{(tx.amount.amount / 100).toFixed(2)} {tx.amount.currency}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {allTransactions.length > 50 && (
-            <div className="text-sm text-muted-foreground text-center pt-4">
-              Zeige 50 von {allTransactions.length} Buchungen
-            </div>
-          )}
-        </div>
-      ) : (
-        <p className="text-muted-foreground">Keine Buchungen vorhanden.</p>
-      )}
-    </div>
-  );
 }

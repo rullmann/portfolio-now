@@ -141,12 +141,24 @@ pub struct InvestmentPlan {
     pub account_uuid: Option<String>,
     /// Amount in smallest currency units
     pub amount: i64,
+    /// Fees in smallest currency units
+    pub fees: i64,
+    /// Taxes in smallest currency units
+    pub taxes: i64,
     /// Interval (<100 = months, >100 = weeks)
     pub interval: i32,
     /// Start date
     pub start: Option<String>,
     /// Auto-generate transactions
     pub auto_generate: bool,
+    /// Plan type (PURCHASE_OR_DELIVERY=0, DEPOSIT=1, REMOVAL=2, INTEREST=3)
+    pub plan_type: i32,
+    /// Note/description
+    pub note: Option<String>,
+    /// Custom attributes
+    pub attributes: std::collections::HashMap<String, String>,
+    /// Generated transaction UUIDs (for tracking executed plans)
+    pub transactions: Vec<String>,
 }
 
 /// Dashboard configuration
