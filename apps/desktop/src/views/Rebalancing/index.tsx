@@ -6,7 +6,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { Scale, RefreshCw, Play, TrendingUp, TrendingDown, Download, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { getPortfolios, getAccounts, getHoldings, previewRebalance, executeRebalance } from '../../lib/api';
 import type { PortfolioData, AccountData, RebalanceTarget, RebalancePreview } from '../../lib/types';
-import { toast } from '../../store';
+import { toast, useSettingsStore } from '../../store';
+import { SecurityLogo } from '../../components/common';
+import { useCachedLogos } from '../../lib/hooks';
 
 interface TargetWithHolding extends RebalanceTarget {
   securityName: string;
@@ -28,6 +30,22 @@ export function RebalancingView() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [executionSuccess, setExecutionSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { brandfetchApiKey } = useSettingsStore();
+
+  // Prepare securities for logo loading
+  const securitiesForLogos = useMemo(() =>
+    targets
+      .filter((t) => t.securityId !== undefined)
+      .map((t) => ({
+        id: t.securityId!,
+        ticker: undefined,
+        name: t.securityName,
+      })),
+    [targets]
+  );
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
   const loadPortfolios = async () => {
     try {
@@ -283,7 +301,12 @@ export function RebalancingView() {
                         const diff = target.targetWeight - (target.currentWeight || 0);
                         return (
                           <tr key={idx} className="border-b border-border last:border-0">
-                            <td className="py-2 font-medium">{target.securityName}</td>
+                            <td className="py-2">
+                              <div className="flex items-center gap-2">
+                                {target.securityId && <SecurityLogo securityId={target.securityId} logos={logos} size={24} />}
+                                <span className="font-medium">{target.securityName}</span>
+                              </div>
+                            </td>
                             <td className="py-2 text-right text-muted-foreground">
                               {(target.currentWeight || 0).toFixed(1)}%
                             </td>
@@ -375,7 +398,12 @@ export function RebalancingView() {
                       <tbody>
                         {preview.actions.map((action, idx) => (
                           <tr key={idx} className="border-b border-border last:border-0">
-                            <td className="py-2 font-medium">{action.securityName}</td>
+                            <td className="py-2">
+                              <div className="flex items-center gap-2">
+                                <SecurityLogo securityId={action.securityId} logos={logos} size={24} />
+                                <span className="font-medium">{action.securityName}</span>
+                              </div>
+                            </td>
                             <td className="py-2 text-center">
                               <span
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${

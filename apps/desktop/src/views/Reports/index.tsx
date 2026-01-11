@@ -2,7 +2,7 @@
  * Reports view for performance analysis.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { BarChart3, RefreshCw, TrendingUp, Coins, FileText, PieChart, Download } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 import {
@@ -20,6 +20,9 @@ import type {
   PortfolioData,
 } from '../../lib/types';
 import { PdfExportModal } from '../../components/modals';
+import { SecurityLogo } from '../../components/common';
+import { useCachedLogos } from '../../lib/hooks';
+import { useSettingsStore } from '../../store';
 
 type ReportType = 'performance' | 'dividends' | 'gains' | 'tax';
 
@@ -39,12 +42,29 @@ export function ReportsView() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+  const { brandfetchApiKey } = useSettingsStore();
 
   // Report data
   const [performanceData, setPerformanceData] = useState<PerformanceResult | null>(null);
   const [dividendData, setDividendData] = useState<DividendReport | null>(null);
   const [gainsData, setGainsData] = useState<RealizedGainsReport | null>(null);
   const [taxData, setTaxData] = useState<TaxReport | null>(null);
+
+  // Prepare securities for logo loading from report data
+  const securitiesForLogos = useMemo(() => {
+    const secMap = new Map<number, { id: number; name: string }>();
+    if (dividendData) {
+      dividendData.entries.forEach((e) => secMap.set(e.securityId, { id: e.securityId, name: e.securityName }));
+      dividendData.bySecurity.forEach((s) => secMap.set(s.securityId, { id: s.securityId, name: s.securityName }));
+    }
+    if (gainsData) {
+      gainsData.bySecurity.forEach((s) => secMap.set(s.securityId, { id: s.securityId, name: s.securityName }));
+    }
+    return Array.from(secMap.values()).map((s) => ({ id: s.id, ticker: undefined, name: s.name }));
+  }, [dividendData, gainsData]);
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
   useEffect(() => {
     loadPortfolios();
@@ -273,7 +293,12 @@ export function ReportsView() {
                   {dividendData.entries.slice(0, 20).map((entry, idx) => (
                     <tr key={idx} className="border-b border-border last:border-0 hover:bg-muted/30">
                       <td className="py-3 px-4">{formatDate(entry.date)}</td>
-                      <td className="py-3 px-4 font-medium">{entry.securityName}</td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <SecurityLogo securityId={entry.securityId} logos={logos} size={24} />
+                          <span className="font-medium">{entry.securityName}</span>
+                        </div>
+                      </td>
                       <td className="py-3 px-4 text-right text-green-600">
                         {formatCurrency(entry.grossAmount , entry.currency)}
                       </td>
@@ -366,10 +391,15 @@ export function ReportsView() {
                   {gainsData.bySecurity.map((item, idx) => (
                     <tr key={idx} className="border-b border-border last:border-0 hover:bg-muted/30">
                       <td className="py-3 px-4">
-                        <div className="font-medium">{item.securityName}</div>
-                        {item.securityIsin && (
-                          <div className="text-xs text-muted-foreground">{item.securityIsin}</div>
-                        )}
+                        <div className="flex items-center gap-3">
+                          <SecurityLogo securityId={item.securityId} logos={logos} size={28} />
+                          <div>
+                            <div className="font-medium">{item.securityName}</div>
+                            {item.securityIsin && (
+                              <div className="text-xs text-muted-foreground">{item.securityIsin}</div>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-right">{item.saleCount}</td>
                       <td className="py-3 px-4 text-right">

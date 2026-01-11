@@ -4,19 +4,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { useSettingsStore, useUIStore, toast, AI_MODELS } from '../../store';
+import { useSettingsStore, useUIStore, toast, AI_MODELS, getVisionModels } from '../../store';
+import type { VisionModel } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
 import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIProviderLogo';
 
-// Type for dynamically fetched AI models
-interface DynamicAiModel {
-  id: string;
-  name: string;
-  description: string;
-  supportsVision: boolean;
-}
+// Use VisionModel from store for model type
 
 export function SettingsView() {
   const {
@@ -60,7 +54,7 @@ export function SettingsView() {
   const [showAlphaVantageKey, setShowAlphaVantageKey] = useState(false);
   const [showTwelveDataKey, setShowTwelveDataKey] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
-  const [dynamicModels, setDynamicModels] = useState<DynamicAiModel[] | null>(null);
+  const [dynamicModels, setDynamicModels] = useState<VisionModel[] | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
@@ -123,74 +117,46 @@ export function SettingsView() {
     : aiProvider === 'gemini' ? geminiApiKey
     : perplexityApiKey;
 
-  // Fetch available models from API
+  // Fetch available vision models from backend registry
   const fetchAiModels = useCallback(async () => {
-    if (!currentApiKey) {
-      setDynamicModels(null);
-      return;
-    }
-
     setIsLoadingModels(true);
     try {
-      const models = await invoke<DynamicAiModel[]>('get_ai_models', {
-        provider: aiProvider,
-        apiKey: currentApiKey,
-      });
+      const models = await getVisionModels(aiProvider);
+      setDynamicModels(models);
 
-      // Sort models: prefer non-preview, then by name (newer versions typically sort higher)
-      const sortedModels = [...models].sort((a, b) => {
-        // Prioritize non-preview models
-        const aPreview = a.id.includes('preview') ? 1 : 0;
-        const bPreview = b.id.includes('preview') ? 1 : 0;
-        if (aPreview !== bPreview) return aPreview - bPreview;
-        // Then sort by version (higher = newer)
-        return b.id.localeCompare(a.id);
-      });
+      // Check if current model is in the list
+      const currentModelExists = models.some(m => m.id === aiModel);
 
-      setDynamicModels(sortedModels);
-
-      // Check if current model is deprecated
-      const currentModelExists = sortedModels.some(m => m.id === aiModel);
-
-      if (!currentModelExists && sortedModels.length > 0) {
-        // Model is deprecated - migrate to recommended model
-        const recommendedModel = sortedModels[0];
+      if (!currentModelExists && models.length > 0) {
+        // Model is deprecated/invalid - migrate to first available model
+        const recommendedModel = models[0];
         setAiModel(recommendedModel.id);
         toast.warning(
           `Modell "${aiModel}" nicht mehr verfügbar. Automatisch auf "${recommendedModel.name}" gewechselt.`,
         );
       } else {
-        // Check for new models (compare count with static list)
-        const staticCount = AI_MODELS[aiProvider].length;
-        if (sortedModels.length > staticCount) {
-          const newCount = sortedModels.length - staticCount;
-          toast.info(`${newCount} neue(s) Modell(e) verfügbar!`);
-        } else {
-          toast.success(`${sortedModels.length} Modelle geladen`);
-        }
+        toast.success(`${models.length} Vision-Modelle geladen`);
       }
     } catch (err) {
-      console.error('Failed to fetch AI models:', err);
+      console.error('Failed to fetch vision models:', err);
       toast.error(`Modelle laden fehlgeschlagen: ${err}`);
       setDynamicModels(null);
     } finally {
       setIsLoadingModels(false);
     }
-  }, [aiProvider, currentApiKey, aiModel, setAiModel]);
+  }, [aiProvider, aiModel, setAiModel]);
 
-  // Reset dynamic models when provider changes
+  // Load models when provider changes
   useEffect(() => {
     setDynamicModels(null);
+    fetchAiModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiProvider]);
 
-  // Auto-check models on mount if API key is present (validates selected model)
+  // Auto-load models on mount (from backend registry, no API key needed)
   useEffect(() => {
-    if (currentApiKey && !dynamicModels && !isLoadingModels) {
-      // Delay to avoid immediate API call on page load
-      const timer = setTimeout(() => {
-        fetchAiModels();
-      }, 1000);
-      return () => clearTimeout(timer);
+    if (!dynamicModels && !isLoadingModels) {
+      fetchAiModels();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only on mount

@@ -7,6 +7,7 @@ pub mod ing;
 pub mod comdirect;
 pub mod trade_republic;
 pub mod scalable;
+pub mod ocr;
 
 use chrono::NaiveDate;
 use regex::Regex;

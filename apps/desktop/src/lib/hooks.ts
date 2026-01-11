@@ -404,3 +404,10 @@ async function fetchAndCacheLogo(
     console.debug('Failed to fetch logo for caching:', domain, err);
   }
 }
+
+// ============================================================================
+// Re-export batch analysis hook
+// ============================================================================
+
+export { usePortfolioBatchAnalysis } from './hooks/usePortfolioBatchAnalysis';
+export type { HoldingForAnalysis, BatchAnalysisOptions, UseBatchAnalysisResult } from './hooks/usePortfolioBatchAnalysis';

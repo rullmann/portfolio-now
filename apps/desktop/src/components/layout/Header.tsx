@@ -14,9 +14,11 @@ import {
 import {
   useUIStore,
   useAppStore,
+  useSettingsStore,
   getViewLabel,
 } from '../../store';
 import { DropdownMenu, DropdownItem } from '../common';
+import { AIProviderLogo } from '../common/AIProviderLogo';
 import { TransactionFormModal } from '../modals/TransactionFormModal';
 import { PdfImportModal } from '../modals/PdfImportModal';
 
@@ -25,24 +27,66 @@ interface HeaderProps {
   onRefresh: () => void;
 }
 
+// Provider display names
+const PROVIDER_NAMES: Record<string, string> = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  perplexity: 'Perplexity',
+};
+
 export function Header({
   onImportPP,
   onRefresh,
 }: HeaderProps) {
   const { currentView } = useUIStore();
   const { isLoading } = useAppStore();
+  const {
+    aiProvider,
+    aiModel,
+    anthropicApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    perplexityApiKey,
+  } = useSettingsStore();
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
   const [showPdfImportModal, setShowPdfImportModal] = useState(false);
 
+  // Check if AI is configured (has API key for selected provider)
+  const hasAiApiKey = () => {
+    switch (aiProvider) {
+      case 'claude': return !!anthropicApiKey;
+      case 'openai': return !!openaiApiKey;
+      case 'gemini': return !!geminiApiKey;
+      case 'perplexity': return !!perplexityApiKey;
+      default: return false;
+    }
+  };
+
+  const aiConfigured = hasAiApiKey();
+
   return (
     <>
       <header className="h-14 flex items-center justify-between px-6 border-b border-border bg-card">
-        {/* Left: View title */}
+        {/* Left: View title + AI indicator */}
         <div className="flex items-center gap-4">
           <h1 className="text-lg font-semibold text-foreground">
             {getViewLabel(currentView)}
           </h1>
+
+          {/* AI Provider Indicator */}
+          {aiConfigured && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-muted/50 rounded-full border border-border/50">
+              <AIProviderLogo provider={aiProvider} size={16} />
+              <span className="text-xs text-muted-foreground">
+                {PROVIDER_NAMES[aiProvider] || aiProvider}
+              </span>
+              <span className="text-xs text-muted-foreground/60">
+                {aiModel.split('-').slice(0, 2).join('-')}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Right: Actions */}

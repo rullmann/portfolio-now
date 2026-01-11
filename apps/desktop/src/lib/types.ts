@@ -1128,3 +1128,123 @@ export interface RebuildFifoResult {
   lotsCreated: number;
   consumptionsCreated: number;
 }
+
+// ============================================================================
+// AI Chart Annotation Types
+// ============================================================================
+
+/** Type of chart annotation */
+export type AnnotationType =
+  | 'support'
+  | 'resistance'
+  | 'trendline'
+  | 'pattern'
+  | 'signal'
+  | 'target'
+  | 'stoploss'
+  | 'note';
+
+/** Signal direction for annotations */
+export type SignalDirection = 'bullish' | 'bearish' | 'neutral';
+
+/** Trend direction */
+export type TrendDirection = 'bullish' | 'bearish' | 'neutral';
+
+/** Trend strength */
+export type TrendStrength = 'strong' | 'moderate' | 'weak';
+
+/** Trend information from AI analysis */
+export interface TrendInfo {
+  direction: TrendDirection;
+  strength: TrendStrength;
+  /** Confidence score (0.0 - 1.0) */
+  confidence?: number;
+}
+
+/** A single chart annotation from AI analysis */
+export interface ChartAnnotation {
+  /** Annotation type (support, resistance, pattern, etc.) */
+  type: AnnotationType;
+  /** Price level (Y-coordinate) */
+  price: number;
+  /** Optional time/date (X-coordinate) - null for horizontal lines */
+  time?: string | null;
+  /** Optional end time for ranges/trendlines */
+  timeEnd?: string | null;
+  /** Short title (max 20 chars) */
+  title: string;
+  /** Detailed explanation */
+  description: string;
+  /** Confidence score (0.0 - 1.0) */
+  confidence: number;
+  /** Signal direction (bullish/bearish/neutral) */
+  signal?: SignalDirection | null;
+}
+
+/** Response from AI analysis with annotations */
+export interface AnnotationAnalysisResponse {
+  /** Overall analysis text */
+  analysis: string;
+  /** Trend information */
+  trend: TrendInfo;
+  /** Array of chart annotations */
+  annotations: ChartAnnotation[];
+  /** AI provider used */
+  provider: string;
+  /** Model used */
+  model: string;
+  /** Tokens used (if available) */
+  tokensUsed?: number;
+}
+
+/** Annotation with generated ID for React rendering */
+export interface ChartAnnotationWithId extends ChartAnnotation {
+  id: string;
+}
+
+/** Annotation style configuration */
+export interface AnnotationStyle {
+  color: string;
+  lineStyle: 'solid' | 'dashed' | 'dotted';
+  lineWidth: number;
+  icon?: string;
+}
+
+// ============================================================================
+// Persisted Annotation Types (Database)
+// ============================================================================
+
+/** Annotation data as stored in database */
+export interface PersistedAnnotation {
+  id: number;
+  uuid: string;
+  securityId: number;
+  annotationType: AnnotationType;
+  price: number;
+  time?: string | null;
+  timeEnd?: string | null;
+  title: string;
+  description?: string | null;
+  confidence: number;
+  signal?: SignalDirection | null;
+  source: 'ai' | 'user';
+  provider?: string | null;
+  model?: string | null;
+  isVisible: boolean;
+  createdAt: string;
+}
+
+/** Request to save annotations to database */
+export interface SaveAnnotationRequest {
+  annotationType: AnnotationType;
+  price: number;
+  time?: string | null;
+  timeEnd?: string | null;
+  title: string;
+  description?: string | null;
+  confidence: number;
+  signal?: SignalDirection | null;
+  source?: 'ai' | 'user';
+  provider?: string | null;
+  model?: string | null;
+}

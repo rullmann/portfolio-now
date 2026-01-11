@@ -711,6 +711,36 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // Migration: Create pp_chart_annotation table for AI-generated chart annotations
+    if !table_exists(conn, "pp_chart_annotation") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chart_annotation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                security_id INTEGER NOT NULL,
+                annotation_type TEXT NOT NULL CHECK(annotation_type IN ('support', 'resistance', 'trendline', 'pattern', 'signal', 'target', 'stoploss', 'note')),
+                price REAL NOT NULL,
+                time TEXT,
+                time_end TEXT,
+                title TEXT NOT NULL,
+                description TEXT,
+                confidence REAL NOT NULL DEFAULT 0.8,
+                signal TEXT CHECK(signal IN ('bullish', 'bearish', 'neutral')),
+                source TEXT NOT NULL DEFAULT 'ai' CHECK(source IN ('ai', 'user')),
+                provider TEXT,
+                model TEXT,
+                is_visible INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_chart_annotation_security ON pp_chart_annotation(security_id);
+            CREATE INDEX idx_pp_chart_annotation_visible ON pp_chart_annotation(security_id, is_visible);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chart_annotation table");
+    }
+
     Ok(())
 }
 

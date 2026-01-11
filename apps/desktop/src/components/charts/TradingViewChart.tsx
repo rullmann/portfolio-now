@@ -32,6 +32,7 @@ import type {
   LineData as IndicatorLineData,
   HistogramData as IndicatorHistogramData,
 } from '../../lib/indicators';
+import type { ChartAnnotationWithId } from '../../lib/types';
 import {
   calculateSMA,
   calculateEMA,
@@ -52,6 +53,10 @@ export interface TradingViewChartProps {
   theme?: 'light' | 'dark';
   showVolume?: boolean;
   symbol?: string;
+  /** AI-generated chart annotations */
+  annotations?: ChartAnnotationWithId[];
+  /** Callback when an annotation is clicked */
+  onAnnotationClick?: (annotation: ChartAnnotationWithId) => void;
 }
 
 // ============================================================================
@@ -88,6 +93,8 @@ export function TradingViewChart({
   theme = 'dark',
   showVolume = true,
   symbol,
+  annotations = [],
+  onAnnotationClick,
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -99,6 +106,10 @@ export function TradingViewChart({
     volume?: number;
     time?: string;
   }>({});
+
+  // Hover state for annotation tooltips
+  const [hoveredAnnotation, setHoveredAnnotation] = useState<ChartAnnotationWithId | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Memoize chart data conversion
   const chartData = useMemo(() => {
@@ -357,10 +368,56 @@ export function TradingViewChart({
       }
     }
 
+    // ========================================================================
+    // Render AI Annotations
+    // ========================================================================
+    if (annotations && annotations.length > 0) {
+      // Support and Resistance lines (horizontal price lines)
+      annotations
+        .filter(a => a.type === 'support' || a.type === 'resistance')
+        .forEach(annotation => {
+          try {
+            candlestickSeries.createPriceLine({
+              price: annotation.price,
+              color: annotation.type === 'support' ? '#26a69a' : '#ef5350',
+              lineWidth: 2,
+              lineStyle: LineStyle.Dashed,
+              axisLabelVisible: true,
+              title: annotation.title,
+            });
+          } catch (e) {
+            console.warn(`Failed to render annotation ${annotation.title}:`, e);
+          }
+        });
+
+      // Target and StopLoss lines
+      annotations
+        .filter(a => a.type === 'target' || a.type === 'stoploss')
+        .forEach(annotation => {
+          try {
+            candlestickSeries.createPriceLine({
+              price: annotation.price,
+              color: annotation.type === 'target' ? '#2196f3' : '#ff5722',
+              lineWidth: 1,
+              lineStyle: LineStyle.Dotted,
+              axisLabelVisible: true,
+              title: annotation.title,
+            });
+          } catch (e) {
+            console.warn(`Failed to render annotation ${annotation.title}:`, e);
+          }
+        });
+
+      // Note: Pattern/Signal markers are not supported in lightweight-charts v5
+      // They are shown in the annotations list below the chart instead
+    }
+
     // Crosshair handler
     chart.subscribeCrosshairMove(param => {
       if (!param || !param.time) {
         setLegendData({});
+        setHoveredAnnotation(null);
+        setTooltipPosition(null);
         return;
       }
 
@@ -375,6 +432,30 @@ export function TradingViewChart({
           close: candlePrice.close,
           volume: volValue && 'value' in volValue ? (volValue as { value: number }).value : undefined,
         });
+      }
+
+      // Check for annotation hover (support/resistance lines)
+      if (annotations && annotations.length > 0 && param.point) {
+        const { x, y } = param.point;
+
+        // Find annotation near cursor (20px tolerance)
+        // Use series.priceToCoordinate instead of priceScale
+        const nearbyAnnotation = annotations.find(ann => {
+          if (ann.type !== 'support' && ann.type !== 'resistance' && ann.type !== 'target' && ann.type !== 'stoploss') {
+            return false;
+          }
+          const annotationY = candlestickSeries.priceToCoordinate(ann.price);
+          if (annotationY === null) return false;
+          return Math.abs(y - annotationY) < 20;
+        });
+
+        if (nearbyAnnotation) {
+          setHoveredAnnotation(nearbyAnnotation);
+          setTooltipPosition({ x, y });
+        } else {
+          setHoveredAnnotation(null);
+          setTooltipPosition(null);
+        }
       }
     });
 
@@ -398,7 +479,7 @@ export function TradingViewChart({
         chartRef.current = null;
       }
     };
-  }, [chartData, indicatorData, indicators, height, theme, showVolume]);
+  }, [chartData, indicatorData, indicators, height, theme, showVolume, annotations]);
 
   // Early return for no data
   if (!data || data.length < 2) {
@@ -446,6 +527,47 @@ export function TradingViewChart({
           </>
         )}
       </div>
+
+      {/* Annotation Tooltip Overlay */}
+      {hoveredAnnotation && tooltipPosition && (
+        <div
+          className="absolute z-20 pointer-events-none"
+          style={{
+            left: Math.min(tooltipPosition.x + 12, containerRef.current?.clientWidth ? containerRef.current.clientWidth - 260 : tooltipPosition.x),
+            top: Math.max(tooltipPosition.y - 80, 10),
+          }}
+        >
+          <div className="bg-popover/95 backdrop-blur-sm border border-border rounded-lg shadow-xl p-3 max-w-[250px] pointer-events-auto">
+            <div className="flex items-center gap-2 mb-2">
+              <span
+                className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                  hoveredAnnotation.signal === 'bullish'
+                    ? 'bg-emerald-500'
+                    : hoveredAnnotation.signal === 'bearish'
+                    ? 'bg-red-500'
+                    : 'bg-amber-500'
+                }`}
+              />
+              <span className="font-medium text-sm truncate">{hoveredAnnotation.title}</span>
+              <span className="text-xs text-muted-foreground ml-auto shrink-0">
+                {Math.round(hoveredAnnotation.confidence * 100)}%
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground line-clamp-3">{hoveredAnnotation.description}</p>
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
+              <span className="text-xs font-mono">@ {hoveredAnnotation.price.toFixed(2)}</span>
+              {onAnnotationClick && (
+                <button
+                  onClick={() => onAnnotationClick(hoveredAnnotation)}
+                  className="text-xs px-2 py-0.5 bg-muted hover:bg-muted/80 rounded transition-colors"
+                >
+                  Details
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chart Container - absolute positioning ensures it fills the parent */}
       <div ref={containerRef} className="absolute inset-0" />

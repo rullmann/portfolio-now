@@ -2,10 +2,13 @@
  * Watchlist view for tracking securities of interest.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
 import { getWatchlists, getWatchlistSecurities, createWatchlist, deleteWatchlist, removeFromWatchlist, getPriceHistory } from '../../lib/api';
 import { TradingViewMiniChart } from '../../components/charts';
+import { SecurityLogo } from '../../components/common';
+import { useCachedLogos } from '../../lib/hooks';
+import { useSettingsStore } from '../../store';
 import type { WatchlistData, WatchlistSecurityData, PriceData } from '../../lib/types';
 
 export function WatchlistView() {
@@ -17,6 +20,20 @@ export function WatchlistView() {
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [priceHistories, setPriceHistories] = useState<Record<number, PriceData[]>>({});
+  const { brandfetchApiKey } = useSettingsStore();
+
+  // Prepare securities for logo loading
+  const securitiesForLogos = useMemo(() =>
+    securities.map((s) => ({
+      id: s.securityId,
+      ticker: s.ticker || undefined,
+      name: s.name,
+    })),
+    [securities]
+  );
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
   const loadWatchlists = async () => {
     try {
@@ -256,10 +273,15 @@ export function WatchlistView() {
                         return (
                           <tr key={security.securityId} className="border-b border-border last:border-0 hover:bg-muted/30">
                             <td className="py-3 px-4">
-                              <div className="font-medium">{security.name}</div>
-                              {security.ticker && (
-                                <div className="text-xs text-muted-foreground">{security.ticker}</div>
-                              )}
+                              <div className="flex items-center gap-3">
+                                <SecurityLogo securityId={security.securityId} logos={logos} size={32} />
+                                <div>
+                                  <div className="font-medium">{security.name}</div>
+                                  {security.ticker && (
+                                    <div className="text-xs text-muted-foreground">{security.ticker}</div>
+                                  )}
+                                </div>
+                              </div>
                             </td>
                             <td className="py-3 px-4 font-mono text-muted-foreground">
                               {security.isin || '-'}

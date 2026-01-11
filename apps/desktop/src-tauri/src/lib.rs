@@ -167,6 +167,10 @@ pub fn run() {
             commands::pdf_import::extract_pdf_raw_text,
             commands::pdf_import::parse_pdf_text,
             commands::pdf_import::detect_pdf_bank,
+            // PDF Import OCR
+            commands::pdf_import::is_ocr_available,
+            commands::pdf_import::extract_pdf_with_ocr,
+            commands::pdf_import::preview_pdf_import_with_ocr,
             // Investment Plans
             commands::investment_plans::get_investment_plans,
             commands::investment_plans::get_investment_plan,
@@ -204,7 +208,18 @@ pub fn run() {
             commands::pdf_export::export_tax_report_pdf,
             // AI Chart Analysis
             commands::ai::analyze_chart_with_ai,
+            commands::ai::analyze_chart_with_annotations,
             commands::ai::get_ai_models,
+            commands::ai::get_vision_models,
+            // AI Portfolio Insights & Chat
+            commands::ai::analyze_portfolio_with_ai,
+            commands::ai::chat_with_portfolio_assistant,
+            // Chart Annotations (Persistence)
+            commands::annotations::save_annotations,
+            commands::annotations::get_annotations,
+            commands::annotations::delete_annotation,
+            commands::annotations::toggle_annotation_visibility,
+            commands::annotations::clear_ai_annotations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

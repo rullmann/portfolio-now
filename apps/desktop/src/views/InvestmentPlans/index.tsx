@@ -2,12 +2,14 @@
  * Investment Plans view for managing savings plans.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { CalendarClock, Plus, Play, Pause, Trash2, RefreshCw, AlertCircle, Edit2, CheckCircle2 } from 'lucide-react';
 import { getInvestmentPlans, getPlansDueForExecution, deleteInvestmentPlan, updateInvestmentPlan, executeInvestmentPlan } from '../../lib/api';
 import type { InvestmentPlanData } from '../../lib/types';
 import { InvestmentPlanFormModal } from '../../components/modals';
-import { toast } from '../../store';
+import { toast, useSettingsStore } from '../../store';
+import { SecurityLogo } from '../../components/common';
+import { useCachedLogos } from '../../lib/hooks';
 
 const intervalLabels: Record<string, string> = {
   WEEKLY: 'Wöchentlich',
@@ -23,10 +25,24 @@ export function InvestmentPlansView() {
   const [isLoading, setIsLoading] = useState(true);
   const [executingPlanId, setExecutingPlanId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { brandfetchApiKey } = useSettingsStore();
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<InvestmentPlanData | null>(null);
+
+  // Prepare securities for logo loading
+  const securitiesForLogos = useMemo(() =>
+    plans.map((p) => ({
+      id: p.securityId,
+      ticker: undefined,
+      name: p.securityName,
+    })),
+    [plans]
+  );
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
   const loadPlans = async () => {
     try {
@@ -174,7 +190,8 @@ export function InvestmentPlansView() {
                 key={plan.id}
                 className="flex items-center justify-between bg-background/50 p-2 rounded-md"
               >
-                <div>
+                <div className="flex items-center gap-2">
+                  <SecurityLogo securityId={plan.securityId} logos={logos} size={24} />
                   <span className="font-medium">{plan.securityName}</span>
                   <span className="text-muted-foreground mx-2">·</span>
                   <span>{formatCurrency(plan.amount, plan.currency)}</span>
@@ -250,8 +267,13 @@ export function InvestmentPlansView() {
                     className="border-b border-border last:border-0 hover:bg-muted/30"
                   >
                     <td className="py-3 px-4">
-                      <div className="font-medium">{plan.securityName}</div>
-                      <div className="text-xs text-muted-foreground">{plan.name}</div>
+                      <div className="flex items-center gap-3">
+                        <SecurityLogo securityId={plan.securityId} logos={logos} size={32} />
+                        <div>
+                          <div className="font-medium">{plan.securityName}</div>
+                          <div className="text-xs text-muted-foreground">{plan.name}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">{plan.portfolioName}</td>
                     <td className="py-3 px-4">

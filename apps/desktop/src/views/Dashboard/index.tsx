@@ -13,8 +13,15 @@ import {
   ArrowDownRight,
   Sparkles,
   Loader2,
+  Brain,
+  X,
 } from 'lucide-react';
 import { useSettingsStore, toast, type AutoUpdateInterval } from '../../store';
+import {
+  usePortfolioAnalysisStore,
+  getTrendColorClass,
+  type AnalysisStatus,
+} from '../../store/portfolioAnalysis';
 import type { AggregatedHolding, PortfolioData } from '../types';
 import { formatNumber } from '../utils';
 import { getBaseCurrency, calculatePerformance, syncAllPrices } from '../../lib/api';
@@ -30,6 +37,7 @@ import {
   ComposedChart,
   CartesianGrid,
 } from 'recharts';
+import { PortfolioInsightsModal } from '../../components/modals/PortfolioInsightsModal';
 
 interface DashboardViewProps {
   dbHoldings: AggregatedHolding[];
@@ -66,6 +74,38 @@ function Sparkline({ data, positive }: { data: number[]; positive: boolean }) {
         </AreaChart>
       </ResponsiveContainer>
     </div>
+  );
+}
+
+// Trend Indicator component for AI analysis status
+function TrendIndicator({
+  status,
+  summary,
+}: {
+  status: AnalysisStatus | undefined;
+  summary?: string;
+}) {
+  if (!status) return null;
+
+  const colorClass = getTrendColorClass(status);
+  const title =
+    status === 'bullish'
+      ? `Bullish${summary ? `: ${summary}` : ''}`
+      : status === 'bearish'
+      ? `Bearish${summary ? `: ${summary}` : ''}`
+      : status === 'neutral'
+      ? `Neutral${summary ? `: ${summary}` : ''}`
+      : status === 'pending'
+      ? 'Analyse läuft...'
+      : status === 'error'
+      ? 'Analyse fehlgeschlagen'
+      : '';
+
+  return (
+    <div
+      className={`w-2.5 h-2.5 rounded-full shrink-0 ${colorClass}`}
+      title={title}
+    />
   );
 }
 
@@ -336,10 +376,20 @@ export function DashboardView({
   const autoUpdateInterval = useSettingsStore((state) => state.autoUpdateInterval);
   const setAutoUpdateInterval = useSettingsStore((state) => state.setAutoUpdateInterval);
 
+  // Portfolio AI Analysis Store
+  const {
+    analyses,
+    isAnalyzing: isBatchAnalyzing,
+    progress: batchProgress,
+    lastBatchRun,
+    clearAllAnalyses,
+  } = usePortfolioAnalysisStore();
+
   const [baseCurrency, setBaseCurrency] = useState<string>('EUR');
   const [performance, setPerformance] = useState<PerformanceResult | null>(null);
   const [chartTimeRange, setChartTimeRange] = useState<'1M' | '3M' | '6M' | '1Y' | 'MAX'>('1Y');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showInsightsModal, setShowInsightsModal] = useState(false);
   const lastSyncTime = useSettingsStore((state) => state.lastSyncTime);
   const setLastSyncTime = useSettingsStore((state) => state.setLastSyncTime);
   const [nextSyncSeconds, setNextSyncSeconds] = useState<number | null>(null);
@@ -704,6 +754,27 @@ Verwendung:
             <div className="text-[10px] text-muted-foreground">{baseCurrency}</div>
           </div>
 
+          {/* KI Insights Button */}
+          <button
+            onClick={() => setShowInsightsModal(true)}
+            className="glass-card p-3 min-w-[100px] flex flex-col items-center justify-center gap-2 hover:bg-primary/5 transition-colors cursor-pointer"
+            title="KI-Portfolio-Analyse
+
+Lasse dein Portfolio von einer KI analysieren und erhalte:
+- Stärken und Schwächen
+- Risikobewertung
+- Konkrete Handlungsempfehlungen
+
+Benötigt einen konfigurierten API-Key in den Einstellungen."
+          >
+            <div className="p-2 rounded-full bg-primary/10">
+              <Sparkles size={16} className="text-primary" />
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+              KI Insights
+            </span>
+          </button>
+
           {/* Auto-Update */}
           <div
             className="glass-card p-3 flex flex-col justify-between min-w-[110px] cursor-help"
@@ -784,10 +855,54 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
           {/* Holdings Sidebar */}
           <div className="w-[340px] glass-card p-3 flex flex-col flex-shrink-0">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                Positionen
-              </span>
-              <span className="text-[10px] text-muted-foreground">{dbHoldings.length} Titel</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                  Positionen
+                </span>
+                {/* AI Analysis Button */}
+                <button
+                  onClick={() => {
+                    toast.info('Öffne die Technische Analyse (Charts), um KI-Analysen für einzelne Wertpapiere zu erstellen. Die Ergebnisse werden hier als Trend-Ampel angezeigt.');
+                  }}
+                  disabled={isBatchAnalyzing}
+                  className="p-1 rounded hover:bg-muted/50 transition-colors group/brain"
+                  title={
+                    isBatchAnalyzing
+                      ? `Analysiere ${batchProgress.current}/${batchProgress.total}...`
+                      : lastBatchRun
+                      ? `Letzte Analyse: ${new Date(lastBatchRun).toLocaleString('de-DE')}`
+                      : 'KI-Trend-Analyse'
+                  }
+                >
+                  {isBatchAnalyzing ? (
+                    <Loader2 size={12} className="animate-spin text-primary" />
+                  ) : (
+                    <Brain size={12} className="text-muted-foreground group-hover/brain:text-primary transition-colors" />
+                  )}
+                </button>
+                {/* Clear analyses button */}
+                {Object.keys(analyses).length > 0 && !isBatchAnalyzing && (
+                  <button
+                    onClick={() => {
+                      clearAllAnalyses();
+                      toast.info('Alle Trend-Analysen zurückgesetzt');
+                    }}
+                    className="p-1 rounded hover:bg-muted/50 transition-colors"
+                    title="Alle Analysen löschen"
+                  >
+                    <X size={10} className="text-muted-foreground hover:text-destructive" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Batch progress indicator */}
+                {isBatchAnalyzing && (
+                  <span className="text-[9px] text-primary tabular-nums">
+                    {batchProgress.current}/{batchProgress.total}
+                  </span>
+                )}
+                <span className="text-[10px] text-muted-foreground">{dbHoldings.length} Titel</span>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto -mx-3 px-3 space-y-0.5">
               {holdingsByValue.map((holding) => {
@@ -797,6 +912,9 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                   totalValue > 0 ? ((holding.currentValue || 0) / totalValue) * 100 : 0;
                 const gainPercent = holding.gainLossPercent || 0;
                 const isPositive = gainPercent >= 0;
+
+                // Get AI analysis for this holding
+                const analysis = analyses[holding.securityId];
 
                 const sparkData = Array.from({ length: 10 }, (_, i) => {
                   const base = 100;
@@ -822,6 +940,8 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                       </div>
                       <div className="text-[10px] text-muted-foreground">{percent.toFixed(1)}%</div>
                     </div>
+                    {/* AI Trend Indicator */}
+                    <TrendIndicator status={analysis?.trend} summary={analysis?.summary} />
                     <Sparkline data={sparkData} positive={isPositive} />
                     <div className="text-right min-w-[65px]">
                       <div className="text-xs font-medium">
@@ -840,6 +960,12 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
             </div>
           </div>
         </div>
+
+        {/* Portfolio Insights Modal */}
+        <PortfolioInsightsModal
+          isOpen={showInsightsModal}
+          onClose={() => setShowInsightsModal(false)}
+        />
       </div>
     );
   }

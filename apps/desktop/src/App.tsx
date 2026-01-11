@@ -37,6 +37,9 @@ import {
   ToastContainer,
 } from './components/layout';
 
+// Chat components
+import { ChatButton, ChatPanel } from './components/chat';
+
 // Views
 import {
   DashboardView,
@@ -113,6 +116,9 @@ function App() {
   const [dbHoldings, setDbHoldings] = useState<AggregatedHolding[]>([]);
   const [dbPortfolioHistory, setDbPortfolioHistory] = useState<Array<{ date: string; value: number }>>([]);
   const [dbInvestedCapitalHistory, setDbInvestedCapitalHistory] = useState<Array<{ date: string; value: number }>>([]);
+
+  // Chat panel state
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   // ============================================================================
   // Data Loading
@@ -317,6 +323,10 @@ function App() {
 
         {/* Toast notifications */}
         <ToastContainer />
+
+        {/* Chat interface */}
+        <ChatButton onClick={() => setIsChatOpen(true)} />
+        <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
       </div>
     </QueryClientProvider>
   );

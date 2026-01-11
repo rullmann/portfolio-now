@@ -13,20 +13,23 @@ Cross-Platform Desktop-App zur Portfolio-Verwaltung. Neuimplementierung von [Por
 apps/desktop/
 ├── src/                    # React Frontend (TypeScript)
 │   ├── store/              # Zustand State Management
-│   ├── components/         # UI (layout/, common/, modals/, charts/)
+│   ├── components/         # UI (layout/, common/, modals/, charts/, chat/)
 │   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, ...)
-│   │   └── charts/         # TradingViewChart, AIAnalysisPanel
+│   │   ├── charts/         # TradingViewChart, AIAnalysisPanel
+│   │   ├── chat/           # ChatPanel, ChatMessage, ChatButton
+│   │   └── modals/         # PortfolioInsightsModal, TransactionFormModal, etc.
 │   ├── views/              # View-Komponenten pro Route
 │   └── lib/                # API, Types, Hooks
 └── src-tauri/              # Rust Backend
     └── src/
-        ├── commands/       # Tauri IPC Commands (22 Module)
+        ├── commands/       # Tauri IPC Commands (24 Module)
         ├── db/             # SQLite (rusqlite)
         ├── pp/             # Portfolio Performance Datenmodelle
         ├── protobuf/       # .portfolio Parser
         ├── quotes/         # Kursquellen (Yahoo, Finnhub, EZB, etc.)
         ├── fifo/           # FIFO Cost Basis
-        └── ai/             # KI-Analyse (Claude, GPT-4, Gemini, Perplexity) + Markdown-Normalisierung
+        ├── pdf_import/     # PDF Import mit OCR (Vision API)
+        └── ai/             # KI-Analyse, Chat, Portfolio Insights, Models Registry
 ```
 
 ## Tech Stack
@@ -121,9 +124,13 @@ GROUP BY security_id, owner_id
 - `preview_rebalance()`, `execute_rebalance()`
 - `record_stock_split()`, `record_spinoff()`, `record_merger()`
 
-### AI Chart Analysis
-- `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren (Claude, GPT-4, Gemini, Perplexity)
+### AI Features
+- `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren
+- `analyze_chart_with_annotations(request)` - Chart-Analyse mit strukturierten Markern
+- `analyze_portfolio_with_ai(request)` - Portfolio Insights (Stärken, Risiken, Empfehlungen)
+- `chat_with_portfolio_assistant(request)` - KI-Chat über Portfolio-Daten
 - `get_ai_models(provider, api_key)` - Verfügbare Modelle von Provider-API laden
+- `get_vision_models(provider)` - Vision-fähige Modelle aus Registry
 
 ---
 
@@ -139,14 +146,27 @@ GROUP BY security_id, owner_id
 
 ---
 
-## AI Provider (Chart-Analyse)
+## AI Provider
 
-| Provider | API Key | Standard-Modelle | Beschreibung |
-|----------|---------|------------------|--------------|
-| **Claude** | Ja | claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-5 | Anthropic, sehr gute Chart-Analyse |
-| **OpenAI** | Ja | gpt-4.1, gpt-4.1-mini, gpt-4o, o3 | OpenAI, gute visuelle Analyse |
-| **Gemini** | Ja | gemini-3-flash, gemini-3-pro, gemini-2.5-flash/pro | Google, kostenloser Tier verfügbar |
-| **Perplexity** | Ja | sonar-pro, sonar, sonar-reasoning-pro, sonar-deep-research | Web-Suche + Vision, OpenAI-kompatible API |
+| Provider | API Key | Modelle | Besonderheiten |
+|----------|---------|---------|----------------|
+| **Claude** | Ja | claude-sonnet-4-5, claude-haiku-4-5 | Vision + **direkter PDF-Upload** |
+| **OpenAI** | Ja | o3, o4-mini, gpt-4.1, gpt-4o, gpt-4o-mini | o3/o4: Vision + **Web-Suche** |
+| **Gemini** | Ja | gemini-3-flash, gemini-3-pro | Vision + **direkter PDF-Upload** |
+| **Perplexity** | Ja | sonar-pro, sonar | Vision + Web-Suche |
+
+### PDF OCR Support
+
+| Provider | Methode | Poppler nötig? |
+|----------|---------|----------------|
+| **Claude** | Direkter PDF-Upload | Nein |
+| **Gemini** | Direkter PDF-Upload | Nein |
+| **OpenAI** | PDF → Bilder → Vision | Ja (`brew install poppler`) |
+| **Perplexity** | PDF → Bilder → Vision | Ja |
+
+### Web-Suche
+
+OpenAI o3 und o4-mini Modelle unterstützen `web_search_preview` Tool für aktuelle Informationen.
 
 ### Dynamische Modell-Erkennung
 
@@ -256,8 +276,8 @@ useSettingsStore: {
 // AI_MODELS Konstante (Fallback wenn API nicht erreichbar)
 AI_MODELS: { claude: [...], openai: [...], gemini: [...], perplexity: [...] }
 
-// DEPRECATED_MODELS Mapping für Auto-Upgrade
-DEPRECATED_MODELS: { 'sonar-reasoning': 'sonar-reasoning-pro', ... }
+// DEPRECATED_MODELS Mapping für Auto-Upgrade (inkl. non-vision Modelle)
+DEPRECATED_MODELS: { 'sonar-reasoning-pro': 'sonar-pro', 'o3': 'gpt-4.1', ... }
 
 // Toast
 toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
@@ -269,7 +289,7 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 
 | View | Status | Beschreibung |
 |------|--------|--------------|
-| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts |
+| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts, KI Insights Button |
 | Portfolio | ✅ | CRUD, History Chart |
 | Securities | ✅ | CRUD, Logos, Sync-Button |
 | Accounts | ✅ | CRUD, Balance-Tracking |
@@ -279,7 +299,7 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 | Watchlist | ✅ | Multiple Listen, Mini-Charts |
 | Taxonomies | ✅ | Hierarchischer Baum |
 | Benchmark | ✅ | Performance-Vergleich |
-| Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse |
+| Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse + Marker |
 | Plans | ✅ | Sparpläne |
 | Reports | ✅ | Performance, Dividenden, Gewinne, Steuer mit Charts |
 | Rebalancing | ✅ | Zielgewichtung, Vorschau, Ausführung |
@@ -296,8 +316,9 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 5. **ISIN-Aggregation:** Securities mit gleicher ISIN zusammenfassen
 6. **Yahoo-Symbole:** Internationale haben Suffix (.DE, .WA), US nicht
 7. **AI Raw Strings:** In Rust `r#"..."#` nicht mit `"#` im Inhalt verwenden (benutze `r##"..."##`)
-8. **Perplexity Vision:** Nicht alle Sonar-Modelle unterstützen Vision (nur sonar-pro, sonar)
-9. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
+8. **GBX/GBp Währung:** British Pence durch 100 teilen für GBP-Wert
+9. **AI Portfolio-Kontext:** Währungsumrechnung in Basiswährung beachten
+10. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
 
 ---
 
@@ -332,6 +353,16 @@ Siehe `apps/desktop/src-tauri/PP_IMPORT_EXPORT.md` für Details.
 **Kompaktes Layout:** `p-4` für Cards, `space-y-4` zwischen Sektionen
 **Farben:** `text-green-600` (positiv), `text-red-600` (negativ), `text-muted-foreground`
 **Icons:** Lucide React
+
+### Header
+- **View-Titel** links
+- **AI-Indikator** (wenn konfiguriert): Provider-Logo + Name + Modell
+- **Aktionen** rechts: Importieren, Refresh, Neue Buchung
+
+### AI Features
+- **Portfolio Insights Modal**: KI-Analyse mit farbcodierten Karten (grün=Stärken, orange=Risiken, blau=Empfehlungen)
+- **Chat Panel**: Floating Button unten rechts, Slide-in Chat für Portfolio-Fragen
+- **Chart Marker**: Support/Resistance-Linien werden direkt im Chart angezeigt
 
 ---
 

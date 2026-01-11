@@ -1,16 +1,20 @@
 /**
  * AI Analysis Panel for technical chart analysis.
  * Captures the chart as an image and sends it to an AI provider for analysis.
+ * Supports both text-based analysis and structured chart annotations.
  */
 
-import { useState, useMemo, useRef, useCallback } from 'react';
-import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp, ArrowRight, Clock } from 'lucide-react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp, ArrowRight, Clock, MapPin, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import { useSettingsStore, useUIStore, AI_MODELS, toast } from '../../store';
+import { usePortfolioAnalysisStore, type TrendDirection, type TrendStrength } from '../../store/portfolioAnalysis';
 import type { IndicatorConfig } from '../../lib/indicators';
+import type { AnnotationAnalysisResponse, ChartAnnotationWithId, TrendInfo, AnnotationType, SignalDirection } from '../../lib/types';
 import { AIProviderLogo, AI_PROVIDER_NAMES } from '../common/AIProviderLogo';
 import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
+import { saveAnnotations, getAnnotations } from '../../lib/api';
 
 // Local SecurityData type (simplified version used in ChartsView)
 interface SecurityData {
@@ -44,6 +48,8 @@ interface AIAnalysisPanelProps {
   currentPrice: number;
   timeRange: string;
   indicators: IndicatorConfig[];
+  /** Callback when annotations are generated */
+  onAnnotationsChange?: (annotations: ChartAnnotationWithId[]) => void;
 }
 
 export function AIAnalysisPanel({
@@ -52,6 +58,7 @@ export function AIAnalysisPanel({
   currentPrice,
   timeRange,
   indicators,
+  onAnnotationsChange,
 }: AIAnalysisPanelProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
@@ -59,11 +66,18 @@ export function AIAnalysisPanel({
   const [error, setError] = useState<AiError | null>(null);
   const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // Annotations mode state
+  const [useAnnotations, setUseAnnotations] = useState(true);
+  const [annotations, setAnnotations] = useState<ChartAnnotationWithId[]>([]);
+  const [trendInfo, setTrendInfo] = useState<TrendInfo | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const retryTimerRef = useRef<number | null>(null);
   const rateLimiterRef = useRef<RateLimiter>(new RateLimiter(5000)); // 5 second minimum between calls
 
   const { aiProvider, aiModel, setAiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
+
+  // Portfolio analysis store for trend indicators in Dashboard
+  const { setAnalysis: setPortfolioAnalysis } = usePortfolioAnalysisStore();
 
   // Get API key for selected provider
   const apiKey = useMemo(() => {
@@ -142,6 +156,83 @@ export function AIAnalysisPanel({
     toast.info(`Modell gewechselt zu: ${fallbackModel}`);
   }, [setAiModel]);
 
+  // Clear all annotations
+  const clearAllAnnotations = useCallback(async () => {
+    if (!security?.id) return;
+
+    setAnnotations([]);
+    onAnnotationsChange?.([]);
+
+    // Also clear from database
+    try {
+      await saveAnnotations(security.id, [], true);
+      toast.success('Alle Marker gelöscht');
+    } catch (err) {
+      console.warn('Failed to clear annotations from database:', err);
+    }
+  }, [security?.id, onAnnotationsChange]);
+
+  // Remove a single annotation
+  const removeAnnotation = useCallback(async (annotationId: string) => {
+    if (!security?.id) return;
+
+    const updatedAnnotations = annotations.filter(a => a.id !== annotationId);
+    setAnnotations(updatedAnnotations);
+    onAnnotationsChange?.(updatedAnnotations);
+
+    // Update database
+    try {
+      await saveAnnotations(
+        security.id,
+        updatedAnnotations.map(a => ({
+          annotationType: a.type,
+          price: a.price,
+          time: a.time,
+          timeEnd: a.timeEnd,
+          title: a.title,
+          description: a.description,
+          confidence: a.confidence,
+          signal: a.signal,
+          source: 'ai' as const,
+        })),
+        true
+      );
+    } catch (err) {
+      console.warn('Failed to update annotations in database:', err);
+    }
+  }, [security?.id, annotations, onAnnotationsChange]);
+
+  // Load persisted annotations when security changes
+  useEffect(() => {
+    const loadPersistedAnnotations = async () => {
+      if (!security?.id) return;
+
+      try {
+        const persisted = await getAnnotations(security.id, true);
+        if (persisted.length > 0) {
+          // Convert persisted annotations to ChartAnnotationWithId format
+          const withIds: ChartAnnotationWithId[] = persisted.map(a => ({
+            id: `persisted-${a.id}`,
+            type: a.annotationType as AnnotationType,
+            price: a.price,
+            time: a.time,
+            timeEnd: a.timeEnd,
+            title: a.title,
+            description: a.description || '',
+            confidence: a.confidence,
+            signal: a.signal as SignalDirection | undefined,
+          }));
+          setAnnotations(withIds);
+          onAnnotationsChange?.(withIds);
+        }
+      } catch (err) {
+        console.warn('Failed to load persisted annotations:', err);
+      }
+    };
+
+    loadPersistedAnnotations();
+  }, [security?.id, onAnnotationsChange]);
+
   const handleAnalyze = async (overrideModel?: string) => {
     if (!chartRef.current || !security || !apiKey) return;
 
@@ -184,22 +275,96 @@ export function AIAnalysisPanel({
 
       const modelToUse = overrideModel || aiModel;
 
-      const result = await invoke<ChartAnalysisResponse>('analyze_chart_with_ai', {
-        request: {
-          imageBase64,
-          provider: aiProvider,
-          model: modelToUse,
-          apiKey,
-          context,
-        },
-      });
+      if (useAnnotations) {
+        // Call the structured annotations endpoint
+        const result = await invoke<AnnotationAnalysisResponse>('analyze_chart_with_annotations', {
+          request: {
+            imageBase64,
+            provider: aiProvider,
+            model: modelToUse,
+            apiKey,
+            context,
+          },
+        });
 
-      setAnalysis(result.analysis);
-      setAnalysisInfo({
-        provider: result.provider,
-        model: result.model,
-        tokens: result.tokensUsed,
-      });
+        // Add unique IDs to annotations for React keys
+        const annotationsWithIds: ChartAnnotationWithId[] = result.annotations.map((a, idx) => ({
+          ...a,
+          id: `${Date.now()}-${idx}`,
+        }));
+
+        setAnalysis(result.analysis);
+        setAnnotations(annotationsWithIds);
+        setTrendInfo(result.trend);
+        setAnalysisInfo({
+          provider: result.provider,
+          model: result.model,
+          tokens: result.tokensUsed,
+        });
+
+        // Notify parent about new annotations
+        onAnnotationsChange?.(annotationsWithIds);
+
+        // Persist annotations to database
+        if (security.id) {
+          try {
+            await saveAnnotations(
+              security.id,
+              result.annotations.map(a => ({
+                annotationType: a.type,
+                price: a.price,
+                time: a.time,
+                timeEnd: a.timeEnd,
+                title: a.title,
+                description: a.description,
+                confidence: a.confidence,
+                signal: a.signal,
+                provider: result.provider,
+                model: result.model,
+              })),
+              true // Clear existing AI annotations
+            );
+          } catch (persistErr) {
+            console.warn('Failed to persist annotations:', persistErr);
+          }
+
+          // Update portfolio analysis store for Dashboard trend indicators
+          if (result.trend) {
+            const firstSentence = result.analysis.split(/[.!?]/)[0]?.trim() || result.analysis.slice(0, 100);
+            setPortfolioAnalysis(security.id, {
+              securityId: security.id,
+              name: security.name,
+              trend: result.trend.direction as TrendDirection,
+              strength: result.trend.strength as TrendStrength,
+              confidence: result.trend.confidence,
+              summary: firstSentence,
+            });
+          }
+        }
+      } else {
+        // Call the original text-only endpoint
+        const result = await invoke<ChartAnalysisResponse>('analyze_chart_with_ai', {
+          request: {
+            imageBase64,
+            provider: aiProvider,
+            model: modelToUse,
+            apiKey,
+            context,
+          },
+        });
+
+        setAnalysis(result.analysis);
+        setAnnotations([]);
+        setTrendInfo(null);
+        setAnalysisInfo({
+          provider: result.provider,
+          model: result.model,
+          tokens: result.tokensUsed,
+        });
+
+        // Clear annotations when using text mode
+        onAnnotationsChange?.([]);
+      }
     } catch (err) {
       const parsedError = parseError(err);
       setError(parsedError);
@@ -377,23 +542,54 @@ export function AIAnalysisPanel({
           </div>
           {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </button>
-        <button
-          onClick={() => handleAnalyze()}
-          disabled={isAnalyzing || !security}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {isAnalyzing ? (
-            <>
-              <RefreshCw size={14} className="animate-spin" />
-              Analysiere...
-            </>
-          ) : (
-            <>
-              <Sparkles size={14} />
-              Chart analysieren
-            </>
+        <div className="flex items-center gap-2">
+          {/* Clear annotations button - always visible when there are annotations */}
+          {annotations.length > 0 && (
+            <button
+              onClick={clearAllAnnotations}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors"
+              title="Alle Marker löschen"
+            >
+              <Trash2 size={12} />
+              <span>Marker löschen</span>
+            </button>
           )}
-        </button>
+          {/* Annotations toggle */}
+          <button
+            onClick={() => setUseAnnotations(!useAnnotations)}
+            className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-border hover:bg-muted transition-colors"
+            title={useAnnotations ? 'Chart-Marker aktiv' : 'Nur Text-Analyse'}
+          >
+            {useAnnotations ? (
+              <>
+                <ToggleRight size={14} className="text-primary" />
+                <MapPin size={12} className="text-primary" />
+              </>
+            ) : (
+              <>
+                <ToggleLeft size={14} className="text-muted-foreground" />
+                <MapPin size={12} className="text-muted-foreground" />
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => handleAnalyze()}
+            disabled={isAnalyzing || !security}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isAnalyzing ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Analysiere...
+              </>
+            ) : (
+              <>
+                <Sparkles size={14} />
+                Chart analysieren
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -407,8 +603,96 @@ export function AIAnalysisPanel({
                 <p className="text-sm">Analyse wird erstellt...</p>
               </div>
             ) : analysis ? (
-              <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-base prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                <ReactMarkdown>{analysis}</ReactMarkdown>
+              <div className="space-y-3">
+                {/* Trend indicator */}
+                {trendInfo && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50">
+                    <span className="text-xs font-medium">Trend:</span>
+                    <span className={`text-xs font-semibold ${
+                      trendInfo.direction === 'bullish' ? 'text-green-600 dark:text-green-400' :
+                      trendInfo.direction === 'bearish' ? 'text-red-600 dark:text-red-400' :
+                      'text-muted-foreground'
+                    }`}>
+                      {trendInfo.direction === 'bullish' ? '↑ Bullish' :
+                       trendInfo.direction === 'bearish' ? '↓ Bearish' : '→ Neutral'}
+                    </span>
+                    <span className="text-xs text-muted-foreground">|</span>
+                    <span className="text-xs text-muted-foreground">
+                      {trendInfo.strength === 'strong' ? 'Stark' :
+                       trendInfo.strength === 'moderate' ? 'Moderat' : 'Schwach'}
+                    </span>
+                    {annotations.length > 0 && (
+                      <>
+                        <span className="text-xs text-muted-foreground">|</span>
+                        <span className="text-xs text-muted-foreground">
+                          {annotations.length} Marker im Chart
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Analysis text */}
+                <div className="prose prose-xs dark:prose-invert max-w-none text-[13px] leading-relaxed prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2.5 prose-headings:mb-0.5 prose-p:my-0.5 prose-ul:my-0.5 prose-li:my-0 prose-strong:font-semibold">
+                  <ReactMarkdown>{analysis}</ReactMarkdown>
+                </div>
+
+                {/* Annotations list */}
+                {annotations.length > 0 && (
+                  <div className="space-y-1.5 pt-2 border-t border-border">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">Chart-Marker:</span>
+                      <button
+                        onClick={clearAllAnnotations}
+                        className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                        title="Alle Marker löschen"
+                      >
+                        <Trash2 size={12} />
+                        <span>Alle löschen</span>
+                      </button>
+                    </div>
+                    {annotations.map(annotation => (
+                      <div
+                        key={annotation.id}
+                        className={`group flex items-start gap-2 p-2 rounded text-xs ${
+                          annotation.signal === 'bullish' ? 'bg-green-500/10' :
+                          annotation.signal === 'bearish' ? 'bg-red-500/10' :
+                          'bg-muted/50'
+                        }`}
+                      >
+                        <span className="shrink-0">
+                          {annotation.type === 'support' ? '🟢' :
+                           annotation.type === 'resistance' ? '🔴' :
+                           annotation.type === 'pattern' ? '📐' :
+                           annotation.type === 'signal' ? '⚡' :
+                           annotation.type === 'target' ? '🎯' :
+                           annotation.type === 'stoploss' ? '🛑' : '📝'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{annotation.title}</span>
+                            <span className="text-muted-foreground">
+                              @ {annotation.price.toFixed(2)}
+                            </span>
+                            <span className="ml-auto text-muted-foreground">
+                              {Math.round(annotation.confidence * 100)}%
+                            </span>
+                            <button
+                              onClick={() => removeAnnotation(annotation.id)}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-destructive transition-opacity"
+                              title="Marker löschen"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                          <p className="text-muted-foreground mt-0.5 line-clamp-2">
+                            {annotation.description}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : !error ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground">

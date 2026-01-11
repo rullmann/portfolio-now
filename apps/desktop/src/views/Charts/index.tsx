@@ -29,11 +29,13 @@ import { TradingViewChart } from '../../components/charts/TradingViewChart';
 import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
 import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SecuritySearchModal } from '../../components/modals';
+import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC } from '../../lib/indicators';
 import { useSettingsStore } from '../../store';
+import { useCachedLogos } from '../../lib/hooks';
 import { getWatchlists, getWatchlistSecurities } from '../../lib/api';
-import type { WatchlistSecurityData } from '../../lib/types';
+import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
 import type { AggregatedHolding } from '../types';
 
 // ============================================================================
@@ -132,7 +134,7 @@ const timeRanges: { value: TimeRange; label: string }[] = [
 // ============================================================================
 
 export function ChartsView() {
-  const { theme } = useSettingsStore();
+  const { theme, brandfetchApiKey } = useSettingsStore();
 
   // State
   const [securities, setSecurities] = useState<SecurityData[]>([]);
@@ -163,6 +165,9 @@ export function ChartsView() {
   const [watchlistSecurityIds, setWatchlistSecurityIds] = useState<Set<number>>(new Set());
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+
+  // AI Annotations state
+  const [chartAnnotations, setChartAnnotations] = useState<ChartAnnotationWithId[]>([]);
 
   // Refs for AI chart capture (normal and fullscreen)
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -238,6 +243,19 @@ export function ChartsView() {
     }));
   }, [securities, holdingsSecurityIds, watchlistSecurityIds]);
 
+  // Prepare securities for logo loading
+  const securitiesForLogos = useMemo(() =>
+    securities.map(s => ({
+      id: s.id,
+      ticker: s.ticker || undefined,
+      name: s.name,
+    })),
+    [securities]
+  );
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+
   // Filter securities based on mode
   const displayedSecurities = useMemo(() => {
     if (filterMode === 'holdings') {
@@ -263,10 +281,12 @@ export function ChartsView() {
   const loadPriceData = useCallback(async () => {
     if (!selectedSecurity) {
       setPriceData([]);
+      setChartAnnotations([]); // Clear annotations when no security
       return;
     }
 
     setIsLoading(true);
+    setChartAnnotations([]); // Clear annotations when loading new security
     try {
       let startDate: string;
       const now = new Date();
@@ -380,9 +400,10 @@ export function ChartsView() {
         <div className="flex items-center justify-between px-4 py-2 border-b border-border">
           <div className="flex items-center gap-4">
             {selectedSecurity && (
-              <div className="text-lg font-semibold">
-                {selectedSecurity.ticker || selectedSecurity.name}
-                <span className="text-muted-foreground ml-2">{selectedSecurity.currency}</span>
+              <div className="flex items-center gap-3 text-lg font-semibold">
+                <SecurityLogo securityId={selectedSecurity.id} logos={logos} size={32} />
+                <span>{selectedSecurity.ticker || selectedSecurity.name}</span>
+                <span className="text-muted-foreground text-base">{selectedSecurity.currency}</span>
               </div>
             )}
 
@@ -437,6 +458,7 @@ export function ChartsView() {
                     theme={resolvedTheme}
                     showVolume={true}
                     symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                    annotations={chartAnnotations}
                   />
                 </ChartErrorBoundary>
               )}
@@ -450,6 +472,7 @@ export function ChartsView() {
                 currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
                 timeRange={timeRange}
                 indicators={indicators}
+                onAnnotationsChange={setChartAnnotations}
               />
             </div>
           </div>
@@ -556,16 +579,21 @@ export function ChartsView() {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <div className="font-medium text-sm truncate flex-1">{security.name}</div>
-                      {security.isWatchlistOnly && (
-                        <span className="px-1 py-0.5 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded flex-shrink-0">
-                          Watchlist
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {security.ticker && <span className="mr-2">{security.ticker}</span>}
-                      {security.isin && <span>{security.isin}</span>}
+                      <SecurityLogo securityId={security.id} logos={logos} size={28} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium text-sm truncate">{security.name}</div>
+                          {security.isWatchlistOnly && (
+                            <span className="px-1 py-0.5 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded flex-shrink-0">
+                              Watchlist
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {security.ticker && <span className="mr-2">{security.ticker}</span>}
+                          {security.isin && <span>{security.isin}</span>}
+                        </div>
+                      </div>
                     </div>
                   </button>
                 ))
@@ -599,9 +627,10 @@ export function ChartsView() {
 
               <div className="flex items-center gap-2">
                 {selectedSecurity && (
-                  <div className="text-sm">
+                  <div className="flex items-center gap-2 text-sm">
+                    <SecurityLogo securityId={selectedSecurity.id} logos={logos} size={24} />
                     <span className="font-semibold">{selectedSecurity.name}</span>
-                    <span className="text-muted-foreground ml-2">{selectedSecurity.currency}</span>
+                    <span className="text-muted-foreground">{selectedSecurity.currency}</span>
                   </div>
                 )}
                 <button
@@ -638,6 +667,7 @@ export function ChartsView() {
                     theme={resolvedTheme}
                     showVolume={true}
                     symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                    annotations={chartAnnotations}
                   />
                 </ChartErrorBoundary>
               )}
@@ -650,6 +680,7 @@ export function ChartsView() {
               currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
               timeRange={timeRange}
               indicators={indicators}
+              onAnnotationsChange={setChartAnnotations}
             />
           </div>
 

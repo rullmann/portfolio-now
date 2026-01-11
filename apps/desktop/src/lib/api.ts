@@ -1612,3 +1612,65 @@ export async function retirePortfolio(id: number): Promise<void> {
 }
 
 // Note: exportDatabaseToPortfolio and getBaseCurrency are defined in Export API section above
+
+// ============================================================================
+// Chart Annotations API
+// ============================================================================
+
+import type { PersistedAnnotation, SaveAnnotationRequest } from './types';
+
+/**
+ * Save multiple annotations for a security.
+ * @param securityId The security ID
+ * @param annotations Array of annotations to save
+ * @param clearExisting If true, clears existing AI annotations first
+ */
+export async function saveAnnotations(
+  securityId: number,
+  annotations: SaveAnnotationRequest[],
+  clearExisting: boolean = true
+): Promise<PersistedAnnotation[]> {
+  return invoke<PersistedAnnotation[]>('save_annotations', {
+    securityId,
+    annotations,
+    clearExisting,
+  });
+}
+
+/**
+ * Get annotations for a security.
+ * @param securityId The security ID
+ * @param visibleOnly If true, only returns visible annotations
+ */
+export async function getAnnotations(
+  securityId: number,
+  visibleOnly: boolean = true
+): Promise<PersistedAnnotation[]> {
+  return invoke<PersistedAnnotation[]>('get_annotations', { securityId, visibleOnly });
+}
+
+/**
+ * Delete a single annotation.
+ * @param annotationId The annotation ID to delete
+ */
+export async function deleteAnnotation(annotationId: number): Promise<void> {
+  return invoke('delete_annotation', { annotationId });
+}
+
+/**
+ * Toggle annotation visibility.
+ * @param annotationId The annotation ID
+ * @returns The new visibility state
+ */
+export async function toggleAnnotationVisibility(annotationId: number): Promise<boolean> {
+  return invoke<boolean>('toggle_annotation_visibility', { annotationId });
+}
+
+/**
+ * Clear all AI annotations for a security.
+ * @param securityId The security ID
+ * @returns Number of deleted annotations
+ */
+export async function clearAiAnnotations(securityId: number): Promise<number> {
+  return invoke<number>('clear_ai_annotations', { securityId });
+}

@@ -1,11 +1,18 @@
 //! AI-powered chart analysis module.
 //!
-//! Supports multiple providers: Claude (Anthropic), GPT-4 (OpenAI), Gemini (Google), Perplexity (Sonar)
+//! Supports multiple providers: Claude (Anthropic), GPT-5 (OpenAI), Gemini (Google), Perplexity (Sonar)
 
 pub mod claude;
-pub mod openai;
 pub mod gemini;
+pub mod models;
+pub mod openai;
 pub mod perplexity;
+
+// Re-export model registry functions
+pub use models::{
+    get_default, get_fallback, get_model, get_model_upgrade, get_models_for_provider,
+    is_valid_model, ModelInfo, VisionModel, DEPRECATED_MODELS, VISION_MODELS,
+};
 
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -162,53 +169,6 @@ pub fn parse_retry_delay(text: &str) -> Option<u32> {
     None
 }
 
-/// Get fallback model for a given provider and model
-pub fn get_fallback_model(provider: &str, current_model: &str) -> Option<&'static str> {
-    match provider {
-        "gemini" | "Gemini" => {
-            // Gemini fallback chain: pro -> flash -> 2.5-flash
-            if current_model.contains("pro") {
-                Some("gemini-2.0-flash")
-            } else if current_model.contains("2.5") || current_model.contains("3") {
-                Some("gemini-2.0-flash")
-            } else {
-                None
-            }
-        }
-        "claude" | "Claude" => {
-            // Claude fallback: opus -> sonnet -> haiku
-            if current_model.contains("opus") {
-                Some("claude-sonnet-4-5-20250514")
-            } else if current_model.contains("sonnet") {
-                Some("claude-haiku-4-5-20251015")
-            } else {
-                None
-            }
-        }
-        "openai" | "OpenAI" => {
-            // OpenAI fallback: 4.1 -> 4o -> 4o-mini
-            if current_model.contains("4.1") && !current_model.contains("mini") {
-                Some("gpt-4.1-mini")
-            } else if current_model.contains("4o") && !current_model.contains("mini") {
-                Some("gpt-4o-mini")
-            } else {
-                None
-            }
-        }
-        "perplexity" | "Perplexity" => {
-            // Perplexity fallback: reasoning -> pro -> sonar
-            if current_model.contains("reasoning") {
-                Some("sonar-pro")
-            } else if current_model.contains("pro") {
-                Some("sonar")
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Request for chart analysis
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,6 +203,92 @@ pub struct ChartAnalysisResponse {
 }
 
 // ============================================================================
+// Chart Annotations (Structured AI Output)
+// ============================================================================
+
+/// Type of chart annotation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AnnotationType {
+    Support,
+    Resistance,
+    Trendline,
+    Pattern,
+    Signal,
+    Target,
+    Stoploss,
+    Note,
+}
+
+/// Signal direction for annotations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalDirection {
+    Bullish,
+    Bearish,
+    Neutral,
+}
+
+/// Trend direction
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TrendDirection {
+    Bullish,
+    Bearish,
+    Neutral,
+}
+
+/// Trend strength
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TrendStrength {
+    Strong,
+    Moderate,
+    Weak,
+}
+
+/// Trend information from AI analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendInfo {
+    pub direction: TrendDirection,
+    pub strength: TrendStrength,
+}
+
+/// A single chart annotation from AI analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChartAnnotation {
+    #[serde(rename = "type")]
+    pub annotation_type: AnnotationType,
+    pub price: f64,
+    pub time: Option<String>,
+    pub time_end: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub confidence: f64,
+    pub signal: Option<SignalDirection>,
+}
+
+/// Structured response from AI with annotations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnotationAnalysisJson {
+    pub analysis: String,
+    pub trend: TrendInfo,
+    pub annotations: Vec<ChartAnnotation>,
+}
+
+/// Response from AI analysis with annotations
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationAnalysisResponse {
+    pub analysis: String,
+    pub trend: TrendInfo,
+    pub annotations: Vec<ChartAnnotation>,
+    pub provider: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+}
+
+// ============================================================================
 // Request Configuration Constants
 // ============================================================================
 
@@ -257,6 +303,134 @@ pub const RETRY_BASE_DELAY_MS: u64 = 1000;
 
 /// Maximum tokens for response
 pub const MAX_TOKENS: u32 = 1500;
+
+/// Maximum tokens for portfolio insights (longer response needed)
+pub const MAX_TOKENS_INSIGHTS: u32 = 2000;
+
+/// Maximum tokens for chat responses
+pub const MAX_TOKENS_CHAT: u32 = 1000;
+
+// ============================================================================
+// Portfolio Insights Types
+// ============================================================================
+
+/// Summary of a single holding for AI context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingSummary {
+    pub name: String,
+    pub isin: Option<String>,
+    pub ticker: Option<String>,
+    pub shares: f64,
+    pub current_value: f64,
+    pub current_price: Option<f64>,
+    pub cost_basis: f64,
+    pub weight_percent: f64,
+    pub gain_loss_percent: Option<f64>,
+    pub currency: String,
+}
+
+/// Recent transaction for context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentTransaction {
+    pub date: String,
+    pub txn_type: String,
+    pub security_name: Option<String>,
+    pub shares: Option<f64>,
+    pub amount: f64,
+    pub currency: String,
+}
+
+/// Dividend payment info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DividendPayment {
+    pub date: String,
+    pub security_name: String,
+    pub gross_amount: f64,
+    pub net_amount: f64,
+    pub currency: String,
+}
+
+/// Watchlist item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchlistItem {
+    pub name: String,
+    pub isin: Option<String>,
+    pub ticker: Option<String>,
+    pub current_price: Option<f64>,
+    pub currency: String,
+}
+
+/// Portfolio context for AI analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioInsightsContext {
+    // Holdings (ALL of them)
+    pub holdings: Vec<HoldingSummary>,
+    pub total_value: f64,
+    pub total_cost_basis: f64,
+    pub total_gain_loss_percent: f64,
+
+    // Performance
+    pub ttwror: Option<f64>,
+    pub ttwror_annualized: Option<f64>,
+    pub irr: Option<f64>,
+
+    // Diversification
+    pub currency_allocation: Vec<(String, f64)>,
+    pub top_positions: Vec<(String, f64)>,
+
+    // Dividends
+    pub dividend_yield: Option<f64>,
+    pub annual_dividends: f64,
+    pub recent_dividends: Vec<DividendPayment>,
+
+    // Recent transactions (last 20)
+    pub recent_transactions: Vec<RecentTransaction>,
+
+    // Watchlist
+    pub watchlist: Vec<WatchlistItem>,
+
+    // Period
+    pub portfolio_age_days: u32,
+    pub analysis_date: String,
+    pub base_currency: String,
+}
+
+/// Response from portfolio insights AI analysis
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioInsightsResponse {
+    pub analysis: String,
+    pub provider: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+}
+
+// ============================================================================
+// Chat Types
+// ============================================================================
+
+/// A single chat message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Response from portfolio chat
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioChatResponse {
+    pub response: String,
+    pub provider: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+}
 
 // ============================================================================
 // Prompt Templates (Tiered by Model Capability)
@@ -352,10 +526,346 @@ Beginne direkt mit der Trend-Überschrift. Keine Einleitung, keine zusätzlichen
     }
 }
 
+/// Build a prompt that requests structured JSON output with chart annotations.
+/// The AI will return support/resistance levels, patterns, and signals as JSON.
+pub fn build_annotation_prompt(ctx: &ChartContext) -> String {
+    let indicators_str = if ctx.indicators.is_empty() {
+        "Keine".to_string()
+    } else {
+        ctx.indicators.join(", ")
+    };
+
+    format!(
+        r##"Du bist ein erfahrener technischer Analyst. Analysiere den Chart und gib strukturierte Annotations zurück.
+
+**Wertpapier:** {} ({})
+**Zeitraum:** {}
+**Aktueller Kurs:** {:.2} {}
+**Aktive Indikatoren:** {}
+
+Antworte AUSSCHLIESSLICH mit validem JSON (keine Markdown-Formatierung, kein Text davor oder danach) in diesem Format:
+{{
+  "analysis": "2-3 Sätze Gesamteinschätzung des Charts",
+  "trend": {{
+    "direction": "bullish" oder "bearish" oder "neutral",
+    "strength": "strong" oder "moderate" oder "weak"
+  }},
+  "annotations": [
+    {{
+      "type": "support" oder "resistance" oder "pattern" oder "signal" oder "target" oder "stoploss" oder "note",
+      "price": 123.45,
+      "time": "2024-01-15" oder null,
+      "time_end": null,
+      "title": "Kurzer Titel (max 20 Zeichen)",
+      "description": "Ausführliche Erklärung warum dieses Level wichtig ist",
+      "confidence": 0.85,
+      "signal": "bullish" oder "bearish" oder "neutral" oder null
+    }}
+  ]
+}}
+
+WICHTIGE REGELN:
+1. Identifiziere 2-5 relevante Annotations (Support, Resistance, Patterns, Signale)
+2. Preise müssen exakt aus dem Chart abgelesen werden - schätze realistische Werte
+3. Für Support/Resistance: time ist null (horizontale Linien)
+4. Für Patterns/Signale: time ist das Datum wo das Pattern auftritt
+5. Confidence: 0.5 (unsicher) bis 1.0 (sehr sicher)
+6. Signal: Bei Support="bullish", bei Resistance="bearish", bei neutralen Zonen="neutral"
+7. Gib NUR valides JSON zurück, keine Erklärungen außerhalb des JSON"##,
+        ctx.security_name,
+        ctx.ticker.as_deref().unwrap_or("N/A"),
+        ctx.timeframe,
+        ctx.current_price,
+        ctx.currency,
+        indicators_str
+    )
+}
+
+/// Parse JSON response from AI into structured annotations.
+/// Handles common AI quirks like markdown code blocks around JSON.
+pub fn parse_annotation_response(raw: &str) -> Result<AnnotationAnalysisJson> {
+    // Remove markdown code blocks if present
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    serde_json::from_str(cleaned)
+        .map_err(|e| anyhow!("Failed to parse AI JSON response: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
+}
+
 /// Calculate exponential backoff delay
 pub fn calculate_backoff_delay(attempt: u32) -> std::time::Duration {
     let delay_ms = RETRY_BASE_DELAY_MS * 2u64.pow(attempt);
     std::time::Duration::from_millis(delay_ms.min(10_000)) // Max 10 seconds
+}
+
+// ============================================================================
+// Portfolio Insights Prompt
+// ============================================================================
+
+/// Build the portfolio insights prompt for AI analysis
+pub fn build_portfolio_insights_prompt(ctx: &PortfolioInsightsContext) -> String {
+    // Format top positions
+    let top_positions_str = ctx
+        .top_positions
+        .iter()
+        .take(5)
+        .map(|(name, weight)| format!("- {} ({:.1}%)", name, weight))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Format currency allocation
+    let currency_str = ctx
+        .currency_allocation
+        .iter()
+        .map(|(currency, weight)| format!("- {}: {:.1}%", currency, weight))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Format holdings summary (top 10 for context)
+    let holdings_str = ctx
+        .holdings
+        .iter()
+        .take(10)
+        .map(|h| {
+            let gl_str = h
+                .gain_loss_percent
+                .map(|g| format!("{:+.1}%", g))
+                .unwrap_or_else(|| "-".to_string());
+            format!(
+                "- {} | {:.2} {} | {:.1}% | G/V: {}",
+                h.name, h.current_value, ctx.base_currency, h.weight_percent, gl_str
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Performance info
+    let perf_str = if let Some(ttwror) = ctx.ttwror {
+        let ann_str = ctx
+            .ttwror_annualized
+            .map(|a| format!(" (p.a. {:.1}%)", a))
+            .unwrap_or_default();
+        format!("TTWROR: {:.1}%{}", ttwror, ann_str)
+    } else {
+        "Keine Performance-Daten".to_string()
+    };
+
+    let irr_str = ctx
+        .irr
+        .map(|i| format!("- IRR: {:.1}%", i))
+        .unwrap_or_default();
+
+    format!(
+        r#"Du bist ein erfahrener Finanzberater. Analysiere dieses Portfolio und gib eine Einschätzung.
+
+**Portfolio-Übersicht** (Stand: {})
+- Gesamtwert: {:.2} {}
+- Einstandswert: {:.2} {}
+- Gesamtrendite: {:+.1}%
+- {}
+{}
+
+**Top-Positionen:**
+{}
+
+**Holdings (Top 10 von {}):**
+{}
+
+**Währungsverteilung:**
+{}
+
+**Dividenden:**
+- Jährliche Dividenden: {:.2} {}
+{}
+
+**Anlagehorizont:** {} Tage
+
+Antworte in Markdown mit diesen Abschnitten:
+
+## Zusammenfassung
+[2-3 Sätze Gesamtbewertung des Portfolios]
+
+## Stärken
+[2-3 konkrete Stärken mit Zahlen]
+
+## Risiken
+[2-3 konkrete Risiken/Schwächen mit Zahlen, z.B. Klumpenrisiko, Währungsrisiko]
+
+## Empfehlungen
+[2-3 konkrete, umsetzbare Vorschläge zur Optimierung]
+
+WICHTIG:
+- Sei direkt und konkret. Keine allgemeinen Floskeln.
+- Beziehe dich auf die konkreten Zahlen im Portfolio.
+- Gib KEINE Kaufempfehlungen für einzelne Aktien.
+- Beginne direkt mit ## Zusammenfassung"#,
+        ctx.analysis_date,
+        ctx.total_value,
+        ctx.base_currency,
+        ctx.total_cost_basis,
+        ctx.base_currency,
+        ctx.total_gain_loss_percent,
+        perf_str,
+        irr_str,
+        top_positions_str,
+        ctx.holdings.len(),
+        holdings_str,
+        currency_str,
+        ctx.annual_dividends,
+        ctx.base_currency,
+        ctx.dividend_yield
+            .map(|y| format!("- Dividendenrendite: {:.2}%", y))
+            .unwrap_or_default(),
+        ctx.portfolio_age_days,
+    )
+}
+
+// ============================================================================
+// Chat System Prompt
+// ============================================================================
+
+/// Build the system prompt for portfolio chat
+pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
+    // Format ALL holdings for context
+    let holdings_str = ctx
+        .holdings
+        .iter()
+        .map(|h| {
+            let gl_str = h
+                .gain_loss_percent
+                .map(|g| format!("{:+.1}%", g))
+                .unwrap_or_else(|| "-".to_string());
+            let ticker_str = h.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
+            let price_str = h.current_price.map(|p| format!(", Kurs: {:.2}", p)).unwrap_or_default();
+            format!(
+                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}",
+                h.name, ticker_str, h.shares, h.current_value, ctx.base_currency,
+                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Format recent transactions
+    let txn_str = if ctx.recent_transactions.is_empty() {
+        "Keine aktuellen Transaktionen".to_string()
+    } else {
+        ctx.recent_transactions
+            .iter()
+            .take(20)
+            .map(|t| {
+                let sec_str = t.security_name.as_ref().map(|s| format!(" - {}", s)).unwrap_or_default();
+                let shares_str = t.shares.map(|s| format!(", {:.4} Stk.", s)).unwrap_or_default();
+                format!("- {}: {}{}, {:.2} {}{}", t.date, t.txn_type, sec_str, t.amount, t.currency, shares_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Format recent dividends
+    let div_str = if ctx.recent_dividends.is_empty() {
+        "Keine Dividenden im letzten Jahr".to_string()
+    } else {
+        ctx.recent_dividends
+            .iter()
+            .take(15)
+            .map(|d| {
+                format!("- {}: {} - Brutto: {:.2} {}, Netto: {:.2} {}",
+                    d.date, d.security_name, d.gross_amount, d.currency, d.net_amount, d.currency)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Format watchlist
+    let watchlist_str = if ctx.watchlist.is_empty() {
+        "Keine Watchlist-Einträge".to_string()
+    } else {
+        ctx.watchlist
+            .iter()
+            .map(|w| {
+                let ticker_str = w.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
+                let price_str = w.current_price.map(|p| format!(", Kurs: {:.2} {}", p, w.currency)).unwrap_or_default();
+                format!("- {}{}{}", w.name, ticker_str, price_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let perf_str = match (ctx.ttwror, ctx.ttwror_annualized) {
+        (Some(t), Some(a)) => format!("TTWROR: {:.1}% (p.a. {:.1}%)", t, a),
+        (Some(t), None) => format!("TTWROR: {:.1}%", t),
+        _ => "Keine Performance-Daten".to_string(),
+    };
+
+    // Currency allocation
+    let currency_str = ctx.currency_allocation
+        .iter()
+        .map(|(c, p)| format!("{}: {:.1}%", c, p))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r##"Du bist ein Portfolio-Assistent für die App "Portfolio Now".
+
+=== PORTFOLIO-ÜBERSICHT ===
+- Gesamtwert: {:.2} {}
+- Einstandswert: {:.2} {}
+- Gesamtrendite: {:+.1}%
+- {}
+- Jährliche Dividenden: {:.2} {}
+- Dividendenrendite: {:.2}%
+- Währungsverteilung: {}
+- Portfolio-Alter: {} Tage
+- Stand: {}
+
+=== ALLE HOLDINGS ({} Positionen) ===
+{}
+
+=== LETZTE TRANSAKTIONEN ===
+{}
+
+=== LETZTE DIVIDENDEN (12 Monate) ===
+{}
+
+=== WATCHLIST ===
+{}
+
+=== DEINE FÄHIGKEITEN ===
+Du kannst:
+1. Alle Fragen zum Portfolio beantworten (Holdings, Performance, Dividenden, Transaktionen)
+2. Aktien analysieren und recherchieren (nutze dein Wissen und Web-Suche für aktuelle News)
+3. Finanzkonzepte erklären (TTWROR, IRR, FIFO, etc.)
+4. Rebalancing-Vorschläge machen
+5. Steuerliche Aspekte erläutern
+
+Bei Fragen zu aktuellen Nachrichten oder Kursentwicklungen: Recherchiere im Web nach den neuesten Informationen.
+
+Halte Antworten informativ aber kompakt. Nutze Bullet Points.
+Beziehe dich auf konkrete Zahlen aus dem Portfolio-Kontext wenn verfügbar.
+Antworte auf Deutsch."##,
+        ctx.total_value,
+        ctx.base_currency,
+        ctx.total_cost_basis,
+        ctx.base_currency,
+        ctx.total_gain_loss_percent,
+        perf_str,
+        ctx.annual_dividends,
+        ctx.base_currency,
+        ctx.dividend_yield.unwrap_or(0.0),
+        currency_str,
+        ctx.portfolio_age_days,
+        ctx.analysis_date,
+        ctx.holdings.len(),
+        holdings_str,
+        txn_str,
+        div_str,
+        watchlist_str,
+    )
 }
 
 /// Normalize AI response to ensure consistent markdown formatting
@@ -533,8 +1043,8 @@ pub async fn list_openai_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
 
     let data: OpenAIModelsResponse = response.json().await?;
 
-    // Filter to vision-capable chat models
-    let vision_models = ["gpt-4o", "gpt-4-turbo", "gpt-4.1", "o3", "o4"];
+    // Filter to vision-capable chat models (o3/o4 are reasoning-only, no vision)
+    let vision_models = ["gpt-4o", "gpt-4-turbo", "gpt-4.1"];
     let models: Vec<AiModelInfo> = data
         .data
         .into_iter()
@@ -641,7 +1151,7 @@ pub async fn list_gemini_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
 /// Note: Perplexity doesn't have a models endpoint, so we return hardcoded models
 pub async fn list_perplexity_models(_api_key: &str) -> Result<Vec<AiModelInfo>> {
     // Perplexity doesn't expose a models list API, so we use known Sonar models
-    // Updated January 2025 - sonar-reasoning was deprecated
+    // Only sonar and sonar-pro support vision input (reasoning/research models don't)
     Ok(vec![
         AiModelInfo {
             id: "sonar-pro".to_string(),
@@ -655,35 +1165,5 @@ pub async fn list_perplexity_models(_api_key: &str) -> Result<Vec<AiModelInfo>> 
             description: "Schnell + Web-Suche".to_string(),
             supports_vision: true,
         },
-        AiModelInfo {
-            id: "sonar-reasoning-pro".to_string(),
-            name: "Sonar Reasoning Pro".to_string(),
-            description: "Reasoning mit CoT".to_string(),
-            supports_vision: true,
-        },
-        AiModelInfo {
-            id: "sonar-deep-research".to_string(),
-            name: "Sonar Deep Research".to_string(),
-            description: "Experten-Recherche".to_string(),
-            supports_vision: true,
-        },
     ])
-}
-
-/// Map of deprecated models to their replacements
-pub fn get_model_upgrade(provider: &str, model: &str) -> Option<&'static str> {
-    match (provider, model) {
-        // Perplexity deprecated models
-        ("perplexity", "sonar-reasoning") => Some("sonar-reasoning-pro"),
-        // Claude deprecated models
-        ("claude", m) if m.contains("claude-3-") => Some("claude-sonnet-4-5-20250514"),
-        ("claude", m) if m.contains("claude-2") => Some("claude-sonnet-4-5-20250514"),
-        // OpenAI deprecated models
-        ("openai", "gpt-4-vision-preview") => Some("gpt-4o"),
-        ("openai", "gpt-4-turbo") => Some("gpt-4.1"),
-        // Gemini deprecated models
-        ("gemini", m) if m.contains("gemini-1") => Some("gemini-2.0-flash"),
-        ("gemini", "gemini-pro-vision") => Some("gemini-2.0-flash"),
-        _ => None,
-    }
 }

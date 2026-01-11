@@ -77,8 +77,10 @@ pdf-extract = "0.7"
 # PDF generation for reports
 printpdf = "0.7"
 
-[dev-dependencies]
+# Temporary files for PDF-to-image conversion (OCR)
 tempfile = "3"
+
+[dev-dependencies]
 
 [[bin]]
 name = "portfolio-now"

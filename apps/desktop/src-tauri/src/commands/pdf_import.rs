@@ -549,3 +549,211 @@ pub fn detect_pdf_bank(pdf_path: String) -> Result<Option<String>, String> {
 
     Ok(None)
 }
+
+// ============================================================================
+// OCR Commands
+// ============================================================================
+
+/// OCR options for PDF text extraction
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrExtractRequest {
+    pub pdf_path: String,
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+/// OCR extraction result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrExtractResult {
+    pub text: String,
+    pub pages_processed: usize,
+    pub provider: String,
+    pub model: String,
+}
+
+/// Check if OCR tools (poppler-utils) are available
+#[command]
+pub fn is_ocr_available() -> bool {
+    crate::pdf_import::ocr::is_pdftoppm_available()
+}
+
+/// Extract text from PDF using OCR (Vision API)
+///
+/// This is slower than regular extraction but works for scanned PDFs.
+/// Requires poppler-utils (pdftoppm) to be installed.
+#[command]
+pub async fn extract_pdf_with_ocr(request: OcrExtractRequest) -> Result<OcrExtractResult, String> {
+    use crate::pdf_import::ocr::{ocr_pdf, OcrOptions};
+
+    let options = OcrOptions {
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        api_key: request.api_key,
+    };
+
+    let result = ocr_pdf(&request.pdf_path, options, None)
+        .await
+        .map_err(|e| e)?;
+
+    Ok(OcrExtractResult {
+        text: result.full_text,
+        pages_processed: result.pages.len(),
+        provider: result.provider,
+        model: result.model,
+    })
+}
+
+/// Preview PDF import with optional OCR fallback
+///
+/// If use_ocr is true and regular text extraction yields too little content,
+/// OCR will be used as a fallback.
+#[command]
+pub async fn preview_pdf_import_with_ocr(
+    pdf_path: String,
+    use_ocr: bool,
+    ocr_provider: Option<String>,
+    ocr_model: Option<String>,
+    ocr_api_key: Option<String>,
+) -> Result<PdfImportPreview, String> {
+    use crate::pdf_import::ocr::{ocr_pdf, should_use_ocr_fallback, OcrOptions};
+
+    log::info!("PDF Import: Starting preview for {} (OCR: {})", pdf_path, use_ocr);
+
+    // First try regular text extraction
+    let extracted_text = extract_pdf_text(&pdf_path)?;
+
+    // Check if we should use OCR fallback
+    let content = if use_ocr && should_use_ocr_fallback(&extracted_text, 100) {
+        log::info!("PDF Import: Text extraction yielded too little content, using OCR fallback");
+
+        // Require OCR options
+        let provider = ocr_provider.ok_or("OCR Provider ist erforderlich")?;
+        let model = ocr_model.ok_or("OCR Modell ist erforderlich")?;
+        let api_key = ocr_api_key.ok_or("OCR API-Key ist erforderlich")?;
+
+        let options = OcrOptions {
+            provider,
+            model,
+            api_key,
+        };
+
+        let ocr_result = ocr_pdf(&pdf_path, options, None).await?;
+        ocr_result.full_text
+    } else {
+        extracted_text
+    };
+
+    // Parse the content
+    let result = parse_pdf_content(&content)?;
+
+    // Rest of the preview logic (same as preview_pdf_import)
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let mut new_securities = Vec::new();
+    let mut matched_securities = Vec::new();
+    let mut seen_isins = std::collections::HashSet::new();
+
+    for txn in &result.transactions {
+        if let Some(isin) = &txn.isin {
+            if seen_isins.contains(isin) {
+                continue;
+            }
+            seen_isins.insert(isin.clone());
+
+            let existing: Option<(i64, String)> = conn
+                .query_row(
+                    "SELECT id, name FROM pp_security WHERE isin = ?1 LIMIT 1",
+                    [isin],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                )
+                .ok();
+
+            let security_match = SecurityMatch {
+                isin: Some(isin.clone()),
+                wkn: txn.wkn.clone(),
+                name: txn.security_name.clone(),
+                existing_id: existing.as_ref().map(|(id, _)| *id),
+                existing_name: existing.map(|(_, name)| name),
+            };
+
+            if security_match.existing_id.is_some() {
+                matched_securities.push(security_match);
+            } else {
+                new_securities.push(security_match);
+            }
+        }
+    }
+
+    let warnings: Vec<String> = result.warnings.iter().map(|w| {
+        format!("[{}] {}: {} (Wert: '{}')",
+            match w.severity {
+                crate::pdf_import::WarningSeverity::Info => "Info",
+                crate::pdf_import::WarningSeverity::Warning => "Warnung",
+                crate::pdf_import::WarningSeverity::Error => "Fehler",
+            },
+            w.field,
+            w.message,
+            w.raw_value
+        )
+    }).collect();
+
+    let mut potential_duplicates = Vec::new();
+    for (idx, txn) in result.transactions.iter().enumerate() {
+        if let Some(isin) = &txn.isin {
+            let security_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM pp_security WHERE isin = ?1 LIMIT 1",
+                    [isin],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(sec_id) = security_id {
+                let amount_cents = (txn.net_amount * 100.0) as i64;
+                let txn_type_str = txn.txn_type.to_portfolio_type()
+                    .unwrap_or_else(|| txn.txn_type.to_account_type());
+
+                let existing: Option<i64> = conn
+                    .query_row(
+                        r#"
+                        SELECT id FROM pp_txn
+                        WHERE security_id = ?1
+                          AND date = ?2
+                          AND txn_type = ?3
+                          AND ABS(amount - ?4) <= 1
+                        LIMIT 1
+                        "#,
+                        rusqlite::params![sec_id, txn.date.to_string(), txn_type_str, amount_cents],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                if let Some(existing_id) = existing {
+                    potential_duplicates.push(PotentialDuplicate {
+                        transaction_index: idx,
+                        existing_txn_id: existing_id,
+                        date: txn.date.to_string(),
+                        amount: txn.net_amount,
+                        security_name: txn.security_name.clone(),
+                        txn_type: txn_type_str.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(PdfImportPreview {
+        bank: result.bank,
+        transactions: result.transactions,
+        warnings,
+        new_securities,
+        matched_securities,
+        potential_duplicates,
+    })
+}

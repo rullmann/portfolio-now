@@ -14,3 +14,4 @@ export {
 export { DropdownMenu, DropdownItem, DropdownDivider } from './DropdownMenu';
 export { ErrorBoundary } from './ErrorBoundary';
 export { AIProviderLogo, ClaudeLogo, OpenAILogo, GeminiLogo, AI_PROVIDER_NAMES } from './AIProviderLogo';
+export { SecurityLogo } from './SecurityLogo';

@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { invoke } from '@tauri-apps/api/core';
 
 // ============================================================================
 // Types
@@ -153,63 +154,120 @@ export const useExpandedGroupsStore = create<ExpandedGroupsState>()((set) => ({
 // Auto-update interval options (in minutes, 0 = disabled)
 export type AutoUpdateInterval = 0 | 15 | 30 | 60;
 
-// AI Model options per provider (updated January 2025)
-export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251015' | 'claude-opus-4-5-20251101';
-export type OpenAIModel = 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-4o' | 'o3';
-export type GeminiModel = 'gemini-3-pro-preview' | 'gemini-3-flash' | 'gemini-2.5-flash' | 'gemini-2.5-pro';
+// AI Model options per provider (updated January 2026)
+// ONLY models with confirmed vision/image input support
+export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251015';
+export type OpenAIModel = 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
+export type GeminiModel = 'gemini-3-flash' | 'gemini-3-pro';
 
-// AI Models - Updated January 2025
+// AI Models - Updated January 2026 (Vision-only)
 // Sources:
 // - Claude: https://platform.claude.com/docs/en/about-claude/models/overview
 // - OpenAI: https://platform.openai.com/docs/models
-// - Gemini: https://ai.google.dev/gemini-api/docs/models
+// - Gemini: https://ai.google.dev/gemini-api/docs/gemini-3
 // - Perplexity: https://docs.perplexity.ai/guides/model-cards
 export const AI_MODELS = {
   claude: [
-    { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', description: 'Ausgewogen' },
+    // Note: Opus 4.5 has NO vision support in API yet
+    { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', description: 'Beste Qualität mit Vision' },
     { id: 'claude-haiku-4-5-20251015', name: 'Claude Haiku 4.5', description: 'Schnell & günstig' },
-    { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Beste Qualität' },
   ],
   openai: [
     { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Neuestes, 1M Kontext' },
-    { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', description: 'Schnell & günstig' },
-    { id: 'gpt-4o', name: 'GPT-4o', description: 'Multimodal, bewährt' },
-    { id: 'o3', name: 'o3', description: 'Reasoning-Modell' },
+    { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship Multimodal' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell & günstig' },
   ],
   gemini: [
-    { id: 'gemini-3-flash', name: 'Gemini 3 Flash', description: 'Neuestes, schnell' },
-    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Beste Qualität (Preview)' },
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Bewährt, schnell' },
-    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Bewährt, beste Qualität' },
+    { id: 'gemini-3-flash', name: 'Gemini 3 Flash', description: 'Pro-Intelligenz, Free Tier' },
+    { id: 'gemini-3-pro', name: 'Gemini 3 Pro', description: 'Beste Qualität' },
   ],
   perplexity: [
-    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Beste Qualität + Web-Suche' },
+    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Vision + Web-Suche' },
     { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
-    { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro', description: 'Reasoning mit CoT' },
-    { id: 'sonar-deep-research', name: 'Sonar Deep Research', description: 'Experten-Recherche' },
   ],
 } as const;
 
-// Deprecated model mappings - auto-upgrade to replacements
+// Vision model type from backend
+export interface VisionModel {
+  id: string;
+  name: string;
+  description: string;
+}
+
+// Cache for vision models loaded from backend
+const visionModelCache: Record<string, VisionModel[]> = {};
+
+/**
+ * Get vision-capable models for a provider from the backend registry.
+ * Uses caching to avoid repeated API calls.
+ * Falls back to AI_MODELS if backend is unavailable.
+ */
+export async function getVisionModels(provider: string): Promise<VisionModel[]> {
+  // Return cached result if available
+  if (visionModelCache[provider]) {
+    return visionModelCache[provider];
+  }
+
+  try {
+    const models = await invoke<VisionModel[]>('get_vision_models', { provider });
+    visionModelCache[provider] = models;
+    return models;
+  } catch (error) {
+    console.warn(`Failed to load vision models from backend for ${provider}, using fallback:`, error);
+    // Fallback to static AI_MODELS
+    const fallback = AI_MODELS[provider as keyof typeof AI_MODELS];
+    return fallback ? [...fallback] : [];
+  }
+}
+
+/**
+ * Clear the vision model cache (e.g., after settings change).
+ */
+export function clearVisionModelCache(): void {
+  Object.keys(visionModelCache).forEach(key => delete visionModelCache[key]);
+}
+
+// Deprecated model mappings - auto-upgrade to replacements (January 2026)
 const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
   perplexity: {
-    'sonar-reasoning': 'sonar-reasoning-pro',
+    'sonar-reasoning': 'sonar-pro',
+    'sonar-reasoning-pro': 'sonar-pro',
+    'sonar-deep-research': 'sonar-pro',
   },
   claude: {
+    // Opus 4.5 has no vision - map to Sonnet 4.5
+    'claude-opus-4-5-20251101': 'claude-sonnet-4-5-20250514',
     'claude-3-opus-20240229': 'claude-sonnet-4-5-20250514',
     'claude-3-sonnet-20240229': 'claude-sonnet-4-5-20250514',
     'claude-3-haiku-20240307': 'claude-haiku-4-5-20251015',
+    'claude-3-5-sonnet-20241022': 'claude-sonnet-4-5-20250514',
+    'claude-3-5-haiku-20241022': 'claude-haiku-4-5-20251015',
+    'claude-3-7-sonnet': 'claude-sonnet-4-5-20250514',
     'claude-2.1': 'claude-sonnet-4-5-20250514',
   },
   openai: {
+    // o-series has no vision - map to vision models
+    'o3': 'gpt-4.1',
+    'o3-pro': 'gpt-4.1',
+    'o4-mini': 'gpt-4o-mini',
+    'o1': 'gpt-4o',
+    'o1-preview': 'gpt-4o',
+    'o1-mini': 'gpt-4o-mini',
+    // Old models
     'gpt-4-vision-preview': 'gpt-4o',
     'gpt-4-turbo': 'gpt-4.1',
-    'gpt-4-turbo-preview': 'gpt-4.1',
+    'gpt-4-turbo-preview': 'gpt-4o',
   },
   gemini: {
-    'gemini-pro-vision': 'gemini-2.0-flash',
-    'gemini-1.5-pro': 'gemini-2.5-pro',
-    'gemini-1.5-flash': 'gemini-2.5-flash',
+    // All old models map to Gemini 3
+    'gemini-pro-vision': 'gemini-3-flash',
+    'gemini-2.0-flash': 'gemini-3-flash',
+    'gemini-2.0-flash-exp': 'gemini-3-flash',
+    'gemini-2.5-pro': 'gemini-3-pro',
+    'gemini-2.5-flash': 'gemini-3-flash',
+    'gemini-1.5-pro': 'gemini-3-pro',
+    'gemini-1.5-flash': 'gemini-3-flash',
+    'gemini-3-pro-preview': 'gemini-3-pro',
   },
 };
 
@@ -305,14 +363,15 @@ export const useSettingsStore = create<SettingsState>()(
       twelveDataApiKey: '',
       setTwelveDataApiKey: (key) => set({ twelveDataApiKey: key }),
 
-      // AI Analysis Settings
+      // AI Analysis Settings (Vision-only models, January 2026)
       aiProvider: 'claude',
       setAiProvider: (provider) => set({
         aiProvider: provider,
         // Reset model to default for new provider
         aiModel: provider === 'claude' ? 'claude-sonnet-4-5-20250514'
           : provider === 'openai' ? 'gpt-4.1'
-          : 'gemini-3-flash',
+          : provider === 'gemini' ? 'gemini-3-flash'
+          : 'sonar-pro',
       }),
       aiModel: 'claude-sonnet-4-5-20250514',
       setAiModel: (model) => set({ aiModel: model }),

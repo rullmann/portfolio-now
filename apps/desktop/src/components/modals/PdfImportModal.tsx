@@ -3,8 +3,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import { X, Upload, FileText, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { X, Upload, FileText, AlertCircle, CheckCircle, Loader2, ScanText, AlertTriangle } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import {
   getSupportedBanks,
@@ -14,6 +15,7 @@ import {
   getAccounts,
 } from '../../lib/api';
 import { useSettingsStore } from '../../store';
+import { AIProviderLogo } from '../common/AIProviderLogo';
 import type {
   SupportedBank,
   PdfImportPreview,
@@ -43,7 +45,15 @@ const TXN_TYPE_OPTIONS = [
 ] as const;
 
 export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalProps) {
-  const { deliveryMode } = useSettingsStore();
+  const {
+    deliveryMode,
+    aiProvider,
+    aiModel,
+    anthropicApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    perplexityApiKey,
+  } = useSettingsStore();
   const [step, setStep] = useState<Step>('select');
   const [supportedBanks, setSupportedBanks] = useState<SupportedBank[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -67,6 +77,32 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   // Fee overrides (index -> new fee value)
   const [feeOverrides, setFeeOverrides] = useState<Record<number, number>>({});
 
+  // OCR state
+  const [useOcrFallback, setUseOcrFallback] = useState(false);
+  const [isOcrAvailable, setIsOcrAvailable] = useState(false);
+  const [ocrStatus, setOcrStatus] = useState<string | null>(null);
+
+  // Get the current AI API key based on provider
+  const getOcrApiKey = () => {
+    switch (aiProvider) {
+      case 'claude':
+        return anthropicApiKey;
+      case 'openai':
+        return openaiApiKey;
+      case 'gemini':
+        return geminiApiKey;
+      case 'perplexity':
+        return perplexityApiKey;
+      default:
+        return '';
+    }
+  };
+
+  const hasOcrApiKey = () => {
+    const key = getOcrApiKey();
+    return key && key.trim().length > 0;
+  };
+
   useEffect(() => {
     if (isOpen) {
       loadInitialData();
@@ -77,14 +113,16 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
 
   const loadInitialData = async () => {
     try {
-      const [banks, portfolioList, accountList] = await Promise.all([
+      const [banks, portfolioList, accountList, ocrAvailable] = await Promise.all([
         getSupportedBanks(),
         getPortfolios(),
         getAccounts(),
+        invoke<boolean>('is_ocr_available').catch(() => false),
       ]);
       setSupportedBanks(banks);
       setPortfolios(portfolioList.filter(p => !p.isRetired));
       setAccounts(accountList.filter(a => !a.isRetired));
+      setIsOcrAvailable(ocrAvailable);
 
       // Set defaults
       if (portfolioList.length > 0) {
@@ -106,6 +144,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     setImportResult(null);
     setTxnTypeOverrides({});
     setFeeOverrides({});
+    setUseOcrFallback(false);
+    setOcrStatus(null);
   };
 
   // Get effective transaction type (with override)
@@ -155,9 +195,26 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
         setSelectedFile(selected as string);
         setIsLoading(true);
         setError(null);
+        setOcrStatus(null);
 
-        // Get preview (includes detected bank)
-        const previewData = await previewPdfImport(selected as string);
+        let previewData: PdfImportPreview;
+
+        // Use OCR-enabled preview if option is selected
+        if (useOcrFallback && hasOcrApiKey()) {
+          setOcrStatus('Analysiere PDF...');
+          previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
+            pdfPath: selected as string,
+            useOcr: true,
+            ocrProvider: aiProvider,
+            ocrModel: aiModel,
+            ocrApiKey: getOcrApiKey(),
+          });
+          setOcrStatus(null);
+        } else {
+          // Regular preview
+          previewData = await previewPdfImport(selected as string);
+        }
+
         setPreview(previewData);
 
         // If deliveryMode is active, automatically convert Buy → TransferIn
@@ -177,6 +234,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setOcrStatus(null);
     } finally {
       setIsLoading(false);
     }
@@ -306,16 +364,81 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                 className="border-2 border-dashed border-border rounded-lg p-12 text-center cursor-pointer hover:border-primary hover:bg-muted/50 transition-colors"
               >
                 {isLoading ? (
-                  <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
+                  <>
+                    <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
+                    <p className="text-lg font-medium mb-2">
+                      {ocrStatus || 'PDF wird analysiert...'}
+                    </p>
+                    {ocrStatus && (
+                      <p className="text-sm text-muted-foreground">
+                        OCR-Texterkennung mit KI läuft...
+                      </p>
+                    )}
+                  </>
                 ) : (
-                  <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                  <>
+                    <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-lg font-medium mb-2">PDF-Datei auswählen</p>
+                    <p className="text-sm text-muted-foreground">
+                      Klicken Sie hier oder ziehen Sie eine PDF-Datei hierher
+                    </p>
+                  </>
                 )}
-                <p className="text-lg font-medium mb-2">
-                  {isLoading ? 'PDF wird analysiert...' : 'PDF-Datei auswählen'}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Klicken Sie hier oder ziehen Sie eine PDF-Datei hierher
-                </p>
+              </div>
+
+              {/* OCR Options */}
+              <div className="border border-border rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <ScanText className="w-5 h-5 mt-0.5 text-muted-foreground" />
+                  <div className="flex-1">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div>
+                        <div className="font-medium text-sm">OCR für gescannte PDFs</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Nutzt KI-Texterkennung wenn normale Extraktion zu wenig Text liefert.
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={useOcrFallback}
+                        onChange={(e) => setUseOcrFallback(e.target.checked)}
+                        disabled={!isOcrAvailable || !hasOcrApiKey()}
+                        className="rounded border-border ml-4"
+                      />
+                    </label>
+
+                    {!isOcrAvailable && (
+                      <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-600">
+                        <div className="flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span className="font-medium">poppler-utils nicht installiert</span>
+                        </div>
+                        <div className="mt-1">
+                          macOS: <code className="bg-amber-500/20 px-1 rounded">brew install poppler</code><br />
+                          Ubuntu: <code className="bg-amber-500/20 px-1 rounded">apt install poppler-utils</code>
+                        </div>
+                      </div>
+                    )}
+
+                    {isOcrAvailable && !hasOcrApiKey() && (
+                      <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-600">
+                        <div className="flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>Bitte {aiProvider.toUpperCase()} API-Key in Einstellungen konfigurieren.</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {isOcrAvailable && hasOcrApiKey() && useOcrFallback && (
+                      <div className="mt-3 p-2 bg-muted rounded text-xs flex items-center gap-2">
+                        <AIProviderLogo provider={aiProvider} size={14} />
+                        <span className="text-muted-foreground">
+                          OCR mit {aiModel}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Supported Banks */}

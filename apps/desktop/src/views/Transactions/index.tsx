@@ -2,13 +2,15 @@
  * Transactions view for displaying transaction history.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText } from 'lucide-react';
 import { getTransactionTypeLabel } from '../../lib/types';
-import { deleteTransaction } from '../../lib/api';
+import { deleteTransaction, getSecurities } from '../../lib/api';
 import { TransactionFormModal, PdfImportModal } from '../../components/modals';
-import { TableSkeleton } from '../../components/common';
+import { TableSkeleton, SecurityLogo } from '../../components/common';
+import { useCachedLogos } from '../../lib/hooks';
+import { useSettingsStore } from '../../store';
 
 // Types
 interface TransactionData {
@@ -32,8 +34,16 @@ interface TransactionData {
 const POSITIVE_TYPES = ['BUY', 'DELIVERY_INBOUND', 'TRANSFER_IN', 'DEPOSIT', 'DIVIDENDS', 'INTEREST', 'FEES_REFUND', 'TAX_REFUND'];
 const NEGATIVE_TYPES = ['SELL', 'DELIVERY_OUTBOUND', 'TRANSFER_OUT', 'REMOVAL', 'FEES', 'TAXES', 'INTEREST_CHARGE'];
 
+interface SecurityInfo {
+  id: number;
+  uuid: string;
+  name: string;
+  ticker: string | null | undefined;
+}
+
 export function TransactionsView() {
   const [dbTransactions, setDbTransactions] = useState<TransactionData[]>([]);
+  const [securities, setSecurities] = useState<SecurityInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterOwnerType, setFilterOwnerType] = useState<string>('all');
@@ -42,20 +52,45 @@ export function TransactionsView() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPdfImportOpen, setIsPdfImportOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const { brandfetchApiKey } = useSettingsStore();
 
-  // Load transactions from database
+  // Map UUID to security ID for logo lookup
+  const securityUuidToId = useMemo(() => {
+    const map = new Map<string, number>();
+    securities.forEach((s) => map.set(s.uuid, s.id));
+    return map;
+  }, [securities]);
+
+  // Prepare securities for logo loading
+  const securitiesForLogos = useMemo(() =>
+    securities.map((s) => ({
+      id: s.id,
+      ticker: s.ticker || undefined,
+      name: s.name,
+    })),
+    [securities]
+  );
+
+  // Load logos
+  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+
+  // Load transactions and securities from database
   const loadTransactions = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const transactions = await invoke<TransactionData[]>('get_transactions', {
-        ownerType: null,
-        ownerId: null,
-        securityId: null,
-        limit: 2000,
-        offset: null,
-      });
+      const [transactions, secs] = await Promise.all([
+        invoke<TransactionData[]>('get_transactions', {
+          ownerType: null,
+          ownerId: null,
+          securityId: null,
+          limit: 2000,
+          offset: null,
+        }),
+        getSecurities(),
+      ]);
       setDbTransactions(transactions);
+      setSecurities(secs.map((s) => ({ id: s.id, uuid: s.uuid, name: s.name, ticker: s.ticker })));
     } catch (err) {
       console.error('Failed to load transactions:', err);
       setError(err instanceof Error ? err.message : String(err));
@@ -227,7 +262,16 @@ export function TransactionsView() {
                           </td>
                           <td className="py-2 text-muted-foreground">{tx.ownerName}</td>
                           <td className="py-2">
-                            {tx.securityName ? (
+                            {tx.securityName && tx.securityUuid ? (
+                              <div className="flex items-center gap-2">
+                                <SecurityLogo
+                                  securityId={securityUuidToId.get(tx.securityUuid) || 0}
+                                  logos={logos}
+                                  size={24}
+                                />
+                                <span className="font-medium">{tx.securityName}</span>
+                              </div>
+                            ) : tx.securityName ? (
                               <span className="font-medium">{tx.securityName}</span>
                             ) : (
                               <span className="text-muted-foreground">-</span>
