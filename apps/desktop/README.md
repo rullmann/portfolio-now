@@ -1,73 +1,94 @@
-# React + TypeScript + Vite
+# Portfolio Now
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Cross-Platform Desktop-App zur Portfolio-Verwaltung. Moderne Neuimplementierung von [Portfolio Performance](https://github.com/portfolio-performance/portfolio) mit Tauri (Rust + React/TypeScript).
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### Portfolio-Management
+- Import/Export von Portfolio Performance `.portfolio` Dateien
+- Mehrere Portfolios und Konten verwalten
+- FIFO-basierte Einstandsberechnung
+- Automatische Kursaktualisierung (Yahoo, Finnhub, CoinGecko, EZB)
+- Dividenden-Tracking und Steuerreports
 
-## React Compiler
+### Dashboard
+- Depotwert mit Gewinn/Verlust-Anzeige
+- Portfolio-Entwicklung vs. investiertes Kapital
+- Performance-Kennzahlen (TTWROR, IRR)
+- Sync-Button für manuelle Kursaktualisierung
+- Auto-Sync (15 Min, 30 Min, 1 Std)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### KI-Integration
+- **Portfolio Insights**: Automatische Analyse mit Stärken, Risiken, Empfehlungen
+- **ChatBot**: Fragen zum Portfolio stellen
+  - "Wie war meine Rendite dieses Jahr?"
+  - "Zeige alle Käufe 2024"
+  - "Füge Apple zur Watchlist hinzu"
+- **Chart-Analyse**: Technische Analyse mit Support/Resistance-Markern
+- Unterstützte Provider: Claude, OpenAI, Gemini, Perplexity
 
-## Expanding the ESLint configuration
+### Watchlist
+- Mehrere Watchlists verwalten
+- Mini-Charts mit Kursentwicklung
+- ChatBot-Integration zum Hinzufügen
+- Automatische ISIN/WKN-Ermittlung via Portfolio Report
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Charts & Analyse
+- Candlestick-Charts mit TradingView
+- Technische Indikatoren: RSI, MACD, Bollinger Bands
+- KI-gestützte Trendanalyse
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Reports
+- Performance-Übersicht
+- Dividenden-Report
+- Realisierte Gewinne/Verluste
+- Steuer-Report nach Jahr
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Tech Stack
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- **Frontend**: React 18, TypeScript, Vite, TailwindCSS, Zustand
+- **Backend**: Tauri 2.9, Rust, SQLite
+- **Charts**: Recharts, Lightweight Charts v5
+- **AI**: Claude, OpenAI, Gemini, Perplexity APIs
+
+## Installation
+
+```bash
+# Dependencies installieren
+pnpm install
+
+# Development Server starten
+pnpm desktop
+
+# Release Build erstellen
+pnpm desktop:build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Konfiguration
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+API-Keys werden in den Einstellungen konfiguriert:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+| Provider | Verwendung |
+|----------|------------|
+| **Finnhub** | US-Aktienkurse |
+| **Alpha Vantage** | Aktiensuche |
+| **CoinGecko** | Kryptowährungen |
+| **Brandfetch** | Firmenlogos |
+| **Claude/OpenAI/Gemini/Perplexity** | KI-Features |
+
+## Entwicklung
+
+```bash
+# Linting
+pnpm lint
+
+# Rust Tests
+cd apps/desktop/src-tauri && cargo test --release
+
+# Type Check
+pnpm desktop:build
 ```
+
+## Lizenz
+
+Noch nicht festgelegt.

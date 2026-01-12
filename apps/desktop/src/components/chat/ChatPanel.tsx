@@ -5,13 +5,18 @@
  * The AI is restricted to finance/portfolio topics only.
  */
 
-import { useState, useRef, useEffect } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import { ChatMessage, type ChatMessageData } from './ChatMessage';
 import { cn } from '../../lib/utils';
+
+const MIN_WIDTH = 320;
+const MAX_WIDTH = 800;
+const DEFAULT_WIDTH = 420;
+const STORAGE_KEY_WIDTH = 'portfolio-chat-width';
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -53,8 +58,14 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_WIDTH);
+    return saved ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, parseInt(saved, 10))) : DEFAULT_WIDTH;
+  });
+  const [isResizing, setIsResizing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const {
     aiProvider,
@@ -64,6 +75,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     geminiApiKey,
     perplexityApiKey,
     baseCurrency,
+    alphaVantageApiKey,
   } = useSettingsStore();
 
   const getApiKey = () => {
@@ -105,6 +117,38 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     }
   }, [isOpen]);
 
+  // Save width to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_WIDTH, String(panelWidth));
+  }, [panelWidth]);
+
+  // Handle resize
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = window.innerWidth - e.clientX;
+      setPanelWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
@@ -134,6 +178,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           model: aiModel,
           apiKey: getApiKey(),
           baseCurrency: baseCurrency || 'EUR',
+          alphaVantageApiKey: alphaVantageApiKey || null,
         },
       });
 
@@ -172,6 +217,10 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     localStorage.removeItem(STORAGE_KEY);
   };
 
+  const deleteMessage = (id: string) => {
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -184,13 +233,29 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
       {/* Panel */}
       <div
+        ref={panelRef}
+        style={{ width: panelWidth }}
         className={cn(
-          'fixed right-0 top-0 z-50 h-full w-full max-w-md',
+          'fixed right-0 top-0 z-50 h-full',
           'bg-background border-l border-border shadow-xl',
           'flex flex-col',
-          'animate-in slide-in-from-right duration-300'
+          'animate-in slide-in-from-right duration-300',
+          isResizing && 'select-none'
         )}
       >
+        {/* Resize Handle */}
+        <div
+          onMouseDown={handleMouseDown}
+          className={cn(
+            'absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize',
+            'hover:bg-primary/30 active:bg-primary/50 transition-colors',
+            'group flex items-center justify-center',
+            isResizing && 'bg-primary/50'
+          )}
+        >
+          <div className="absolute left-0 w-4 h-full" /> {/* Larger hit area */}
+          <GripVertical className="h-6 w-3 text-muted-foreground/50 group-hover:text-primary/70 absolute -left-1" />
+        </div>
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -239,7 +304,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
             </div>
           ) : (
             messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
+              <ChatMessage key={message.id} message={message} onDelete={deleteMessage} />
             ))
           )}
 

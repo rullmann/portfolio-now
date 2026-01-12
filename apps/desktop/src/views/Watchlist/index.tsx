@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import { getWatchlists, getWatchlistSecurities, createWatchlist, deleteWatchlist, removeFromWatchlist, getPriceHistory } from '../../lib/api';
 import { TradingViewMiniChart } from '../../components/charts';
 import { SecurityLogo } from '../../components/common';
@@ -88,6 +89,21 @@ export function WatchlistView() {
     loadWatchlists();
   }, []);
 
+  // Listen for watchlist updates from ChatBot
+  useEffect(() => {
+    const unlisten = listen('watchlist-updated', () => {
+      // Reload watchlists when updated via ChatBot
+      loadWatchlists();
+      if (selectedWatchlist) {
+        loadSecurities(selectedWatchlist);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [selectedWatchlist]);
+
   // Load price histories when securities change
   useEffect(() => {
     loadPriceHistories();
@@ -135,8 +151,8 @@ export function WatchlistView() {
     }
   };
 
-  const formatPrice = (price: number | undefined, currency: string) => {
-    if (price === undefined) return '-';
+  const formatPrice = (price: number | undefined | null, currency: string) => {
+    if (price == null) return '-';  // Prüft auf null UND undefined
     return `${price.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
   };
 
@@ -269,7 +285,7 @@ export function WatchlistView() {
                     <tbody>
                       {securities.map((security) => {
                         const changePercent = security.priceChangePercent;
-                        const isPositive = changePercent !== undefined && changePercent >= 0;
+                        const isPositive = changePercent != null && changePercent >= 0;
                         return (
                           <tr key={security.securityId} className="border-b border-border last:border-0 hover:bg-muted/30">
                             <td className="py-3 px-4">
@@ -301,7 +317,7 @@ export function WatchlistView() {
                               {formatPrice(security.latestPrice, security.currency)}
                             </td>
                             <td className="py-3 px-4 text-right">
-                              {changePercent !== undefined ? (
+                              {changePercent != null ? (
                                 <div className={`flex items-center justify-end gap-1 ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
                                   {isPositive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
                                   <span>{isPositive ? '+' : ''}{changePercent.toFixed(2)}%</span>

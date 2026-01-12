@@ -134,8 +134,6 @@ export function SettingsView() {
         toast.warning(
           `Modell "${aiModel}" nicht mehr verfügbar. Automatisch auf "${recommendedModel.name}" gewechselt.`,
         );
-      } else {
-        toast.success(`${models.length} Vision-Modelle geladen`);
       }
     } catch (err) {
       console.error('Failed to fetch vision models:', err);

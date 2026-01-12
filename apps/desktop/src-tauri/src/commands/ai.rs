@@ -8,14 +8,17 @@ use crate::ai::{
     HoldingSummary, PortfolioInsightsContext, PortfolioInsightsResponse,
     ChatMessage, PortfolioChatResponse,
     RecentTransaction, DividendPayment, WatchlistItem,
+    SoldPosition, YearlyOverview,
 };
+use crate::commands::ai_helpers;
 use crate::currency;
 use crate::db;
 use crate::performance;
 use crate::pp::common::{prices, shares};
-use chrono::{NaiveDate, Utc};
-use serde::Deserialize;
-use tauri::command;
+use chrono::{Datelike, NaiveDate, Utc};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use tauri::{command, AppHandle, Emitter};
 
 /// Analyze a chart using AI
 ///
@@ -425,6 +428,126 @@ fn load_portfolio_context(base_currency: &str) -> Result<PortfolioInsightsContex
         .map(|d| (Utc::now().date_naive() - d).num_days().max(0) as u32)
         .unwrap_or(0);
 
+    // Load sold positions (securities that were held but now have 0 shares)
+    let sold_positions_sql = r#"
+        WITH position_summary AS (
+            SELECT
+                s.id as security_id,
+                s.name,
+                s.ticker,
+                s.isin,
+                SUM(CASE WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares ELSE 0 END) as bought,
+                SUM(CASE WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN t.shares ELSE 0 END) as sold,
+                MAX(t.date) as last_txn_date
+            FROM pp_security s
+            JOIN pp_txn t ON t.security_id = s.id AND t.owner_type = 'portfolio'
+            WHERE t.shares IS NOT NULL
+            GROUP BY s.id
+            HAVING (bought - sold) <= 0 AND sold > 0
+        )
+        SELECT security_id, name, ticker, isin, bought, sold, last_txn_date
+        FROM position_summary
+        ORDER BY last_txn_date DESC
+    "#;
+
+    let sold_positions_raw: Vec<(i64, String, Option<String>, Option<String>, i64, i64, String)> = conn
+        .prepare(sold_positions_sql)
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,           // security_id
+                    row.get::<_, String>(1)?,        // name
+                    row.get::<_, Option<String>>(2)?, // ticker
+                    row.get::<_, Option<String>>(3)?, // isin
+                    row.get::<_, i64>(4)?,           // bought
+                    row.get::<_, i64>(5)?,           // sold
+                    row.get::<_, String>(6)?,        // last_txn_date
+                ))
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+        })
+        .unwrap_or_else(|_| Vec::new());
+
+    // Calculate realized gains for each sold position
+    let mut sold_positions_with_gains: Vec<SoldPosition> = Vec::new();
+    for (security_id, name, ticker, isin, bought, sold, last_date) in sold_positions_raw {
+        let gain_sql = r#"
+            SELECT COALESCE(SUM(
+                (t.amount * fc.shares_consumed / t.shares) - fc.gross_amount
+            ), 0)
+            FROM pp_fifo_consumption fc
+            JOIN pp_fifo_lot l ON l.id = fc.lot_id
+            JOIN pp_txn t ON t.id = fc.sale_txn_id
+            WHERE l.security_id = ?1
+        "#;
+        let realized_gain: f64 = conn
+            .query_row(gain_sql, [security_id], |row| row.get::<_, i64>(0))
+            .map(|v| v as f64 / 100.0)
+            .unwrap_or(0.0);
+
+        sold_positions_with_gains.push(SoldPosition {
+            name,
+            ticker,
+            isin,
+            total_bought_shares: shares::to_decimal(bought),
+            total_sold_shares: shares::to_decimal(sold),
+            realized_gain_loss: realized_gain,
+            last_transaction_date: last_date,
+        });
+    }
+
+    // Load yearly overview (last 5 years)
+    let current_year = Utc::now().year();
+    let mut yearly_overview: Vec<YearlyOverview> = Vec::new();
+
+    for year in (current_year - 4)..=current_year {
+        // Realized gains for the year
+        let gains_sql = r#"
+            SELECT COALESCE(SUM(
+                (t.amount * fc.shares_consumed / t.shares) - fc.gross_amount
+            ), 0)
+            FROM pp_fifo_consumption fc
+            JOIN pp_fifo_lot l ON l.id = fc.lot_id
+            JOIN pp_txn t ON t.id = fc.sale_txn_id
+            WHERE strftime('%Y', t.date) = ?1
+        "#;
+        let realized_gains: f64 = conn
+            .query_row(gains_sql, [year.to_string()], |row| row.get::<_, i64>(0))
+            .map(|v| v as f64 / 100.0)
+            .unwrap_or(0.0);
+
+        // Dividends for the year
+        let dividends_sql = r#"
+            SELECT COALESCE(SUM(amount), 0)
+            FROM pp_txn
+            WHERE txn_type = 'DIVIDENDS' AND strftime('%Y', date) = ?1
+        "#;
+        let dividends: f64 = conn
+            .query_row(dividends_sql, [year.to_string()], |row| row.get::<_, i64>(0))
+            .map(|v| v as f64 / 100.0)
+            .unwrap_or(0.0);
+
+        // Transaction count for the year
+        let txn_count_sql = r#"
+            SELECT COUNT(*)
+            FROM pp_txn
+            WHERE strftime('%Y', date) = ?1
+        "#;
+        let transaction_count: i32 = conn
+            .query_row(txn_count_sql, [year.to_string()], |row| row.get(0))
+            .unwrap_or(0);
+
+        // Only add years that have data
+        if transaction_count > 0 || realized_gains != 0.0 || dividends != 0.0 {
+            yearly_overview.push(YearlyOverview {
+                year,
+                realized_gains,
+                dividends,
+                transaction_count,
+            });
+        }
+    }
+
     // Calculate TTWROR performance
     let (ttwror, ttwror_annualized) = if let Some(start_date) = first_date {
         let end_date = Utc::now().date_naive();
@@ -457,6 +580,8 @@ fn load_portfolio_context(base_currency: &str) -> Result<PortfolioInsightsContex
         recent_dividends,
         recent_transactions,
         watchlist,
+        sold_positions: sold_positions_with_gains,
+        yearly_overview,
         portfolio_age_days,
         analysis_date: Utc::now().format("%d.%m.%Y").to_string(),
         base_currency: base_currency.to_string(),
@@ -513,14 +638,219 @@ pub struct PortfolioChatRequest {
     pub model: String,
     pub api_key: String,
     pub base_currency: String,
+    pub alpha_vantage_api_key: Option<String>,
+}
+
+/// Watchlist command parsed from AI response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchlistCommand {
+    pub action: String, // "add" or "remove"
+    pub watchlist: String,
+    pub security: String,
+}
+
+/// Parse watchlist commands from AI response
+fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, String) {
+    let mut commands = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Parse WATCHLIST_ADD commands: [[WATCHLIST_ADD:{"watchlist":"...","security":"..."}]]
+    let add_re = Regex::new(r#"\[\[WATCHLIST_ADD:\s*\{[^}]*"watchlist"\s*:\s*"([^"]+)"[^}]*"security"\s*:\s*"([^"]+)"[^}]*\}\]\]"#).unwrap();
+    for cap in add_re.captures_iter(response) {
+        commands.push(WatchlistCommand {
+            action: "add".to_string(),
+            watchlist: cap[1].to_string(),
+            security: cap[2].to_string(),
+        });
+    }
+    // Also try reversed order
+    let add_re2 = Regex::new(r#"\[\[WATCHLIST_ADD:\s*\{[^}]*"security"\s*:\s*"([^"]+)"[^}]*"watchlist"\s*:\s*"([^"]+)"[^}]*\}\]\]"#).unwrap();
+    for cap in add_re2.captures_iter(response) {
+        // Check if not already added
+        let cmd = WatchlistCommand {
+            action: "add".to_string(),
+            watchlist: cap[2].to_string(),
+            security: cap[1].to_string(),
+        };
+        if !commands.iter().any(|c| c.watchlist == cmd.watchlist && c.security == cmd.security) {
+            commands.push(cmd);
+        }
+    }
+
+    // Parse WATCHLIST_REMOVE commands
+    let remove_re = Regex::new(r#"\[\[WATCHLIST_REMOVE:\s*\{[^}]*"watchlist"\s*:\s*"([^"]+)"[^}]*"security"\s*:\s*"([^"]+)"[^}]*\}\]\]"#).unwrap();
+    for cap in remove_re.captures_iter(response) {
+        commands.push(WatchlistCommand {
+            action: "remove".to_string(),
+            watchlist: cap[1].to_string(),
+            security: cap[2].to_string(),
+        });
+    }
+    let remove_re2 = Regex::new(r#"\[\[WATCHLIST_REMOVE:\s*\{[^}]*"security"\s*:\s*"([^"]+)"[^}]*"watchlist"\s*:\s*"([^"]+)"[^}]*\}\]\]"#).unwrap();
+    for cap in remove_re2.captures_iter(response) {
+        let cmd = WatchlistCommand {
+            action: "remove".to_string(),
+            watchlist: cap[2].to_string(),
+            security: cap[1].to_string(),
+        };
+        if !commands.iter().any(|c| c.watchlist == cmd.watchlist && c.security == cmd.security && c.action == cmd.action) {
+            commands.push(cmd);
+        }
+    }
+
+    // Remove all command tags from response
+    let clean_re = Regex::new(r#"\[\[WATCHLIST_(ADD|REMOVE):[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+
+    // Clean up extra whitespace/newlines at the start
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (commands, cleaned_response)
+}
+
+/// Execute watchlist commands
+async fn execute_watchlist_commands(
+    commands: &[WatchlistCommand],
+    alpha_vantage_api_key: Option<String>,
+) -> Vec<String> {
+    let mut results = Vec::new();
+
+    for cmd in commands {
+        let result = match cmd.action.as_str() {
+            "add" => {
+                match ai_helpers::ai_add_to_watchlist(
+                    cmd.watchlist.clone(),
+                    cmd.security.clone(),
+                    alpha_vantage_api_key.clone(),
+                ).await {
+                    Ok(r) => r.message,
+                    Err(e) => format!("Fehler: {}", e),
+                }
+            }
+            "remove" => {
+                match ai_helpers::ai_remove_from_watchlist(
+                    cmd.watchlist.clone(),
+                    cmd.security.clone(),
+                ) {
+                    Ok(r) => r.message,
+                    Err(e) => format!("Fehler: {}", e),
+                }
+            }
+            _ => continue,
+        };
+        results.push(result);
+    }
+
+    results
+}
+
+/// Transaction query parsed from AI response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionQuery {
+    pub security: Option<String>,
+    pub year: Option<i32>,
+    pub txn_type: Option<String>,
+    pub limit: Option<i32>,
+}
+
+/// Parse transaction query commands from AI response
+fn parse_transaction_queries(response: &str) -> (Vec<TransactionQuery>, String) {
+    let mut queries = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Parse QUERY_TRANSACTIONS commands: [[QUERY_TRANSACTIONS:{"security":"...","year":2024}]]
+    let query_re = Regex::new(r#"\[\[QUERY_TRANSACTIONS:\s*\{([^}]*)\}\]\]"#).unwrap();
+
+    for cap in query_re.captures_iter(response) {
+        let json_content = &cap[1];
+
+        // Parse individual fields
+        let security = Regex::new(r#""security"\s*:\s*"([^"]+)""#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .map(|c| c[1].to_string());
+
+        let year = Regex::new(r#""year"\s*:\s*(\d{4})"#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .and_then(|c| c[1].parse::<i32>().ok());
+
+        let txn_type = Regex::new(r#""type"\s*:\s*"([^"]+)""#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .map(|c| c[1].to_string());
+
+        let limit = Regex::new(r#""limit"\s*:\s*(\d+)"#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .and_then(|c| c[1].parse::<i32>().ok());
+
+        queries.push(TransactionQuery {
+            security,
+            year,
+            txn_type,
+            limit,
+        });
+    }
+
+    // Remove all query tags from response
+    let clean_re = Regex::new(r#"\[\[QUERY_TRANSACTIONS:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (queries, cleaned_response)
+}
+
+/// Execute transaction queries and return formatted results
+fn execute_transaction_queries(queries: &[TransactionQuery]) -> Vec<String> {
+    let mut results = Vec::new();
+
+    for query in queries {
+        match ai_helpers::ai_query_transactions(
+            query.security.clone(),
+            query.year,
+            query.txn_type.clone(),
+            query.limit,
+        ) {
+            Ok(result) => {
+                if result.transactions.is_empty() {
+                    results.push("Keine Transaktionen gefunden.".to_string());
+                } else {
+                    let mut output = format!("**{}**\n\n", result.message);
+                    for txn in &result.transactions {
+                        let sec_str = txn.security_name.as_ref()
+                            .map(|s| {
+                                let ticker = txn.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
+                                format!(" - {}{}", s, ticker)
+                            })
+                            .unwrap_or_default();
+                        let shares_str = txn.shares.map(|s| format!(", {:.4} Stk.", s)).unwrap_or_default();
+                        output.push_str(&format!(
+                            "- {}: {}{}, {:.2} {}{}\n",
+                            txn.date, txn.txn_type, sec_str, txn.amount, txn.currency, shares_str
+                        ));
+                    }
+                    results.push(output);
+                }
+            }
+            Err(e) => {
+                results.push(format!("Fehler bei Transaktionsabfrage: {}", e));
+            }
+        }
+    }
+
+    results
 }
 
 /// Chat with portfolio assistant
 ///
 /// Sends user messages to AI with portfolio context injected.
-/// The AI is restricted to finance/portfolio topics only.
+/// The AI can execute watchlist commands embedded in responses.
 #[command]
 pub async fn chat_with_portfolio_assistant(
+    app: AppHandle,
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
     // Load portfolio context from database
@@ -543,7 +873,45 @@ pub async fn chat_with_portfolio_assistant(
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
-    result.map_err(|e| {
-        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
-    })
+    // Process the result
+    match result {
+        Ok(mut response) => {
+            let mut current_response = response.response.clone();
+            let mut additional_results: Vec<String> = Vec::new();
+
+            // Parse and execute watchlist commands
+            let (wl_commands, cleaned) = parse_watchlist_commands(&current_response);
+            current_response = cleaned;
+
+            if !wl_commands.is_empty() {
+                let results = execute_watchlist_commands(&wl_commands, request.alpha_vantage_api_key).await;
+                let _ = app.emit("watchlist-updated", ());
+                additional_results.extend(results);
+            }
+
+            // Parse and execute transaction queries
+            let (txn_queries, cleaned) = parse_transaction_queries(&current_response);
+            current_response = cleaned;
+
+            if !txn_queries.is_empty() {
+                let results = execute_transaction_queries(&txn_queries);
+                additional_results.extend(results);
+            }
+
+            // Update response
+            response.response = current_response;
+
+            // If there are command results, append or replace
+            if !additional_results.is_empty() {
+                if response.response.trim().is_empty() || response.response.len() < 10 {
+                    response.response = additional_results.join("\n\n");
+                } else {
+                    response.response = format!("{}\n\n{}", response.response, additional_results.join("\n\n"));
+                }
+            }
+
+            Ok(response)
+        }
+        Err(e) => Err(serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())),
+    }
 }

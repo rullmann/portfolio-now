@@ -261,6 +261,31 @@ pub async fn get_security_by_isin(isin: &str) -> Result<SearchResult> {
         .ok_or_else(|| anyhow!("Security with ISIN {} not found", isin))
 }
 
+/// Search for a security and return its identifiers (UUID, ISIN, WKN)
+/// Tries ticker first, then name if not found.
+pub async fn search_and_get_identifiers(
+    ticker: Option<&str>,
+    name: &str,
+) -> Option<(String, Option<String>, Option<String>)> {
+    // Try ticker first
+    if let Some(ticker) = ticker {
+        if let Ok(results) = search(ticker).await {
+            if let Some(first) = results.first() {
+                return Some((first.uuid.clone(), first.isin.clone(), first.wkn.clone()));
+            }
+        }
+    }
+
+    // Try name search
+    if let Ok(results) = search(name).await {
+        if let Some(first) = results.first() {
+            return Some((first.uuid.clone(), first.isin.clone(), first.wkn.clone()));
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

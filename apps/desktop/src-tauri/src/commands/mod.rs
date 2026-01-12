@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod ai_helpers;
 pub mod annotations;
 pub mod benchmark;
 pub mod brandfetch;

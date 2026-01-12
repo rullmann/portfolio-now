@@ -160,6 +160,11 @@ pub fn run() {
             commands::watchlist::remove_from_watchlist,
             commands::watchlist::add_securities_to_watchlist,
             commands::watchlist::get_watchlists_for_security,
+            // AI Helper Commands (for ChatBot)
+            commands::ai_helpers::ai_search_security,
+            commands::ai_helpers::ai_add_to_watchlist,
+            commands::ai_helpers::ai_remove_from_watchlist,
+            commands::ai_helpers::ai_list_watchlists,
             // PDF Import
             commands::pdf_import::get_supported_banks,
             commands::pdf_import::preview_pdf_import,

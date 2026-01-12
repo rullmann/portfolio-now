@@ -595,27 +595,23 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
                 Portfolio
               </span>
-              <div className="flex items-center gap-2">
-                {lastSyncTime && (
-                  <span className="text-[9px] text-muted-foreground/60">
-                    {new Date(lastSyncTime).toLocaleTimeString('de-DE', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                )}
-                <button
-                  onClick={() => handleSyncQuotes()}
-                  disabled={isSyncing}
-                  className="p-1 rounded-full hover:bg-muted/50 transition-colors"
-                  title="Kurse aktualisieren"
-                >
-                  <RefreshCw
-                    size={12}
-                    className={isSyncing ? 'animate-spin text-primary' : 'text-muted-foreground'}
-                  />
-                </button>
-              </div>
+              <button
+                onClick={() => handleSyncQuotes()}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/50 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="Kurse aktualisieren"
+              >
+                <RefreshCw
+                  size={12}
+                  className={isSyncing ? 'animate-spin text-primary' : ''}
+                />
+                <span className="text-[10px] font-medium">
+                  {isSyncing ? 'Sync...' : lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('de-DE', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }) : 'Sync'}
+                </span>
+              </button>
             </div>
             <div className="text-3xl font-light tracking-tight">
               {formatNumber(totalValue)}

@@ -364,6 +364,29 @@ pub struct WatchlistItem {
     pub currency: String,
 }
 
+/// Sold/closed position (no longer held but has historical transactions)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoldPosition {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub isin: Option<String>,
+    pub total_bought_shares: f64,
+    pub total_sold_shares: f64,
+    pub realized_gain_loss: f64,
+    pub last_transaction_date: String,
+}
+
+/// Yearly overview with realized gains and dividends
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YearlyOverview {
+    pub year: i32,
+    pub realized_gains: f64,
+    pub dividends: f64,
+    pub transaction_count: i32,
+}
+
 /// Portfolio context for AI analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,6 +416,10 @@ pub struct PortfolioInsightsContext {
 
     // Watchlist
     pub watchlist: Vec<WatchlistItem>,
+
+    // Historical data
+    pub sold_positions: Vec<SoldPosition>,
+    pub yearly_overview: Vec<YearlyOverview>,
 
     // Period
     pub portfolio_age_days: u32,
@@ -796,6 +823,50 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
             .join("\n")
     };
 
+    // Format sold positions (historical holdings that are now fully sold)
+    let sold_positions_str = if ctx.sold_positions.is_empty() {
+        "Keine verkauften Positionen".to_string()
+    } else {
+        ctx.sold_positions
+            .iter()
+            .map(|s| {
+                let ticker_str = s.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
+                let gain_str = if s.realized_gain_loss >= 0.0 {
+                    format!("+{:.2}", s.realized_gain_loss)
+                } else {
+                    format!("{:.2}", s.realized_gain_loss)
+                };
+                format!(
+                    "- {}{}: Gekauft: {:.4} Stk., Verkauft: {:.4} Stk., Realisiert: {} {}, Letzte Txn: {}",
+                    s.name, ticker_str, s.total_bought_shares, s.total_sold_shares,
+                    gain_str, ctx.base_currency, s.last_transaction_date
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Format yearly overview
+    let yearly_str = if ctx.yearly_overview.is_empty() {
+        "Keine Jahresübersicht verfügbar".to_string()
+    } else {
+        ctx.yearly_overview
+            .iter()
+            .map(|y| {
+                let gain_str = if y.realized_gains >= 0.0 {
+                    format!("+{:.2}", y.realized_gains)
+                } else {
+                    format!("{:.2}", y.realized_gains)
+                };
+                format!(
+                    "- {}: Realisierte Gewinne: {} {}, Dividenden: {:.2} {}, Transaktionen: {}",
+                    y.year, gain_str, ctx.base_currency, y.dividends, ctx.base_currency, y.transaction_count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     let perf_str = match (ctx.ttwror, ctx.ttwror_annualized) {
         (Some(t), Some(a)) => format!("TTWROR: {:.1}% (p.a. {:.1}%)", t, a),
         (Some(t), None) => format!("TTWROR: {:.1}%", t),
@@ -835,6 +906,12 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 === WATCHLIST ===
 {}
 
+=== VERKAUFTE POSITIONEN (Historisch) ===
+{}
+
+=== JAHRESÜBERSICHT ===
+{}
+
 === DEINE FÄHIGKEITEN ===
 Du kannst:
 1. Alle Fragen zum Portfolio beantworten (Holdings, Performance, Dividenden, Transaktionen)
@@ -842,6 +919,46 @@ Du kannst:
 3. Finanzkonzepte erklären (TTWROR, IRR, FIFO, etc.)
 4. Rebalancing-Vorschläge machen
 5. Steuerliche Aspekte erläutern
+6. WATCHLIST VERWALTEN - Du kannst Aktien zur Watchlist hinzufügen oder entfernen!
+
+=== WATCHLIST-BEFEHLE ===
+Wenn der Benutzer dich bittet, eine Aktie zur Watchlist hinzuzufügen oder zu entfernen, gib einen speziellen Befehl im JSON-Format aus.
+
+WICHTIG: Gib den Befehl am ANFANG deiner Antwort aus, gefolgt von einer Bestätigung.
+
+Zum HINZUFÜGEN (auch für Aktien die nicht im Bestand sind):
+[[WATCHLIST_ADD:{{"watchlist":"Name der Watchlist","security":"Aktienname oder Ticker"}}]]
+
+Zum ENTFERNEN:
+[[WATCHLIST_REMOVE:{{"watchlist":"Name der Watchlist","security":"Aktienname oder Ticker"}}]]
+
+Beispiele:
+- "Füge Apple zu meiner Watchlist hinzu" → [[WATCHLIST_ADD:{{"watchlist":"Standard","security":"Apple"}}]]
+- "Setze Tesla auf die Tech-Watchlist" → [[WATCHLIST_ADD:{{"watchlist":"Tech","security":"Tesla"}}]]
+- "Entferne Microsoft von der Watchlist" → [[WATCHLIST_REMOVE:{{"watchlist":"Standard","security":"Microsoft"}}]]
+
+Wenn keine Watchlist genannt wird, verwende "Standard" als Namen.
+Du kannst auch Aktien hinzufügen, die nicht im Portfolio sind - sie werden automatisch gesucht und angelegt.
+
+=== TRANSAKTIONS-ABFRAGEN ===
+Du kannst ALLE Transaktionen abfragen - nicht nur die letzten 20 im Kontext oben.
+Nutze diesen Befehl, wenn der Benutzer nach spezifischen oder allen Transaktionen fragt:
+
+[[QUERY_TRANSACTIONS:{{"security":"Name oder Ticker","year":2024,"type":"BUY","limit":50}}]]
+
+Parameter (alle optional):
+- security: Name, Ticker oder ISIN des Wertpapiers
+- year: Jahr der Transaktionen (z.B. 2024)
+- type: BUY (inkl. Einlieferungen), SELL (inkl. Auslieferungen), DIVIDENDS
+- limit: Maximale Anzahl (Standard: 100, Max: 500)
+
+Beispiele:
+- "Zeige alle Apple-Transaktionen" → [[QUERY_TRANSACTIONS:{{"security":"Apple"}}]]
+- "Welche Käufe hatte ich 2024?" → [[QUERY_TRANSACTIONS:{{"year":2024,"type":"BUY"}}]]
+- "Alle Transaktionen von Microsoft 2023" → [[QUERY_TRANSACTIONS:{{"security":"Microsoft","year":2023}}]]
+- "Zeige alle meine Verkäufe" → [[QUERY_TRANSACTIONS:{{"type":"SELL"}}]]
+
+WICHTIG: Einlieferungen werden als "BUY (Einlieferung)" angezeigt, Auslieferungen als "SELL (Auslieferung)".
 
 Bei Fragen zu aktuellen Nachrichten oder Kursentwicklungen: Recherchiere im Web nach den neuesten Informationen.
 
@@ -865,6 +982,8 @@ Antworte auf Deutsch."##,
         txn_str,
         div_str,
         watchlist_str,
+        sold_positions_str,
+        yearly_str,
     )
 }
 

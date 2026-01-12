@@ -132,6 +132,13 @@ GROUP BY security_id, owner_id
 - `get_ai_models(provider, api_key)` - Verfügbare Modelle von Provider-API laden
 - `get_vision_models(provider)` - Vision-fähige Modelle aus Registry
 
+### AI Helper Commands (ChatBot Actions)
+- `ai_search_security(query, api_key?)` - Security in DB + extern suchen
+- `ai_add_to_watchlist(watchlist, security, api_key?)` - Security zur Watchlist (mit Enrichment)
+- `ai_remove_from_watchlist(watchlist, security)` - Security von Watchlist entfernen
+- `ai_list_watchlists()` - Alle Watchlists mit Securities auflisten
+- `ai_query_transactions(security?, year?, type?, limit?)` - Transaktionen filtern
+
 ---
 
 ## Quote Provider
@@ -139,6 +146,7 @@ GROUP BY security_id, owner_id
 | Provider | API Key | Beschreibung |
 |----------|---------|--------------|
 | **Yahoo** | Nein | Kostenlos, aktuell + historisch |
+| **Portfolio Report** | Nein | ISIN/WKN-Lookup, Kurse (wie PP) |
 | **Finnhub** | Ja | US-Aktien, Premium für Historie |
 | **AlphaVantage** | Ja | 25 Calls/Tag free |
 | **CoinGecko** | Nein | Kryptowährungen |
@@ -289,14 +297,14 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 
 | View | Status | Beschreibung |
 |------|--------|--------------|
-| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts, KI Insights Button |
+| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts, KI Insights, Sync-Button |
 | Portfolio | ✅ | CRUD, History Chart |
 | Securities | ✅ | CRUD, Logos, Sync-Button |
 | Accounts | ✅ | CRUD, Balance-Tracking |
 | Transactions | ✅ | Filter, Pagination |
 | Holdings | ✅ | Donut-Chart mit Logos |
 | Dividends | ✅ | Dividenden-Übersicht mit Logos |
-| Watchlist | ✅ | Multiple Listen, Mini-Charts |
+| Watchlist | ✅ | Multiple Listen, Mini-Charts, ChatBot-Integration |
 | Taxonomies | ✅ | Hierarchischer Baum |
 | Benchmark | ✅ | Performance-Vergleich |
 | Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse + Marker |
@@ -319,6 +327,7 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 8. **GBX/GBp Währung:** British Pence durch 100 teilen für GBP-Wert
 9. **AI Portfolio-Kontext:** Währungsumrechnung in Basiswährung beachten
 10. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
+11. **DELIVERY_INBOUND/OUTBOUND:** Werden im ChatBot als "BUY (Einlieferung)" / "SELL (Auslieferung)" angezeigt
 
 ---
 
@@ -362,7 +371,24 @@ Siehe `apps/desktop/src-tauri/PP_IMPORT_EXPORT.md` für Details.
 ### AI Features
 - **Portfolio Insights Modal**: KI-Analyse mit farbcodierten Karten (grün=Stärken, orange=Risiken, blau=Empfehlungen)
 - **Chat Panel**: Floating Button unten rechts, Slide-in Chat für Portfolio-Fragen
+  - Resizable (links ziehen, 320-800px)
+  - Farbcodierte Nachrichten (blau=User, orange=Bot)
+  - Einzelne Nachrichten löschbar (X-Button bei Hover)
+  - Watchlist-Integration: "Füge Apple zur Watchlist hinzu"
+  - Transaktions-Abfragen: "Zeige alle Käufe 2024"
+  - Historische Daten: Verkaufte Positionen, Jahresübersicht
 - **Chart Marker**: Support/Resistance-Linien werden direkt im Chart angezeigt
+
+### ChatBot Commands (intern)
+Der ChatBot kann folgende Aktionen ausführen:
+- `[[WATCHLIST:{"action":"add","name":"...","security":"..."}]]` - Security zur Watchlist hinzufügen
+- `[[QUERY_TRANSACTIONS:{"security":"...","year":2024,"type":"BUY"}]]` - Transaktionen abfragen
+
+### Watchlist Security Enrichment
+Beim Hinzufügen via ChatBot werden automatisch:
+1. **ISIN/WKN** von Portfolio Report ermittelt
+2. **Aktueller Kurs** von Yahoo Finance geladen
+3. **3 Monate Historie** für Mini-Charts abgerufen
 
 ---
 
