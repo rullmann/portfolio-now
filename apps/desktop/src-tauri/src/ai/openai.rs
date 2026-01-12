@@ -13,7 +13,26 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const CHAT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const RESPONSES_API_URL: &str = "https://api.openai.com/v1/responses";
+
+/// Check if model uses the new Responses API (GPT-5 models)
+fn uses_responses_api(model: &str) -> bool {
+    model.starts_with("gpt-5")
+}
+
+/// Extract text from Responses API response
+fn extract_responses_text(response: &ResponsesApiResponse) -> String {
+    response
+        .output
+        .iter()
+        .filter(|item| item.output_type == "message")
+        .flat_map(|item| item.content.iter())
+        .filter(|c| c.content_type == "output_text")
+        .map(|c| c.text.clone())
+        .collect::<Vec<_>>()
+        .join("")
+}
 
 #[derive(Serialize)]
 struct ChatCompletionRequest {
@@ -61,6 +80,69 @@ struct ResponseMessage {
 
 #[derive(Deserialize)]
 struct Usage {
+    total_tokens: u32,
+}
+
+// ============================================================================
+// Responses API Types (GPT-5 models)
+// ============================================================================
+
+/// Request body for Responses API (GPT-5)
+#[derive(Serialize)]
+struct ResponsesApiRequest {
+    model: String,
+    input: ResponsesInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+}
+
+/// Input can be a simple string or array of messages
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ResponsesInput {
+    Text(String),
+    Messages(Vec<ResponsesMessage>),
+}
+
+/// Message format for Responses API
+#[derive(Serialize)]
+struct ResponsesMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
+    role: String,
+    content: String,
+}
+
+/// Response from Responses API
+#[derive(Deserialize)]
+struct ResponsesApiResponse {
+    output: Vec<ResponsesOutputItem>,
+    usage: Option<ResponsesUsage>,
+}
+
+/// Output item in Responses API response
+#[derive(Deserialize)]
+struct ResponsesOutputItem {
+    #[serde(rename = "type")]
+    output_type: String,
+    #[serde(default)]
+    content: Vec<ResponsesContent>,
+}
+
+/// Content in output
+#[derive(Deserialize)]
+struct ResponsesContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    #[serde(default)]
+    text: String,
+}
+
+/// Usage stats from Responses API
+#[derive(Deserialize)]
+struct ResponsesUsage {
     total_tokens: u32,
 }
 
@@ -152,7 +234,7 @@ pub async fn analyze(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {
@@ -254,7 +336,7 @@ pub async fn analyze_with_custom_prompt(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {
@@ -352,7 +434,7 @@ pub async fn analyze_with_annotations(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {
@@ -470,15 +552,8 @@ pub async fn analyze_portfolio(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
-    let request_body = TextChatCompletionRequest {
-        model: model.to_string(),
-        max_completion_tokens: MAX_TOKENS_INSIGHTS,
-        messages: vec![TextChatMessage {
-            role: "user".to_string(),
-            content: build_portfolio_insights_prompt(context),
-        }],
-    };
-
+    let prompt = build_portfolio_insights_prompt(context);
+    let use_responses_api = uses_responses_api(model);
     let mut last_error = AiError::other("OpenAI", model, "No attempts made");
 
     for attempt in 0..=MAX_RETRIES {
@@ -486,7 +561,71 @@ pub async fn analyze_portfolio(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        // GPT-5 uses Responses API
+        if use_responses_api {
+            let request_body = ResponsesApiRequest {
+                model: model.to_string(),
+                input: ResponsesInput::Text(prompt.clone()),
+                instructions: None,
+                max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+            };
+
+            let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_error = if e.is_timeout() {
+                        AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                    } else if e.is_connect() {
+                        AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                    } else {
+                        AiError::network_error("OpenAI", model, &e.to_string())
+                    };
+
+                    if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = parse_error(status.as_u16(), &body, model);
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            let data: ResponsesApiResponse = response
+                .json()
+                .await
+                .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+            let raw_analysis = extract_responses_text(&data);
+            let analysis = normalize_markdown_response(&raw_analysis);
+
+            return Ok(PortfolioInsightsResponse {
+                analysis,
+                provider: "OpenAI".to_string(),
+                model: model.to_string(),
+                tokens_used: data.usage.map(|u| u.total_tokens),
+            });
+        }
+
+        // GPT-4.x and older use Chat Completions API
+        let request_body = TextChatCompletionRequest {
+            model: model.to_string(),
+            max_completion_tokens: MAX_TOKENS_INSIGHTS,
+            messages: vec![TextChatMessage {
+                role: "user".to_string(),
+                content: prompt.clone(),
+            }],
+        };
+
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {
@@ -561,20 +700,8 @@ pub async fn chat(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
-    // Build messages with system prompt
-    let mut openai_messages = vec![TextChatMessage {
-        role: "system".to_string(),
-        content: build_chat_system_prompt(context),
-    }];
-
-    for m in messages {
-        openai_messages.push(TextChatMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        });
-    }
-
-    // Use web search for o3/o4 models
+    let system_prompt = build_chat_system_prompt(context);
+    let use_responses_api = uses_responses_api(model);
     let use_web_search = supports_web_search(model);
 
     let mut last_error = AiError::other("OpenAI", model, "No attempts made");
@@ -582,6 +709,82 @@ pub async fn chat(
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        // GPT-5 uses Responses API
+        if use_responses_api {
+            // Build messages for Responses API
+            let responses_messages: Vec<ResponsesMessage> = messages
+                .iter()
+                .map(|m| ResponsesMessage {
+                    msg_type: "message".to_string(),
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                })
+                .collect();
+
+            let request_body = ResponsesApiRequest {
+                model: model.to_string(),
+                input: ResponsesInput::Messages(responses_messages),
+                instructions: Some(system_prompt.clone()),
+                max_output_tokens: Some(MAX_TOKENS_CHAT),
+            };
+
+            let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_error = if e.is_timeout() {
+                        AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                    } else if e.is_connect() {
+                        AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                    } else {
+                        AiError::network_error("OpenAI", model, &e.to_string())
+                    };
+
+                    if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = parse_error(status.as_u16(), &body, model);
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            let data: ResponsesApiResponse = response
+                .json()
+                .await
+                .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+            let response_text = extract_responses_text(&data);
+
+            return Ok(PortfolioChatResponse {
+                response: response_text,
+                provider: "OpenAI".to_string(),
+                model: model.to_string(),
+                tokens_used: data.usage.map(|u| u.total_tokens),
+            });
+        }
+
+        // GPT-4.x and older use Chat Completions API
+        let mut openai_messages = vec![TextChatMessage {
+            role: "system".to_string(),
+            content: system_prompt.clone(),
+        }];
+
+        for m in messages {
+            openai_messages.push(TextChatMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            });
         }
 
         // Send request with or without web search tool
@@ -595,14 +798,14 @@ pub async fn chat(
                     search_context_size: Some("medium".to_string()),
                 }],
             };
-            client.post(API_URL).json(&request_body).send().await
+            client.post(CHAT_API_URL).json(&request_body).send().await
         } else {
             let request_body = TextChatCompletionRequest {
                 model: model.to_string(),
                 max_completion_tokens: MAX_TOKENS_CHAT,
                 messages: openai_messages.clone(),
             };
-            client.post(API_URL).json(&request_body).send().await
+            client.post(CHAT_API_URL).json(&request_body).send().await
         };
 
         let response = match response {
@@ -651,6 +854,135 @@ pub async fn chat(
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
         });
+    }
+
+    Err(last_error)
+}
+
+/// Simple text completion with OpenAI (returns raw response)
+pub async fn complete_text(
+    model: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<String, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key))
+            .map_err(|_| AiError::invalid_api_key("OpenAI", model))?,
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
+
+    let use_responses_api = uses_responses_api(model);
+    let mut last_error = AiError::other("OpenAI", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        // GPT-5 uses Responses API
+        if use_responses_api {
+            let request_body = ResponsesApiRequest {
+                model: model.to_string(),
+                input: ResponsesInput::Text(prompt.to_string()),
+                instructions: None,
+                max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+            };
+
+            let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_error = if e.is_timeout() {
+                        AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                    } else if e.is_connect() {
+                        AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                    } else {
+                        AiError::network_error("OpenAI", model, &e.to_string())
+                    };
+
+                    if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = parse_error(status.as_u16(), &body, model);
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            let data: ResponsesApiResponse = response
+                .json()
+                .await
+                .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+            return Ok(extract_responses_text(&data));
+        }
+
+        // GPT-4.x and older use Chat Completions API
+        let request_body = TextChatCompletionRequest {
+            model: model.to_string(),
+            max_completion_tokens: MAX_TOKENS_INSIGHTS,
+            messages: vec![TextChatMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+        };
+
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("OpenAI", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: ChatCompletionResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+        return Ok(data
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default());
     }
 
     Err(last_error)

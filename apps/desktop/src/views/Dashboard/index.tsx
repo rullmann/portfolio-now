@@ -750,6 +750,51 @@ Verwendung:
             <div className="text-[10px] text-muted-foreground">{baseCurrency}</div>
           </div>
 
+          {/* Top 3 Performer */}
+          <div
+            className="glass-card p-3 min-w-[180px] cursor-help"
+            title="Top 3 Performer
+
+Die drei Positionen mit der besten prozentualen Performance (unrealisierter Gewinn/Verlust).
+
+Berechnung:
+• (Aktueller Wert − Einstand) / Einstand × 100%
+• Basierend auf FIFO-Einstandskursen"
+          >
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
+              Top Performer
+            </span>
+            <div className="space-y-1.5">
+              {[...dbHoldings]
+                .filter((h) => h.gainLossPercent != null)
+                .sort((a, b) => (b.gainLossPercent || 0) - (a.gainLossPercent || 0))
+                .slice(0, 3)
+                .map((holding, index) => {
+                  const cachedLogo = cachedLogos.get(holding.securityId);
+                  const logoUrl = holding.customLogo || cachedLogo?.url;
+                  const gainPercent = holding.gainLossPercent || 0;
+                  return (
+                    <div key={holding.securityId} className="flex items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground w-3">{index + 1}.</span>
+                      <div className="w-5 h-5 rounded bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
+                        {logoUrl ? (
+                          <img src={logoUrl} alt="" className="w-full h-full object-contain" />
+                        ) : (
+                          <Building2 size={10} className="text-muted-foreground" />
+                        )}
+                      </div>
+                      <span className="text-[11px] font-medium truncate flex-1 max-w-[80px]">
+                        {holding.name}
+                      </span>
+                      <span className={`text-[11px] font-semibold ${gainPercent >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {gainPercent >= 0 ? '+' : ''}{gainPercent.toFixed(1)}%
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
           {/* KI Insights Button */}
           <button
             onClick={() => setShowInsightsModal(true)}

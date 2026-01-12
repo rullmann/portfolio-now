@@ -14,6 +14,7 @@ import {
   getPortfolios,
   getAccounts,
 } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import type {
@@ -22,6 +23,7 @@ import type {
   PortfolioData,
   AccountData,
 } from '../../lib/types';
+import { formatDate } from '../../lib/types';
 
 interface PdfImportModalProps {
   isOpen: boolean;
@@ -54,6 +56,10 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     geminiApiKey,
     perplexityApiKey,
   } = useSettingsStore();
+
+  // ESC key to close
+  useEscapeKey(isOpen, onClose);
+
   const [step, setStep] = useState<Step>('select');
   const [supportedBanks, setSupportedBanks] = useState<SupportedBank[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -279,21 +285,6 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStep('configure');
-    }
-  };
-
-  const formatDate = (dateStr: string) => {
-    try {
-      if (!dateStr) return '-';
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) {
-        console.warn('PdfImportModal: Invalid date:', dateStr);
-        return dateStr;
-      }
-      return date.toLocaleDateString('de-DE');
-    } catch (err) {
-      console.error('PdfImportModal: Date formatting error:', err);
-      return dateStr || '-';
     }
   };
 

@@ -4,8 +4,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText } from 'lucide-react';
-import { getTransactionTypeLabel } from '../../lib/types';
+import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText, Pencil } from 'lucide-react';
+import { getTransactionTypeLabel, formatDateTime } from '../../lib/types';
 import { deleteTransaction, getSecurities } from '../../lib/api';
 import { TransactionFormModal, PdfImportModal } from '../../components/modals';
 import { TableSkeleton, SecurityLogo } from '../../components/common';
@@ -17,12 +17,14 @@ interface TransactionData {
   id: number;
   uuid: string;
   ownerType: string;
+  ownerId: number;
   ownerName: string;
   txnType: string;
   date: string;
   amount: number;
   currency: string;
   shares: number | null;
+  securityId: number | null;
   securityName: string | null;
   securityUuid: string | null;
   note: string | null;
@@ -52,6 +54,7 @@ export function TransactionsView() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPdfImportOpen, setIsPdfImportOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [editingTransaction, setEditingTransaction] = useState<TransactionData | null>(null);
   const { brandfetchApiKey } = useSettingsStore();
 
   // Map UUID to security ID for logo lookup
@@ -104,6 +107,12 @@ export function TransactionsView() {
   }, [loadTransactions]);
 
   const handleCreate = () => {
+    setEditingTransaction(null);
+    setIsModalOpen(true);
+  };
+
+  const handleEdit = (tx: TransactionData) => {
+    setEditingTransaction(tx);
     setIsModalOpen(true);
   };
 
@@ -131,6 +140,7 @@ export function TransactionsView() {
 
   const handleModalClose = () => {
     setIsModalOpen(false);
+    setEditingTransaction(null);
   };
 
   const handleModalSuccess = () => {
@@ -252,7 +262,7 @@ export function TransactionsView() {
 
                       return (
                         <tr key={tx.uuid} className="border-b border-border last:border-0 hover:bg-accent/30 group">
-                          <td className="py-2 whitespace-nowrap">{tx.date}</td>
+                          <td className="py-2 whitespace-nowrap">{formatDateTime(tx.date)}</td>
                           <td className="py-2">
                             <span className={`inline-block px-2 py-0.5 rounded text-xs ${
                               tx.ownerType === 'portfolio' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
@@ -290,17 +300,26 @@ export function TransactionsView() {
                             {tx.taxes > 0 ? tx.taxes.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
                           </td>
                           <td className="py-2">
-                            <button
-                              onClick={() => handleDelete(tx)}
-                              disabled={deletingId === tx.id}
-                              className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 rounded-md transition-all disabled:opacity-50"
-                              title="Löschen"
-                            >
-                              <Trash2
-                                size={14}
-                                className={deletingId === tx.id ? 'text-muted-foreground animate-pulse' : 'text-destructive'}
-                              />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleEdit(tx)}
+                                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-muted rounded-md transition-all"
+                                title="Bearbeiten"
+                              >
+                                <Pencil size={14} className="text-muted-foreground" />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(tx)}
+                                disabled={deletingId === tx.id}
+                                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 rounded-md transition-all disabled:opacity-50"
+                                title="Löschen"
+                              >
+                                <Trash2
+                                  size={14}
+                                  className={deletingId === tx.id ? 'text-muted-foreground animate-pulse' : 'text-destructive'}
+                                />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -329,6 +348,7 @@ export function TransactionsView() {
           isOpen={isModalOpen}
           onClose={handleModalClose}
           onSuccess={handleModalSuccess}
+          transaction={editingTransaction || undefined}
         />
 
         {/* PDF Import Modal */}

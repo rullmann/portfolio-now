@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { CalendarClock, Plus, Play, Pause, Trash2, RefreshCw, AlertCircle, Edit2, CheckCircle2 } from 'lucide-react';
 import { getInvestmentPlans, getPlansDueForExecution, deleteInvestmentPlan, updateInvestmentPlan, executeInvestmentPlan } from '../../lib/api';
 import type { InvestmentPlanData } from '../../lib/types';
+import { formatDate } from '../../lib/types';
 import { InvestmentPlanFormModal } from '../../components/modals';
 import { toast, useSettingsStore } from '../../store';
 import { SecurityLogo } from '../../components/common';
@@ -119,11 +120,6 @@ export function InvestmentPlansView() {
   const handleModalSuccess = () => {
     loadPlans();
     toast.success(editingPlan ? 'Sparplan aktualisiert' : 'Sparplan erstellt');
-  };
-
-  const formatDate = (dateStr: string | undefined) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('de-DE');
   };
 
   const formatCurrency = (amount: number, currency: string) => {
@@ -285,7 +281,7 @@ export function InvestmentPlansView() {
                     <td className="py-3 px-4 text-right font-medium">
                       {formatCurrency(plan.amount, plan.currency)}
                     </td>
-                    <td className="py-3 px-4 text-center">{formatDate(plan.nextExecution)}</td>
+                    <td className="py-3 px-4 text-center">{plan.nextExecution ? formatDate(plan.nextExecution) : '-'}</td>
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <CheckCircle2 size={14} className="text-green-500" />

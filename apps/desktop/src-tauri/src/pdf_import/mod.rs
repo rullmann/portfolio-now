@@ -5,6 +5,7 @@
 pub mod dkb;
 pub mod ing;
 pub mod comdirect;
+pub mod consorsbank;
 pub mod trade_republic;
 pub mod scalable;
 pub mod ocr;
@@ -130,6 +131,7 @@ const MAX_PDF_SIZE: usize = 100 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct ParsedTransaction {
     pub date: NaiveDate,
+    pub time: Option<chrono::NaiveTime>,
     pub txn_type: ParsedTransactionType,
     pub security_name: Option<String>,
     pub isin: Option<String>,
@@ -218,6 +220,7 @@ pub fn get_parsers() -> Vec<Box<dyn BankParser>> {
         Box::new(dkb::DkbParser::new()),
         Box::new(ing::IngParser::new()),
         Box::new(comdirect::ComdirectParser::new()),
+        Box::new(consorsbank::ConsorsbankParser::new()),
         Box::new(trade_republic::TradeRepublicParser::new()),
         Box::new(scalable::ScalableParser::new()),
     ]
@@ -335,7 +338,7 @@ pub fn parse_pdf_content(content: &str) -> Result<ParseResult, String> {
         }
     }
 
-    Err("Could not detect bank from PDF content. Supported banks: DKB, ING, Comdirect, Trade Republic, Scalable Capital".to_string())
+    Err("Could not detect bank from PDF content. Supported banks: DKB, ING, Comdirect, Consorsbank, Trade Republic, Scalable Capital".to_string())
 }
 
 /// Parse a German decimal number (1.234,56 -> 1234.56)
@@ -360,6 +363,20 @@ pub fn parse_german_date(s: &str) -> Option<NaiveDate> {
     let year: i32 = parts[2].parse().ok()?;
 
     NaiveDate::from_ymd_opt(year, month, day)
+}
+
+/// Parse a time string (HH:MM:SS or HH:MM -> NaiveTime)
+pub fn parse_time(s: &str) -> Option<chrono::NaiveTime> {
+    let trimmed = s.trim();
+    // Try HH:MM:SS first
+    if let Ok(time) = chrono::NaiveTime::parse_from_str(trimmed, "%H:%M:%S") {
+        return Some(time);
+    }
+    // Try HH:MM
+    if let Ok(time) = chrono::NaiveTime::parse_from_str(trimmed, "%H:%M") {
+        return Some(time);
+    }
+    None
 }
 
 /// Extract ISIN from text (12 chars, starts with 2 letters)

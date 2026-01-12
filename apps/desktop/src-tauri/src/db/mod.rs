@@ -235,8 +235,10 @@ pub fn init_database(path: &Path) -> Result<()> {
             source TEXT,
             cross_entry_id INTEGER,           -- links to pp_cross_entry
             updated_at TEXT,
+            import_id INTEGER,
             FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE SET NULL,
-            FOREIGN KEY (cross_entry_id) REFERENCES pp_cross_entry(id) ON DELETE SET NULL
+            FOREIGN KEY (cross_entry_id) REFERENCES pp_cross_entry(id) ON DELETE SET NULL,
+            FOREIGN KEY (import_id) REFERENCES pp_import(id) ON DELETE CASCADE
         );
 
         -- PP Transaction Units (fees, taxes, forex)
@@ -591,6 +593,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if !column_exists(conn, "pp_txn", "other_portfolio_id") {
         conn.execute("ALTER TABLE pp_txn ADD COLUMN other_portfolio_id INTEGER", [])?;
         log::info!("Migration: Added other_portfolio_id column to pp_txn");
+    }
+
+    // Migration: Add import_id to pp_txn for tracking which import created the transaction
+    if !column_exists(conn, "pp_txn", "import_id") {
+        conn.execute("ALTER TABLE pp_txn ADD COLUMN import_id INTEGER", [])?;
+        log::info!("Migration: Added import_id column to pp_txn");
     }
 
     // Migration: Create pp_client_properties table for client-level key-value settings

@@ -47,6 +47,7 @@ impl ScalableParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: if is_sell { ParsedTransactionType::Sell } else { ParsedTransactionType::Buy },
             security_name: None,
             isin: None,
@@ -161,6 +162,7 @@ impl ScalableParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: ParsedTransactionType::Dividend,
             security_name: None,
             isin: None,
@@ -250,6 +252,7 @@ impl ScalableParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: ParsedTransactionType::Fee,
             security_name: None,
             isin: None,

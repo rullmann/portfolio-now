@@ -146,6 +146,7 @@ export function WatchlistView() {
     try {
       await removeFromWatchlist(selectedWatchlist, securityId);
       await loadSecurities(selectedWatchlist);
+      await loadWatchlists(); // Update count in sidebar
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

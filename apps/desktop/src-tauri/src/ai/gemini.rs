@@ -715,3 +715,84 @@ pub async fn chat(
 
     Err(last_error)
 }
+
+/// Simple text completion with Gemini (returns raw response)
+pub async fn complete_text(
+    model: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<String, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("Gemini", model, &e.to_string()))?;
+
+    let request_body = TextGenerateContentRequest {
+        contents: vec![TextContent {
+            role: "user".to_string(),
+            parts: vec![TextPart {
+                text: prompt.to_string(),
+            }],
+        }],
+        system_instruction: None,
+    };
+
+    let api_endpoint = api_url(model, api_key);
+    let mut last_error = AiError::other("Gemini", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        let response = match client.post(&api_endpoint).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("Gemini", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("Gemini", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("Gemini", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: GenerateContentResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("Gemini", model, &format!("JSON parse error: {}", e)))?;
+
+        return Ok(data
+            .candidates
+            .and_then(|c| c.into_iter().next())
+            .and_then(|c| c.content)
+            .and_then(|c| c.parts)
+            .and_then(|p| p.into_iter().next())
+            .and_then(|p| p.text)
+            .unwrap_or_default());
+    }
+
+    Err(last_error)
+}

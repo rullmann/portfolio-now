@@ -3,7 +3,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2, User, AlertTriangle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore, useUIStore, toast, AI_MODELS, getVisionModels } from '../../store';
 import type { VisionModel } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
@@ -14,6 +15,8 @@ import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIPro
 
 export function SettingsView() {
   const {
+    userName,
+    setUserName,
     syncOnlyHeldSecurities,
     setSyncOnlyHeldSecurities,
     deliveryMode,
@@ -60,6 +63,8 @@ export function SettingsView() {
   const [isClearing, setIsClearing] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
 
   const { scrollTarget, setScrollTarget } = useUIStore();
 
@@ -108,6 +113,28 @@ export function SettingsView() {
       setCacheResult(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsClearing(false);
+    }
+  };
+
+  const handleDeleteAllData = async () => {
+    if (deleteConfirm !== 'LÖSCHEN') {
+      toast.error('Bitte gib "LÖSCHEN" ein, um zu bestätigen');
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await invoke('delete_all_data');
+      toast.success('Alle Daten wurden gelöscht. Die App wird neu geladen...');
+      setDeleteConfirm('');
+      // Reload the page to reset all state
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err) {
+      toast.error(`Fehler beim Löschen: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -164,6 +191,29 @@ export function SettingsView() {
 
   return (
     <div className="space-y-6">
+      {/* Profile Settings */}
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <User size={20} className="text-primary" />
+          <h2 className="text-lg font-semibold">Profil</h2>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Dein Name</label>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+              Wird in KI-Konversationen verwendet, um dich persönlich anzusprechen.
+            </p>
+            <input
+              type="text"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              placeholder="z.B. Max"
+              className="w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Display Settings */}
       <div className="bg-card rounded-lg border border-border p-6">
         <h2 className="text-lg font-semibold mb-4">Anzeige</h2>
@@ -690,9 +740,9 @@ export function SettingsView() {
 
           {/* Cache Cleanup */}
           <div className="pt-2 border-t border-border">
-            <label className="text-sm font-medium">Cache</label>
+            <label className="text-sm font-medium">Cache leeren</label>
             <p className="text-sm text-muted-foreground mt-0.5 mb-3">
-              Alte Cache-Dateien von früheren Versionen bereinigen.
+              Löscht alle gecachten Logos. Sie werden bei Bedarf automatisch neu geladen.
             </p>
             <button
               type="button"
@@ -744,6 +794,46 @@ export function SettingsView() {
                 {rebuildResult}
               </p>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* Danger Zone */}
+      <div className="bg-card rounded-lg border border-destructive/50 p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <AlertTriangle size={20} className="text-destructive" />
+          <h2 className="text-lg font-semibold text-destructive">Gefahrenbereich</h2>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Alle Daten löschen</label>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-3">
+              Löscht alle Daten aus der Datenbank: Wertpapiere, Konten, Depots, Buchungen, Kurse und Einstellungen.
+              <strong className="text-destructive"> Diese Aktion kann nicht rückgängig gemacht werden!</strong>
+            </p>
+            <div className="flex items-end gap-3">
+              <div className="flex-1 max-w-xs">
+                <label className="text-xs text-muted-foreground mb-1 block">
+                  Gib "LÖSCHEN" ein, um zu bestätigen:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="LÖSCHEN"
+                  className="w-full rounded-md border border-destructive/50 bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleDeleteAllData}
+                disabled={isDeleting || deleteConfirm !== 'LÖSCHEN'}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Trash2 size={16} />
+                {isDeleting ? 'Lösche...' : 'Alle Daten löschen'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

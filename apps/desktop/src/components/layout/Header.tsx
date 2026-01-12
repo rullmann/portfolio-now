@@ -10,6 +10,7 @@ import {
   RefreshCw,
   FileDown,
   FileText,
+  Globe,
 } from 'lucide-react';
 import {
   useUIStore,
@@ -33,6 +34,15 @@ const PROVIDER_NAMES: Record<string, string> = {
   openai: 'OpenAI',
   gemini: 'Gemini',
   perplexity: 'Perplexity',
+};
+
+// Check if model supports live web search
+const supportsWebSearch = (provider: string, model: string): boolean => {
+  // Perplexity always has web search
+  if (provider === 'perplexity') return true;
+  // OpenAI o3, o4 models have web search
+  if (provider === 'openai' && (model.startsWith('o3') || model.startsWith('o4'))) return true;
+  return false;
 };
 
 export function Header({
@@ -85,6 +95,9 @@ export function Header({
               <span className="text-xs text-muted-foreground/60">
                 {aiModel.split('-').slice(0, 2).join('-')}
               </span>
+              {supportsWebSearch(aiProvider, aiModel) && (
+                <span title="Live Web-Suche"><Globe className="w-3.5 h-3.5 text-blue-500" /></span>
+              )}
             </div>
           )}
         </div>

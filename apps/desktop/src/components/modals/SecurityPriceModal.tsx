@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import type { SecurityData, PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices } from '../../lib/api';
 import { useSettingsStore } from '../../store';
+import { useEscapeKey } from '../../lib/hooks';
 
 interface ChartAnalysisResponse {
   analysis: string;
@@ -83,6 +84,8 @@ function getDateRange(period: TimePeriod): { from: string; to: string } {
 }
 
 export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const [viewMode, setViewMode] = useState<ViewMode>('chart');
   const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('1Y');
   const [prices, setPrices] = useState<PriceData[]>([]);

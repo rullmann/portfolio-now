@@ -157,8 +157,8 @@ export type AutoUpdateInterval = 0 | 15 | 30 | 60;
 // AI Model options per provider (updated January 2026)
 // ONLY models with confirmed vision/image input support
 export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251015';
-export type OpenAIModel = 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
-export type GeminiModel = 'gemini-3-flash' | 'gemini-3-pro';
+export type OpenAIModel = 'gpt-5-mini' | 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
+export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-3-flash-preview' | 'gemini-3-pro-preview';
 
 // AI Models - Updated January 2026 (Vision-only)
 // Sources:
@@ -173,13 +173,16 @@ export const AI_MODELS = {
     { id: 'claude-haiku-4-5-20251015', name: 'Claude Haiku 4.5', description: 'Schnell & günstig' },
   ],
   openai: [
-    { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Neuestes, 1M Kontext' },
+    { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Neuestes GPT-5, schnell & günstig' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', description: '1M Kontext' },
     { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship Multimodal' },
     { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell & günstig' },
   ],
   gemini: [
-    { id: 'gemini-3-flash', name: 'Gemini 3 Flash', description: 'Pro-Intelligenz, Free Tier' },
-    { id: 'gemini-3-pro', name: 'Gemini 3 Pro', description: 'Beste Qualität' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Schnell & günstig, Free Tier' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Beste Qualität (stabil)' },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'Neuestes Modell (Preview)' },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Neuestes Pro (Preview)' },
   ],
   perplexity: [
     { id: 'sonar-pro', name: 'Sonar Pro', description: 'Vision + Web-Suche' },
@@ -259,15 +262,15 @@ const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
     'gpt-4-turbo-preview': 'gpt-4o',
   },
   gemini: {
-    // All old models map to Gemini 3
-    'gemini-pro-vision': 'gemini-3-flash',
-    'gemini-2.0-flash': 'gemini-3-flash',
-    'gemini-2.0-flash-exp': 'gemini-3-flash',
-    'gemini-2.5-pro': 'gemini-3-pro',
-    'gemini-2.5-flash': 'gemini-3-flash',
-    'gemini-1.5-pro': 'gemini-3-pro',
-    'gemini-1.5-flash': 'gemini-3-flash',
-    'gemini-3-pro-preview': 'gemini-3-pro',
+    // Old models map to stable 2.5 versions
+    'gemini-pro-vision': 'gemini-2.5-flash',
+    'gemini-2.0-flash': 'gemini-2.5-flash',
+    'gemini-2.0-flash-exp': 'gemini-2.5-flash',
+    'gemini-1.5-pro': 'gemini-2.5-pro',
+    'gemini-1.5-flash': 'gemini-2.5-flash',
+    // Invalid model names (without -preview suffix)
+    'gemini-3-flash': 'gemini-2.5-flash',
+    'gemini-3-pro': 'gemini-2.5-pro',
   },
 };
 
@@ -277,6 +280,10 @@ function getUpgradedModel(provider: string, model: string): string | null {
 }
 
 interface SettingsState {
+  // User profile
+  userName: string;
+  setUserName: (name: string) => void;
+
   // Quote sync settings
   syncOnlyHeldSecurities: boolean;
   setSyncOnlyHeldSecurities: (value: boolean) => void;
@@ -331,6 +338,10 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      // User profile
+      userName: '',
+      setUserName: (name) => set({ userName: name }),
+
       // Quote sync - default to only held securities
       syncOnlyHeldSecurities: true,
       setSyncOnlyHeldSecurities: (value) => set({ syncOnlyHeldSecurities: value }),
@@ -369,8 +380,8 @@ export const useSettingsStore = create<SettingsState>()(
         aiProvider: provider,
         // Reset model to default for new provider
         aiModel: provider === 'claude' ? 'claude-sonnet-4-5-20250514'
-          : provider === 'openai' ? 'gpt-4.1'
-          : provider === 'gemini' ? 'gemini-3-flash'
+          : provider === 'openai' ? 'gpt-5-mini'
+          : provider === 'gemini' ? 'gemini-2.5-flash'
           : 'sonar-pro',
       }),
       aiModel: 'claude-sonnet-4-5-20250514',
@@ -390,12 +401,19 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'portfolio-settings',
-      version: 3, // Increment when model lists change (v3: Added Gemini 3)
+      version: 4, // v4: Added userName
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
+        // Migration v4: Add userName if not present
+        if (version < 4) {
+          if (!state.userName) {
+            state.userName = '';
+          }
+        }
+
         // Migration: validate AI models (revalidate on each version bump)
-        if (version < 3) {
+        if (version < 4) {
           const provider = state.aiProvider || 'claude';
           const validModels = AI_MODELS[provider].map(m => m.id) as string[];
 

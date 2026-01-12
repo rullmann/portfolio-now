@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { X, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import type { SecurityData, StockSplitPreview, ApplyStockSplitRequest } from '../../lib/types';
 import { getSecurities, previewStockSplit, applyStockSplit } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 interface StockSplitModalProps {
   isOpen: boolean;
@@ -20,6 +21,8 @@ export function StockSplitModal({
   onSuccess,
   defaultSecurityId,
 }: StockSplitModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const [formData, setFormData] = useState({
     securityId: '',
     effectiveDate: new Date().toISOString().split('T')[0],

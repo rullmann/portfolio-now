@@ -11,7 +11,9 @@ import type {
   CreateTransactionRequest,
   TransactionData,
 } from '../../lib/types';
+import { extractDateForInput, extractTimeForInput, combineDateAndTime } from '../../lib/types';
 import { createTransaction, updateTransaction, getAccounts, getPortfolios, getSecurities } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
 
 // Transaction types by owner
@@ -67,6 +69,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
     ownerId: '',
     txnType: defaultPortfolioTxnType,
     date: new Date().toISOString().split('T')[0],
+    time: '00:00',
     amount: '',
     currency: 'EUR',
     shares: '',
@@ -90,58 +93,49 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [forexExpanded, setForexExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  // ESC key to close
+  useEscapeKey(isOpen, onClose);
 
   // Load data when modal opens
   useEffect(() => {
     if (isOpen) {
       setIsLoadingData(true);
+      setDataLoaded(false);
       Promise.all([getAccounts(), getPortfolios(), getSecurities()])
         .then(([acc, port, sec]) => {
           setAccounts(acc);
           setPortfolios(port);
           setSecurities(sec);
-          // Set default owner if available
-          if (port.length > 0 && formData.ownerType === 'portfolio') {
-            setFormData(prev => ({ ...prev, ownerId: String(port[0].id) }));
-          } else if (acc.length > 0 && formData.ownerType === 'account') {
-            setFormData(prev => ({ ...prev, ownerId: String(acc[0].id) }));
-          }
+          setDataLoaded(true);
         })
         .catch((err) => console.error('Failed to load data:', err))
         .finally(() => setIsLoadingData(false));
+    } else {
+      setDataLoaded(false);
     }
   }, [isOpen]);
 
-  // Reset/prefill form when modal opens
+  // Reset/prefill form when data is loaded
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && dataLoaded) {
       if (isEditMode && transaction) {
         // Edit mode: prefill with transaction data
-        // Determine owner type from ownerType field
         const ownerType = transaction.ownerType === 'account' ? 'account' : 'portfolio';
 
-        // Find owner ID by name (we have ownerName in TransactionData)
-        let ownerId = '';
-        if (ownerType === 'portfolio') {
-          const portfolio = portfolios.find(p => p.name === transaction.ownerName);
-          ownerId = portfolio ? String(portfolio.id) : '';
-        } else {
-          const account = accounts.find(a => a.name === transaction.ownerName);
-          ownerId = account ? String(account.id) : '';
-        }
+        // Use ownerId directly from transaction
+        const ownerId = transaction.ownerId ? String(transaction.ownerId) : '';
 
-        // Find security ID by name if applicable
-        let securityId = '';
-        if (transaction.securityName) {
-          const security = securities.find(s => s.name === transaction.securityName);
-          securityId = security ? String(security.id) : '';
-        }
+        // Use securityId directly from transaction
+        const securityId = transaction.securityId ? String(transaction.securityId) : '';
 
         setFormData({
           ownerType,
           ownerId,
           txnType: transaction.txnType,
-          date: transaction.date,
+          date: extractDateForInput(transaction.date),
+          time: extractTimeForInput(transaction.date),
           amount: String(transaction.amount), // Already in euros from API
           currency: transaction.currency,
           shares: transaction.shares ? String(transaction.shares) : '', // Already converted by API
@@ -165,6 +159,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
           ownerId: portfolios.length > 0 ? String(portfolios[0].id) : '',
           txnType: defaultPortfolioTxnType,
           date: new Date().toISOString().split('T')[0],
+          time: '00:00',
           amount: '',
           currency: 'EUR',
           shares: '',
@@ -182,24 +177,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
       }
       setError(null);
     }
-  }, [isOpen, portfolios, accounts, securities, defaultSecurityId, isEditMode, transaction, defaultPortfolioTxnType]);
-
-  // Update ownerId and txnType when ownerType changes
-  useEffect(() => {
-    if (formData.ownerType === 'portfolio') {
-      setFormData(prev => ({
-        ...prev,
-        ownerId: portfolios.length > 0 ? String(portfolios[0].id) : '',
-        txnType: defaultPortfolioTxnType,
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        ownerId: accounts.length > 0 ? String(accounts[0].id) : '',
-        txnType: 'DEPOSIT',
-      }));
-    }
-  }, [formData.ownerType, portfolios, accounts, defaultPortfolioTxnType]);
+  }, [isOpen, dataLoaded, portfolios, accounts, securities, defaultSecurityId, isEditMode, transaction, defaultPortfolioTxnType]);
 
   // Get available transaction types based on owner type
   const availableTxnTypes = formData.ownerType === 'portfolio'
@@ -229,6 +207,27 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
+
+    // Special handling for ownerType change - update related fields
+    if (name === 'ownerType') {
+      if (value === 'portfolio') {
+        setFormData(prev => ({
+          ...prev,
+          ownerType: value,
+          ownerId: portfolios.length > 0 ? String(portfolios[0].id) : '',
+          txnType: defaultPortfolioTxnType,
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          ownerType: value,
+          ownerId: accounts.length > 0 ? String(accounts[0].id) : '',
+          txnType: 'DEPOSIT',
+        }));
+      }
+      return;
+    }
+
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
@@ -245,7 +244,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
         : undefined;
 
       if (isEditMode && transaction) {
-        // Update existing transaction
+        // Update existing transaction - send all fields
         const feeAmountCents = formData.feeAmount && parseFloat(formData.feeAmount) > 0
           ? Math.round(parseFloat(formData.feeAmount) * 100)
           : undefined;
@@ -254,12 +253,18 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
           : undefined;
 
         await updateTransaction(transaction.id, {
-          date: formData.date,
+          date: combineDateAndTime(formData.date, formData.time),
           amount: amountCents,
           shares: sharesScaled,
           note: formData.note || undefined,
           feeAmount: feeAmountCents,
           taxAmount: taxAmountCents,
+          // Full edit support
+          ownerType: formData.ownerType,
+          ownerId: parseInt(formData.ownerId),
+          txnType: formData.txnType,
+          securityId: formData.securityId ? parseInt(formData.securityId) : undefined,
+          currency: formData.currency || selectedOwnerCurrency,
         });
       } else {
         // Create new transaction
@@ -267,7 +272,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
           ownerType: formData.ownerType,
           ownerId: parseInt(formData.ownerId),
           txnType: formData.txnType,
-          date: formData.date,
+          date: combineDateAndTime(formData.date, formData.time),
           amount: amountCents,
           currency: formData.currency || selectedOwnerCurrency,
           shares: sharesScaled,
@@ -361,7 +366,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
                 name="ownerType"
                 value={formData.ownerType}
                 onChange={handleChange}
-                disabled={isLoadingData || isEditMode}
+                disabled={isLoadingData}
                 className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="portfolio">Depot</option>
@@ -378,7 +383,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
                 name="ownerId"
                 value={formData.ownerId}
                 onChange={handleChange}
-                disabled={isLoadingData || isEditMode}
+                disabled={isLoadingData}
                 className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {formData.ownerType === 'portfolio'
@@ -394,15 +399,14 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
           </div>
 
           {/* Transaction Type */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Buchungsart</label>
               <select
                 name="txnType"
                 value={formData.txnType}
                 onChange={handleChange}
-                disabled={isEditMode}
-                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 {availableTxnTypes.map((type) => (
                   <option key={type.value} value={type.value}>{type.label}</option>
@@ -422,6 +426,18 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
                 className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
+
+            {/* Time */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Uhrzeit</label>
+              <input
+                type="time"
+                name="time"
+                value={formData.time}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
           </div>
 
           {/* Security (if required) */}
@@ -435,7 +451,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
                 value={formData.securityId}
                 onChange={handleChange}
                 required={requiresSecurity}
-                disabled={isLoadingData || isEditMode}
+                disabled={isLoadingData}
                 className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="">Wertpapier auswählen...</option>

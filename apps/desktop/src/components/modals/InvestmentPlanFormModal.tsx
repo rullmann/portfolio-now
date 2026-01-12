@@ -19,6 +19,7 @@ import {
   getAccounts,
   getPortfolios,
 } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 const INTERVAL_OPTIONS: { value: PlanInterval; label: string }[] = [
   { value: 'WEEKLY', label: 'Wöchentlich' },
@@ -41,6 +42,8 @@ export function InvestmentPlanFormModal({
   onSuccess,
   plan,
 }: InvestmentPlanFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const isEditMode = !!plan;
 
   const [formData, setFormData] = useState({

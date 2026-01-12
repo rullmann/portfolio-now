@@ -56,6 +56,7 @@ impl TradeRepublicParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: if is_sell { ParsedTransactionType::Sell } else { ParsedTransactionType::Buy },
             security_name: None,
             isin: None,
@@ -169,6 +170,7 @@ impl TradeRepublicParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: ParsedTransactionType::Dividend,
             security_name: None,
             isin: extract_isin(content),
@@ -236,6 +238,7 @@ impl TradeRepublicParser {
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            time: None,
             txn_type: ParsedTransactionType::Interest,
             security_name: None,
             isin: None,

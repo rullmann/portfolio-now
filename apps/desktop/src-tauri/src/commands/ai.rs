@@ -130,7 +130,7 @@ pub struct PortfolioInsightsRequest {
 }
 
 /// Load portfolio context from database for AI analysis
-fn load_portfolio_context(base_currency: &str) -> Result<PortfolioInsightsContext, String> {
+fn load_portfolio_context(base_currency: &str, user_name: Option<String>) -> Result<PortfolioInsightsContext, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -585,6 +585,7 @@ fn load_portfolio_context(base_currency: &str) -> Result<PortfolioInsightsContex
         portfolio_age_days,
         analysis_date: Utc::now().format("%d.%m.%Y").to_string(),
         base_currency: base_currency.to_string(),
+        user_name,
     })
 }
 
@@ -595,8 +596,8 @@ fn load_portfolio_context(base_currency: &str) -> Result<PortfolioInsightsContex
 pub async fn analyze_portfolio_with_ai(
     request: PortfolioInsightsRequest,
 ) -> Result<PortfolioInsightsResponse, String> {
-    // Load portfolio context from database
-    let context = load_portfolio_context(&request.base_currency)?;
+    // Load portfolio context from database (no user name for insights)
+    let context = load_portfolio_context(&request.base_currency, None)?;
 
     // Check if portfolio has holdings
     if context.holdings.is_empty() {
@@ -639,6 +640,7 @@ pub struct PortfolioChatRequest {
     pub api_key: String,
     pub base_currency: String,
     pub alpha_vantage_api_key: Option<String>,
+    pub user_name: Option<String>,
 }
 
 /// Watchlist command parsed from AI response
@@ -844,6 +846,65 @@ fn execute_transaction_queries(queries: &[TransactionQuery]) -> Vec<String> {
     results
 }
 
+/// Portfolio value query parsed from AI response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioValueQuery {
+    pub date: String,
+}
+
+/// Parse portfolio value query commands from AI response
+fn parse_portfolio_value_queries(response: &str) -> (Vec<PortfolioValueQuery>, String) {
+    let mut queries = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Parse QUERY_PORTFOLIO_VALUE commands: [[QUERY_PORTFOLIO_VALUE:{"date":"2025-04-04"}]]
+    let query_re = Regex::new(r#"\[\[QUERY_PORTFOLIO_VALUE:\s*\{([^}]*)\}\]\]"#).unwrap();
+
+    for cap in query_re.captures_iter(response) {
+        let json_content = &cap[1];
+
+        // Parse date field
+        let date = Regex::new(r#""date"\s*:\s*"([^"]+)""#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .map(|c| c[1].to_string());
+
+        if let Some(date) = date {
+            queries.push(PortfolioValueQuery { date });
+        }
+    }
+
+    // Remove all query tags from response
+    let clean_re = Regex::new(r#"\[\[QUERY_PORTFOLIO_VALUE:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (queries, cleaned_response)
+}
+
+/// Execute portfolio value queries and return formatted results
+fn execute_portfolio_value_queries(queries: &[PortfolioValueQuery]) -> Vec<String> {
+    let mut results = Vec::new();
+
+    for query in queries {
+        match ai_helpers::ai_query_portfolio_value(query.date.clone()) {
+            Ok(result) => {
+                if result.found {
+                    results.push(format!("**Depotwert am {}:** {:.2} {}", result.date, result.value, result.currency));
+                } else {
+                    results.push(result.message);
+                }
+            }
+            Err(e) => {
+                results.push(format!("Fehler bei Depotwert-Abfrage: {}", e));
+            }
+        }
+    }
+
+    results
+}
+
 /// Chat with portfolio assistant
 ///
 /// Sends user messages to AI with portfolio context injected.
@@ -853,8 +914,8 @@ pub async fn chat_with_portfolio_assistant(
     app: AppHandle,
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
-    // Load portfolio context from database
-    let context = load_portfolio_context(&request.base_currency)?;
+    // Load portfolio context from database with user name
+    let context = load_portfolio_context(&request.base_currency, request.user_name.clone())?;
 
     // Auto-upgrade deprecated models
     let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
@@ -895,6 +956,15 @@ pub async fn chat_with_portfolio_assistant(
 
             if !txn_queries.is_empty() {
                 let results = execute_transaction_queries(&txn_queries);
+                additional_results.extend(results);
+            }
+
+            // Parse and execute portfolio value queries
+            let (pv_queries, cleaned) = parse_portfolio_value_queries(&current_response);
+            current_response = cleaned;
+
+            if !pv_queries.is_empty() {
+                let results = execute_portfolio_value_queries(&pv_queries);
                 additional_results.extend(results);
             }
 

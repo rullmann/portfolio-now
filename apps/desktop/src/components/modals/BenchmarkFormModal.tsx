@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, Globe, Database } from 'lucide-react';
 import type { SecurityData } from '../../lib/types';
 import { getSecurities, addBenchmark, searchExternalSecurities, createSecurity } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 interface ExternalSecurityResult {
   symbol: string;
@@ -27,6 +28,8 @@ export function BenchmarkFormModal({
   onClose,
   onSuccess,
 }: BenchmarkFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'internal' | 'external'>('internal');
   const [startDate, setStartDate] = useState(

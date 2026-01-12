@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { X, ChevronRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import type { PortfolioData, AccountData, CreatePortfolioRequest, UpdatePortfolioRequest } from '../../lib/types';
 import { createPPPortfolio, updatePPPortfolio, getAccounts } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 // Key-Value entry for attributes
 interface KeyValueEntry {
@@ -112,6 +113,8 @@ interface PortfolioFormModalProps {
 }
 
 export function PortfolioFormModal({ isOpen, onClose, onSuccess, portfolio }: PortfolioFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const isEditMode = !!portfolio;
 
   const [formData, setFormData] = useState({

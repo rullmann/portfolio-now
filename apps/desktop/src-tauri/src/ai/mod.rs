@@ -425,6 +425,9 @@ pub struct PortfolioInsightsContext {
     pub portfolio_age_days: u32,
     pub analysis_date: String,
     pub base_currency: String,
+
+    // User profile
+    pub user_name: Option<String>,
 }
 
 /// Response from portfolio insights AI analysis
@@ -880,8 +883,17 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
         .collect::<Vec<_>>()
         .join(", ");
 
+    // User greeting
+    let user_greeting = match &ctx.user_name {
+        Some(name) if !name.is_empty() => format!("Der Benutzer heißt {}. Sprich ihn gelegentlich mit Namen an, aber nicht in jeder Nachricht.", name),
+        _ => "Der Benutzer hat keinen Namen angegeben.".to_string(),
+    };
+
     format!(
         r##"Du bist ein Portfolio-Assistent für die App "Portfolio Now".
+
+=== BENUTZER ===
+{}
 
 === PORTFOLIO-ÜBERSICHT ===
 - Gesamtwert: {:.2} {}
@@ -915,11 +927,15 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 === DEINE FÄHIGKEITEN ===
 Du kannst:
 1. Alle Fragen zum Portfolio beantworten (Holdings, Performance, Dividenden, Transaktionen)
-2. Aktien analysieren und recherchieren (nutze dein Wissen und Web-Suche für aktuelle News)
+2. Aktien analysieren und LIVE im Web recherchieren (aktuelle Kurse, News, DAX-Stand etc.)
 3. Finanzkonzepte erklären (TTWROR, IRR, FIFO, etc.)
 4. Rebalancing-Vorschläge machen
 5. Steuerliche Aspekte erläutern
 6. WATCHLIST VERWALTEN - Du kannst Aktien zur Watchlist hinzufügen oder entfernen!
+
+=== WEB-SUCHE ===
+Bei Fragen zu AKTUELLEN Kursen, Indizes (DAX, S&P 500, etc.) oder News: Recherchiere SOFORT im Web!
+Beispiele für Web-Suche: "Wie steht der DAX?", "Apple Kurs heute", "Aktuelle Nvidia News"
 
 === WATCHLIST-BEFEHLE ===
 Wenn der Benutzer dich bittet, eine Aktie zur Watchlist hinzuzufügen oder zu entfernen, gib einen speziellen Befehl im JSON-Format aus.
@@ -960,11 +976,28 @@ Beispiele:
 
 WICHTIG: Einlieferungen werden als "BUY (Einlieferung)" angezeigt, Auslieferungen als "SELL (Auslieferung)".
 
-Bei Fragen zu aktuellen Nachrichten oder Kursentwicklungen: Recherchiere im Web nach den neuesten Informationen.
+=== PORTFOLIO-WERT ABFRAGEN ===
+Du kannst den historischen Depotwert zu einem bestimmten Datum abfragen:
 
-Halte Antworten informativ aber kompakt. Nutze Bullet Points.
-Beziehe dich auf konkrete Zahlen aus dem Portfolio-Kontext wenn verfügbar.
-Antworte auf Deutsch."##,
+[[QUERY_PORTFOLIO_VALUE:{{"date":"2025-04-04"}}]]
+
+Parameter:
+- date: Datum im Format YYYY-MM-DD
+
+Beispiele:
+- "Wie hoch stand das Depot am 04.04.2025?" → [[QUERY_PORTFOLIO_VALUE:{{"date":"2025-04-04"}}]]
+- "Depotwert Ende letztes Jahr" → [[QUERY_PORTFOLIO_VALUE:{{"date":"2024-12-31"}}]]
+- "Wert am 1. Januar" → [[QUERY_PORTFOLIO_VALUE:{{"date":"2025-01-01"}}]]
+
+WICHTIG: Gib den Befehl am ANFANG deiner Antwort aus!
+
+=== ANTWORT-STIL ===
+- KURZ und PRÄGNANT antworten - keine langen Einleitungen oder Zusammenfassungen
+- Bullet Points nutzen, keine Fließtexte
+- Bei Kurs-Fragen: Nur den Wert + kurze Info (max 2-3 Sätze)
+- Portfolio-Zahlen konkret nennen wenn relevant
+- Sprache: Deutsch"##,
+        user_greeting,
         ctx.total_value,
         ctx.base_currency,
         ctx.total_cost_basis,

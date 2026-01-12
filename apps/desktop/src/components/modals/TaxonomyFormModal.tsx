@@ -19,6 +19,7 @@ import {
   updateClassification,
   getClassifications,
 } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 // Preset colors for classifications
 const PRESET_COLORS = [
@@ -61,6 +62,8 @@ export function TaxonomyFormModal({
   taxonomyId,
   parentId,
 }: TaxonomyFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const isEditMode = mode === 'taxonomy' ? !!taxonomy : !!classification;
 
   // Taxonomy form state

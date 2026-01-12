@@ -103,6 +103,8 @@ pub fn run() {
             commands::crud::update_transaction,
             commands::crud::delete_transaction,
             commands::crud::get_transaction,
+            // Database Reset
+            commands::crud::delete_all_data,
             // Performance
             commands::performance::calculate_performance,
             commands::performance::get_period_returns,
@@ -165,6 +167,7 @@ pub fn run() {
             commands::ai_helpers::ai_add_to_watchlist,
             commands::ai_helpers::ai_remove_from_watchlist,
             commands::ai_helpers::ai_list_watchlists,
+            commands::ai_helpers::ai_query_portfolio_value,
             // PDF Import
             commands::pdf_import::get_supported_banks,
             commands::pdf_import::preview_pdf_import,
@@ -190,6 +193,7 @@ pub fn run() {
             commands::rebalancing::execute_rebalance,
             commands::rebalancing::calculate_deviation,
             commands::rebalancing::suggest_rebalance_by_taxonomy,
+            commands::rebalancing::suggest_rebalance_with_ai,
             // Benchmark
             commands::benchmark::get_benchmarks,
             commands::benchmark::add_benchmark,

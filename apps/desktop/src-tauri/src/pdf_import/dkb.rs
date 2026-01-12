@@ -45,6 +45,7 @@ impl DkbParser {
         for section in sections.iter().skip(1) {
             let mut txn = ParsedTransaction {
                 date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+                time: None,
                 txn_type: ParsedTransactionType::Unknown,
                 security_name: None,
                 isin: None,
@@ -164,6 +165,7 @@ impl DkbParser {
             if dividend_re.as_ref().map_or(false, |re| re.is_match(&full_section)) {
                 let mut txn = ParsedTransaction {
                     date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+                    time: None,
                     txn_type: ParsedTransactionType::Dividend,
                     security_name: None,
                     isin: extract_isin(&full_section),

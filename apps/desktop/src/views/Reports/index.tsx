@@ -19,6 +19,7 @@ import type {
   PerformanceResult,
   PortfolioData,
 } from '../../lib/types';
+import { formatDate } from '../../lib/types';
 import { PdfExportModal } from '../../components/modals';
 import { SecurityLogo } from '../../components/common';
 import { useCachedLogos } from '../../lib/hooks';
@@ -122,10 +123,6 @@ export function ReportsView() {
 
   const formatPercent = (value: number) => {
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('de-DE');
   };
 
   const renderPerformanceReport = () => {

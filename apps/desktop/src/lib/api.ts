@@ -71,6 +71,7 @@ import type {
   RebalanceTarget,
   RebalanceAction,
   RebalancePreview,
+  AiRebalanceSuggestion,
   // Benchmark
   BenchmarkData,
   BenchmarkComparison,
@@ -513,8 +514,7 @@ export async function deleteTransaction(id: number): Promise<void> {
 }
 
 /**
- * Update a transaction (date, amount, shares, note, fees, taxes).
- * Does not allow changing owner, type, or security.
+ * Update a transaction - supports all fields.
  */
 export async function updateTransaction(id: number, data: {
   date?: string;
@@ -523,6 +523,12 @@ export async function updateTransaction(id: number, data: {
   note?: string;
   feeAmount?: number;   // cents
   taxAmount?: number;   // cents
+  // Full edit support
+  ownerType?: string;   // "portfolio" or "account"
+  ownerId?: number;
+  txnType?: string;
+  securityId?: number;
+  currency?: string;
 }): Promise<void> {
   return invoke('update_transaction', { id, data });
 }
@@ -1299,6 +1305,32 @@ export async function calculateDeviation(
   targets: RebalanceTarget[]
 ): Promise<number> {
   return invoke<number>('calculate_deviation', { portfolioId, targets });
+}
+
+/**
+ * Get AI-powered rebalancing suggestions.
+ * @param portfolioId Portfolio to analyze
+ * @param provider AI provider (claude, openai, gemini, perplexity)
+ * @param model Model name
+ * @param apiKey API key for the provider
+ * @param baseCurrency Base currency for calculations
+ */
+export async function suggestRebalanceWithAi(
+  portfolioId: number,
+  provider: string,
+  model: string,
+  apiKey: string,
+  baseCurrency: string
+): Promise<AiRebalanceSuggestion> {
+  return invoke<AiRebalanceSuggestion>('suggest_rebalance_with_ai', {
+    request: {
+      portfolioId,
+      provider,
+      model,
+      apiKey,
+      baseCurrency,
+    },
+  });
 }
 
 // ============================================================================

@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import ReactMarkdown from 'react-markdown';
+import { useEscapeKey } from '../../lib/hooks';
 
 interface PortfolioInsightsModalProps {
   isOpen: boolean;
@@ -157,6 +158,8 @@ function InsightCard({ section }: { section: ParsedSection }) {
 }
 
 export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PortfolioInsightsResponse | null>(null);

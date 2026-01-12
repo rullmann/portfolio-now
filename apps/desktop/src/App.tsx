@@ -40,6 +40,9 @@ import {
 // Chat components
 import { ChatButton, ChatPanel } from './components/chat';
 
+// Modals
+import { WelcomeModal } from './components/modals';
+
 // Views
 import {
   DashboardView,
@@ -70,7 +73,31 @@ import type { AggregatedHolding, PortfolioData } from './views';
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { theme } = useSettingsStore();
+  const { theme, userName } = useSettingsStore();
+
+  // Welcome modal state - show only on first launch when no userName is set
+  const [showWelcome, setShowWelcome] = useState<boolean | null>(null);
+
+  // Check if we should show the welcome modal (only once on first mount)
+  useEffect(() => {
+    // Zustand persist might not have rehydrated yet, wait a tick
+    const timer = setTimeout(() => {
+      // Show welcome only if userName has never been set (is empty string from default)
+      // Once user skips or sets a name, it's been "seen"
+      const hasSeenWelcome = localStorage.getItem('portfolio-welcome-seen');
+      if (!hasSeenWelcome && !userName) {
+        setShowWelcome(true);
+      } else {
+        setShowWelcome(false);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleWelcomeClose = () => {
+    setShowWelcome(false);
+    localStorage.setItem('portfolio-welcome-seen', 'true');
+  };
 
   // ============================================================================
   // Theme Management
@@ -327,6 +354,9 @@ function App() {
         {/* Chat interface */}
         <ChatButton onClick={() => setIsChatOpen(true)} />
         <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+
+        {/* Welcome modal for first-time users */}
+        <WelcomeModal isOpen={showWelcome === true} onClose={handleWelcomeClose} />
       </div>
     </QueryClientProvider>
   );

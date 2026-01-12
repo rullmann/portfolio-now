@@ -8,6 +8,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { getPortfolios } from '../../lib/api';
 import type { PortfolioData } from '../../lib/types';
+import { useEscapeKey } from '../../lib/hooks';
 
 interface PdfExportModalProps {
   isOpen: boolean;
@@ -51,6 +52,8 @@ const exportOptions: ExportOption[] = [
 ];
 
 export function PdfExportModal({ isOpen, onClose }: PdfExportModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const [selectedType, setSelectedType] = useState<ExportType>('summary');
   const [portfolios, setPortfolios] = useState<PortfolioData[]>([]);
   const [selectedPortfolio, setSelectedPortfolio] = useState<number | undefined>(undefined);

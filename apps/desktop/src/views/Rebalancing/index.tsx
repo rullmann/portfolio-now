@@ -1,69 +1,123 @@
 /**
- * Rebalancing view for portfolio rebalancing.
+ * Simplified Rebalancing view - AI suggestions only, no execution.
+ * Shows all holdings aggregated across all portfolios.
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Scale, RefreshCw, Play, TrendingUp, TrendingDown, Download, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { getPortfolios, getAccounts, getHoldings, previewRebalance, executeRebalance } from '../../lib/api';
-import type { PortfolioData, AccountData, RebalanceTarget, RebalancePreview } from '../../lib/types';
+import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Building2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { getAllHoldings, suggestRebalanceWithAi } from '../../lib/api';
+import type { AggregatedHolding, AiRebalanceSuggestion } from '../../lib/types';
 import { toast, useSettingsStore } from '../../store';
-import { SecurityLogo } from '../../components/common';
-import { useCachedLogos } from '../../lib/hooks';
+import { AIProviderLogo } from '../../components/common';
 
-interface TargetWithHolding extends RebalanceTarget {
+interface HoldingWithTarget {
+  securityId: number;
   securityName: string;
-  currentShares: number;
+  currentWeight: number;
+  targetWeight: number;
   currentValue: number;
+  shares: number;
+  gainLoss: number;
+  gainLossPercent: number;
+  customLogo?: string;
+  ticker?: string;
 }
 
 export function RebalancingView() {
-  const [portfolios, setPortfolios] = useState<PortfolioData[]>([]);
-  const [accounts, setAccounts] = useState<AccountData[]>([]);
-  const [selectedPortfolio, setSelectedPortfolio] = useState<number | null>(null);
-  const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
-  const [targets, setTargets] = useState<TargetWithHolding[]>([]);
-  const [preview, setPreview] = useState<RebalancePreview | null>(null);
-  const [newCash, setNewCash] = useState<string>('');
+  const [holdings, setHoldings] = useState<HoldingWithTarget[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingHoldings, setIsLoadingHoldings] = useState(false);
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [executionSuccess, setExecutionSuccess] = useState(false);
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<AiRebalanceSuggestion | null>(null);
+  const [showAiReasoning, setShowAiReasoning] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { brandfetchApiKey } = useSettingsStore();
 
-  // Prepare securities for logo loading
-  const securitiesForLogos = useMemo(() =>
-    targets
-      .filter((t) => t.securityId !== undefined)
-      .map((t) => ({
-        id: t.securityId!,
-        ticker: undefined,
-        name: t.securityName,
-      })),
-    [targets]
-  );
+  const {
+    aiProvider,
+    aiModel,
+    anthropicApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    perplexityApiKey,
+    baseCurrency,
+  } = useSettingsStore();
 
-  // Load logos
-  const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+  // Check if AI is configured
+  const hasAiConfigured = useMemo(() => {
+    switch (aiProvider) {
+      case 'claude':
+        return !!anthropicApiKey;
+      case 'openai':
+        return !!openaiApiKey;
+      case 'gemini':
+        return !!geminiApiKey;
+      case 'perplexity':
+        return !!perplexityApiKey;
+      default:
+        return false;
+    }
+  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey]);
 
-  const loadPortfolios = async () => {
+  const getApiKey = () => {
+    switch (aiProvider) {
+      case 'claude':
+        return anthropicApiKey || '';
+      case 'openai':
+        return openaiApiKey || '';
+      case 'gemini':
+        return geminiApiKey || '';
+      case 'perplexity':
+        return perplexityApiKey || '';
+      default:
+        return '';
+    }
+  };
+
+  // Create a simple logo map from customLogo data (keyed by security name)
+  const logosByName = useMemo(() => {
+    const map = new Map<string, string>();
+    holdings.forEach((h) => {
+      if (h.customLogo) {
+        map.set(h.securityName, h.customLogo);
+      }
+    });
+    return map;
+  }, [holdings]);
+
+  // Calculate totals
+  const totalValue = useMemo(() => holdings.reduce((sum, h) => sum + h.currentValue, 0), [holdings]);
+  const totalTargetWeight = useMemo(() => holdings.reduce((sum, h) => sum + h.targetWeight, 0), [holdings]);
+
+  const loadHoldings = async () => {
     try {
       setIsLoading(true);
-      const [portfolioData, accountData] = await Promise.all([
-        getPortfolios(),
-        getAccounts(),
-      ]);
-      const activePortfolios = portfolioData.filter((p) => !p.isRetired);
-      const activeAccounts = accountData.filter((a) => !a.isRetired);
-      setPortfolios(activePortfolios);
-      setAccounts(activeAccounts);
-      if (activePortfolios.length > 0 && !selectedPortfolio) {
-        setSelectedPortfolio(activePortfolios[0].id);
-      }
-      if (activeAccounts.length > 0 && !selectedAccount) {
-        setSelectedAccount(activeAccounts[0].id);
-      }
+      setError(null);
+      const data = await getAllHoldings();
+
+      // Convert to HoldingWithTarget
+      const total = data.reduce((sum, h) => sum + (h.currentValue || 0), 0);
+      const holdingsWithTargets: HoldingWithTarget[] = data.map((h: AggregatedHolding) => {
+        const weight = total > 0 ? ((h.currentValue || 0) / total) * 100 : 0;
+        // Use first securityId from the array (aggregated holdings may have multiple)
+        const primarySecurityId = h.securityIds && h.securityIds.length > 0 ? h.securityIds[0] : 0;
+        return {
+          securityId: primarySecurityId,
+          securityName: h.name,
+          currentWeight: weight,
+          targetWeight: weight, // Start with current as target
+          currentValue: h.currentValue || 0,
+          shares: h.totalShares,
+          gainLoss: h.gainLoss || 0,
+          gainLossPercent: h.gainLossPercent || 0,
+          customLogo: h.customLogo,
+          ticker: h.ticker,
+        };
+      });
+
+      // Sort by current value descending
+      holdingsWithTargets.sort((a, b) => b.currentValue - a.currentValue);
+      setHoldings(holdingsWithTargets);
+      setAiSuggestion(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -71,104 +125,56 @@ export function RebalancingView() {
     }
   };
 
-  const loadHoldings = async (portfolioId: number) => {
-    try {
-      setIsLoadingHoldings(true);
-      const data = await getHoldings(portfolioId);
-      // Convert holdings to targets
-      const totalValue = data.reduce((sum, h) => sum + (h.currentValue || 0), 0);
-      const newTargets: TargetWithHolding[] = data.map((h) => ({
-        securityId: h.securityId,
-        securityName: h.securityName,
-        targetWeight: totalValue > 0 ? ((h.currentValue || 0) / totalValue) * 100 : 0,
-        currentWeight: totalValue > 0 ? ((h.currentValue || 0) / totalValue) * 100 : 0,
-        currentValue: h.currentValue || 0,
-        currentShares: h.shares,
-      }));
-      setTargets(newTargets);
-      setPreview(null);
-    } catch (err) {
-      console.error('Failed to load holdings:', err);
-    } finally {
-      setIsLoadingHoldings(false);
-    }
-  };
-
   useEffect(() => {
-    loadPortfolios();
+    loadHoldings();
   }, []);
 
-  useEffect(() => {
-    if (selectedPortfolio) {
-      loadHoldings(selectedPortfolio);
-    }
-  }, [selectedPortfolio]);
-
-  // Calculate total target weight
-  const totalTargetWeight = useMemo(() => {
-    return targets.reduce((sum, t) => sum + t.targetWeight, 0);
-  }, [targets]);
-
-  const handlePreviewRebalance = async () => {
-    if (!selectedPortfolio || targets.length === 0) return;
+  const handleAiSuggest = async () => {
+    if (!hasAiConfigured || holdings.length === 0) return;
     try {
-      setIsLoading(true);
+      setIsLoadingAi(true);
       setError(null);
-      const rebalanceTargets: RebalanceTarget[] = targets.map((t) => ({
-        securityId: t.securityId,
-        targetWeight: t.targetWeight,
-      }));
-      const newCashValue = newCash ? parseFloat(newCash) * 100 : undefined;
-      const result = await previewRebalance(selectedPortfolio, rebalanceTargets, newCashValue);
-      setPreview(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleExecuteRebalance = async () => {
-    if (!selectedPortfolio || !selectedAccount || !preview) return;
-    try {
-      setIsExecuting(true);
-      setError(null);
-      const transactionCount = await executeRebalance(
-        selectedPortfolio,
-        selectedAccount,
-        preview.actions
+      // Use portfolio_id = 0 to indicate "all portfolios"
+      const suggestion = await suggestRebalanceWithAi(
+        0, // 0 = all portfolios
+        aiProvider,
+        aiModel,
+        getApiKey(),
+        baseCurrency
       );
-      setExecutionSuccess(true);
-      setShowConfirmDialog(false);
-      toast.success(`${transactionCount} Transaktionen erstellt`);
-      // Reload after execution
-      setTimeout(() => {
-        setExecutionSuccess(false);
-        setPreview(null);
-        loadHoldings(selectedPortfolio);
-      }, 2000);
+      // Apply AI suggestions to holdings (match by name since IDs may differ)
+      setHoldings((prev) =>
+        prev.map((h) => {
+          const aiTarget = suggestion.targets.find(
+            (at) => at.securityName.toLowerCase() === h.securityName.toLowerCase()
+          );
+          return aiTarget ? { ...h, targetWeight: aiTarget.targetWeight } : h;
+        })
+      );
+      setAiSuggestion(suggestion);
+      setShowAiReasoning(true);
+      toast.success('KI-Vorschlag übernommen');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error('KI-Vorschlag fehlgeschlagen');
     } finally {
-      setIsExecuting(false);
+      setIsLoadingAi(false);
     }
   };
 
-  const updateTargetWeight = (index: number, weight: number) => {
-    const updated = [...targets];
-    updated[index] = { ...updated[index], targetWeight: weight };
-    setTargets(updated);
+  const updateTargetWeight = (securityName: string, weight: number) => {
+    setHoldings((prev) =>
+      prev.map((h) => (h.securityName === securityName ? { ...h, targetWeight: weight } : h))
+    );
   };
 
-  const formatCurrency = (amount: number, currency: string = 'EUR') => {
-    return `${(amount / 100).toLocaleString('de-DE', {
+  const formatCurrency = (amount: number) => {
+    // Values from getAllHoldings are already in EUR (not cents)
+    return `${amount.toLocaleString('de-DE', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    })} ${currency}`;
-  };
-
-  const formatPercent = (value: number) => {
-    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+    })} ${baseCurrency}`;
   };
 
   return (
@@ -179,15 +185,34 @@ export function RebalancingView() {
           <Scale className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold">Rebalancing</h1>
         </div>
-        <button
-          onClick={loadPortfolios}
-          disabled={isLoading}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
-        >
-          <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-          Aktualisieren
-        </button>
+        <div className="flex items-center gap-2">
+          {hasAiConfigured && (
+            <button
+              onClick={handleAiSuggest}
+              disabled={isLoadingAi || holdings.length === 0}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+              title={`KI-Vorschlag mit ${aiProvider}`}
+            >
+              <Sparkles size={16} className={isLoadingAi ? 'animate-pulse' : ''} />
+              {isLoadingAi ? 'Analysiere...' : 'KI-Vorschlag'}
+            </button>
+          )}
+          <button
+            onClick={loadHoldings}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+          >
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            Aktualisieren
+          </button>
+        </div>
       </div>
+
+      {!hasAiConfigured && (
+        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-md text-amber-700 dark:text-amber-400 text-sm">
+          KI-Provider nicht konfiguriert. Bitte in den Einstellungen einen API-Key hinterlegen.
+        </div>
+      )}
 
       {error && (
         <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
@@ -195,336 +220,238 @@ export function RebalancingView() {
         </div>
       )}
 
-      {executionSuccess && (
-        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-md text-green-600 text-sm flex items-center gap-2">
-          <CheckCircle2 size={16} />
-          Rebalancing erfolgreich ausgeführt!
+      {/* Summary Cards */}
+      {holdings.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-card rounded-lg border border-border p-4">
+            <div className="text-sm text-muted-foreground">Gesamtwert</div>
+            <div className="text-xl font-bold">{formatCurrency(totalValue)}</div>
+          </div>
+          <div className="bg-card rounded-lg border border-border p-4">
+            <div className="text-sm text-muted-foreground">Positionen</div>
+            <div className="text-xl font-bold">{holdings.length}</div>
+          </div>
+          <div className="bg-card rounded-lg border border-border p-4">
+            <div className="text-sm text-muted-foreground">Ziel-Summe</div>
+            <div className={`text-xl font-bold ${Math.abs(totalTargetWeight - 100) < 0.1 ? 'text-green-600' : 'text-amber-600'}`}>
+              {totalTargetWeight.toFixed(1)}%
+            </div>
+          </div>
+          <div className="bg-card rounded-lg border border-border p-4">
+            <div className="text-sm text-muted-foreground">Größte Position</div>
+            <div className="text-xl font-bold">
+              {holdings.length > 0 ? `${holdings[0].currentWeight.toFixed(1)}%` : '-'}
+            </div>
+          </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Settings Panel */}
-        <div className="lg:col-span-1 space-y-4">
-          {/* Portfolio Selection */}
-          <div className="bg-card rounded-lg border border-border p-4">
-            <h2 className="font-semibold mb-4">Portfolio</h2>
-            <select
-              value={selectedPortfolio || ''}
-              onChange={(e) => setSelectedPortfolio(Number(e.target.value) || null)}
-              className="w-full px-3 py-2 border border-border rounded-md bg-background"
-            >
-              <option value="">Portfolio wählen...</option>
-              {portfolios.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Account Selection */}
-          <div className="bg-card rounded-lg border border-border p-4">
-            <h2 className="font-semibold mb-4">Verrechnungskonto</h2>
-            <select
-              value={selectedAccount || ''}
-              onChange={(e) => setSelectedAccount(Number(e.target.value) || null)}
-              className="w-full px-3 py-2 border border-border rounded-md bg-background"
-            >
-              <option value="">Konto wählen...</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({a.currency})
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-2">
-              Für Käufe und Verkäufe.
-            </p>
-          </div>
-
-          {/* New Cash */}
-          <div className="bg-card rounded-lg border border-border p-4">
-            <h2 className="font-semibold mb-4">Neues Kapital</h2>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={newCash}
-                onChange={(e) => setNewCash(e.target.value)}
-                placeholder="0.00"
-                step="0.01"
-                className="flex-1 px-3 py-2 border border-border rounded-md bg-background"
-              />
-              <span className="text-muted-foreground">EUR</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              Optional: Zusätzliches Kapital zum Investieren.
-            </p>
-          </div>
-        </div>
-
-        {/* Target Allocation & Results */}
-        <div className="lg:col-span-2 space-y-4">
-          {/* Target Allocation */}
-          <div className="bg-card rounded-lg border border-border p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold">Ziel-Allokation</h2>
-              <div className={`text-sm font-medium ${Math.abs(totalTargetWeight - 100) < 0.01 ? 'text-green-600' : 'text-amber-600'}`}>
-                Summe: {totalTargetWeight.toFixed(1)}%
-              </div>
-            </div>
-
-            {isLoadingHoldings ? (
-              <div className="flex items-center justify-center py-8">
-                <RefreshCw className="animate-spin text-muted-foreground" size={24} />
-              </div>
-            ) : targets.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-8">
-                <Scale className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                Keine Positionen im Portfolio.
-                <br />
-                Wählen Sie ein Portfolio mit Beständen.
-              </div>
-            ) : (
-              <>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left py-2 font-medium">Wertpapier</th>
-                        <th className="text-right py-2 font-medium">Aktuell</th>
-                        <th className="text-right py-2 font-medium w-28">Ziel %</th>
-                        <th className="text-right py-2 font-medium">Diff</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {targets.map((target, idx) => {
-                        const diff = target.targetWeight - (target.currentWeight || 0);
-                        return (
-                          <tr key={idx} className="border-b border-border last:border-0">
-                            <td className="py-2">
-                              <div className="flex items-center gap-2">
-                                {target.securityId && <SecurityLogo securityId={target.securityId} logos={logos} size={24} />}
-                                <span className="font-medium">{target.securityName}</span>
-                              </div>
-                            </td>
-                            <td className="py-2 text-right text-muted-foreground">
-                              {(target.currentWeight || 0).toFixed(1)}%
-                            </td>
-                            <td className="py-2 text-right">
-                              <input
-                                type="number"
-                                value={target.targetWeight.toFixed(1)}
-                                onChange={(e) =>
-                                  updateTargetWeight(idx, parseFloat(e.target.value) || 0)
-                                }
-                                step="0.1"
-                                min="0"
-                                max="100"
-                                className="w-20 px-2 py-1 text-sm border border-border rounded bg-background text-right"
-                              />
-                            </td>
-                            <td className={`py-2 text-right font-medium ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
-                              {diff > 0 ? '+' : ''}{diff.toFixed(1)}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="flex gap-2 mt-4">
-                  <button
-                    onClick={handlePreviewRebalance}
-                    disabled={!selectedPortfolio || targets.length === 0 || isLoading}
-                    className="flex-1 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  >
-                    {isLoading ? 'Berechne...' : 'Vorschau berechnen'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Preview Results */}
-          {preview && (
-            <>
-              {/* Summary */}
-              <div className="bg-card rounded-lg border border-border p-4">
-                <h2 className="font-semibold mb-4">Rebalancing Vorschau</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <div className="text-sm text-muted-foreground">Portfolio-Wert</div>
-                    <div className="text-lg font-bold">{formatCurrency(preview.totalValue)}</div>
-                  </div>
-                  {preview.newCash && preview.newCash > 0 && (
-                    <div>
-                      <div className="text-sm text-muted-foreground">Neues Kapital</div>
-                      <div className="text-lg font-bold text-green-600">
-                        +{formatCurrency(preview.newCash)}
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-sm text-muted-foreground">Abweichung vorher</div>
-                    <div className="text-lg font-bold text-amber-600">
-                      {formatPercent(preview.deviationBefore)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-muted-foreground">Abweichung nachher</div>
-                    <div className="text-lg font-bold text-green-600">
-                      {formatPercent(preview.deviationAfter)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              {preview.actions.length > 0 && (
-                <div className="bg-card rounded-lg border border-border p-4">
-                  <h2 className="font-semibold mb-4">Vorgeschlagene Transaktionen</h2>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border">
-                          <th className="text-left py-2 font-medium">Wertpapier</th>
-                          <th className="text-center py-2 font-medium">Aktion</th>
-                          <th className="text-right py-2 font-medium">Stück</th>
-                          <th className="text-right py-2 font-medium">Betrag</th>
-                          <th className="text-right py-2 font-medium">Gewichtung</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.actions.map((action, idx) => (
-                          <tr key={idx} className="border-b border-border last:border-0">
-                            <td className="py-2">
-                              <div className="flex items-center gap-2">
-                                <SecurityLogo securityId={action.securityId} logos={logos} size={24} />
-                                <span className="font-medium">{action.securityName}</span>
-                              </div>
-                            </td>
-                            <td className="py-2 text-center">
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
-                                  action.action === 'BUY'
-                                    ? 'bg-green-500/10 text-green-600'
-                                    : 'bg-red-500/10 text-red-600'
-                                }`}
-                              >
-                                {action.action === 'BUY' ? (
-                                  <TrendingUp size={12} />
-                                ) : (
-                                  <TrendingDown size={12} />
-                                )}
-                                {action.action === 'BUY' ? 'Kaufen' : 'Verkaufen'}
-                              </span>
-                            </td>
-                            <td className="py-2 text-right">
-                              {action.shares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}
-                            </td>
-                            <td className="py-2 text-right font-medium">
-                              {formatCurrency(action.amount)}
-                            </td>
-                            <td className="py-2 text-right text-muted-foreground">
-                              {action.currentWeight.toFixed(1)}% → {action.targetWeight.toFixed(1)}%
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-border">
-                    <button
-                      onClick={() => setPreview(null)}
-                      className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
-                    >
-                      Abbrechen
-                    </button>
-                    <button
-                      onClick={() => setShowConfirmDialog(true)}
-                      disabled={!selectedAccount}
-                      className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-                    >
-                      <Play size={16} />
-                      Alle ausführen
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {preview.actions.length === 0 && (
-                <div className="bg-card rounded-lg border border-border p-8 text-center">
-                  <CheckCircle2 className="w-12 h-12 mx-auto mb-3 text-green-500" />
-                  <p className="font-medium">Portfolio ist bereits ausgeglichen</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Es sind keine Transaktionen erforderlich.
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* Empty State */}
-          {!preview && targets.length > 0 && (
-            <div className="bg-card rounded-lg border border-border p-8 text-center text-muted-foreground">
-              <Download className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>Passen Sie die Ziel-Gewichtungen an.</p>
-              <p className="text-sm mt-1">
-                Klicken Sie dann auf "Vorschau berechnen".
-              </p>
-            </div>
+      {/* Holdings Table */}
+      <div className="bg-card rounded-lg border border-border p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold">Alle Positionen</h2>
+          {holdings.length > 0 && (
+            <span className="text-sm text-muted-foreground">
+              Sortiert nach Wert
+            </span>
           )}
         </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="animate-spin text-muted-foreground" size={24} />
+          </div>
+        ) : holdings.length === 0 ? (
+          <div className="text-sm text-muted-foreground text-center py-12">
+            <Scale className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            Keine Positionen vorhanden.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 font-medium">Wertpapier</th>
+                  <th className="text-right py-2 font-medium">Wert</th>
+                  <th className="text-right py-2 font-medium">Gewinn/Verlust</th>
+                  <th className="text-right py-2 font-medium">Aktuell %</th>
+                  <th className="text-right py-2 font-medium w-28">Ziel %</th>
+                  <th className="text-right py-2 font-medium">Diff</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map((h) => {
+                  const diff = h.targetWeight - h.currentWeight;
+                  const logo = logosByName.get(h.securityName);
+                  return (
+                    <tr key={h.securityName} className="border-b border-border last:border-0">
+                      <td className="py-2">
+                        <div className="flex items-center gap-2">
+                          {logo ? (
+                            <img
+                              src={logo}
+                              alt=""
+                              className="w-6 h-6 rounded-md object-contain bg-white flex-shrink-0"
+                            />
+                          ) : (
+                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+                              <Building2 size={12} className="text-muted-foreground" />
+                            </div>
+                          )}
+                          <span className="font-medium">{h.securityName}</span>
+                        </div>
+                      </td>
+                      <td className="py-2 text-right">{formatCurrency(h.currentValue)}</td>
+                      <td className={`py-2 text-right ${h.gainLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {h.gainLoss >= 0 ? '+' : ''}
+                        {formatCurrency(h.gainLoss)}
+                        <span className="text-xs ml-1">
+                          ({h.gainLossPercent >= 0 ? '+' : ''}{h.gainLossPercent.toFixed(1)}%)
+                        </span>
+                      </td>
+                      <td className="py-2 text-right text-muted-foreground">
+                        {h.currentWeight.toFixed(1)}%
+                      </td>
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          key={`${h.securityName}-${h.targetWeight}`}
+                          defaultValue={h.targetWeight.toFixed(1)}
+                          onBlur={(e) => updateTargetWeight(h.securityName, parseFloat(e.target.value) || 0)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              (e.target as HTMLInputElement).blur();
+                            }
+                          }}
+                          step="0.1"
+                          min="0"
+                          max="100"
+                          className="w-20 px-2 py-1 text-sm border border-border rounded bg-background text-right focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </td>
+                      <td
+                        className={`py-2 text-right font-medium ${
+                          Math.abs(diff) < 0.1
+                            ? 'text-muted-foreground'
+                            : diff > 0
+                            ? 'text-green-600'
+                            : 'text-red-600'
+                        }`}
+                      >
+                        {diff > 0 ? '+' : ''}
+                        {diff.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Confirmation Dialog */}
-      {showConfirmDialog && preview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowConfirmDialog(false)} />
-          <div className="relative bg-card border border-border rounded-lg shadow-xl w-full max-w-md mx-4 p-6">
-            <div className="flex items-start gap-3 mb-4">
-              <AlertTriangle className="text-amber-500 mt-0.5" size={24} />
+      {/* AI Reasoning Panel */}
+      {aiSuggestion && (
+        <div className="bg-card rounded-lg border border-border overflow-hidden">
+          <button
+            onClick={() => setShowAiReasoning(!showAiReasoning)}
+            className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <AIProviderLogo provider={aiProvider} size={20} />
+              <span className="font-semibold">KI-Begründung</span>
+              <span className="text-xs text-muted-foreground">({aiModel})</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAiSuggestion(null);
+                }}
+                className="p-1 hover:bg-muted rounded-md"
+                title="Schließen"
+              >
+                <X size={16} className="text-muted-foreground" />
+              </button>
+              {showAiReasoning ? (
+                <ChevronUp size={16} className="text-muted-foreground" />
+              ) : (
+                <ChevronDown size={16} className="text-muted-foreground" />
+              )}
+            </div>
+          </button>
+          {showAiReasoning && (
+            <div className="px-4 pb-4 space-y-4">
+              {/* Per-Security Reasons */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Einzelempfehlungen</h4>
+                <div className="grid gap-2">
+                  {aiSuggestion.targets.map((t) => {
+                    const logo = logosByName.get(t.securityName);
+                    return (
+                      <div
+                        key={t.securityName}
+                        className="flex items-start gap-3 p-2 bg-muted/30 rounded-md"
+                      >
+                        {logo ? (
+                          <img
+                            src={logo}
+                            alt=""
+                            className="w-5 h-5 rounded-md object-contain bg-white flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-5 h-5 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+                            <Building2 size={10} className="text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium truncate">{t.securityName}</span>
+                            <span className="text-muted-foreground">
+                              {t.currentWeight.toFixed(1)}% → {t.targetWeight.toFixed(1)}%
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">{t.reason}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Overall Reasoning */}
               <div>
-                <h3 className="font-semibold text-lg">Rebalancing bestätigen</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Es werden {preview.actions.length} Transaktionen erstellt.
-                </p>
+                <h4 className="text-sm font-medium text-muted-foreground mb-2">Gesamtbegründung</h4>
+                <div className="prose prose-sm prose-slate dark:prose-invert max-w-none">
+                  <ReactMarkdown>{aiSuggestion.reasoning}</ReactMarkdown>
+                </div>
               </div>
-            </div>
 
-            <div className="bg-muted rounded-md p-3 mb-4 text-sm">
-              <div className="flex justify-between mb-1">
-                <span>Käufe:</span>
-                <span className="font-medium text-green-600">
-                  {preview.actions.filter((a) => a.action === 'BUY').length}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Verkäufe:</span>
-                <span className="font-medium text-red-600">
-                  {preview.actions.filter((a) => a.action === 'SELL').length}
-                </span>
+              {/* Risk Assessment */}
+              <div>
+                <h4 className="text-sm font-medium text-amber-600 mb-2 flex items-center gap-1">
+                  <AlertTriangle size={14} />
+                  Risikoeinschätzung
+                </h4>
+                <div className="prose prose-sm prose-slate dark:prose-invert max-w-none text-muted-foreground">
+                  <ReactMarkdown>{aiSuggestion.riskAssessment}</ReactMarkdown>
+                </div>
               </div>
             </div>
+          )}
+        </div>
+      )}
 
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowConfirmDialog(false)}
-                className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
-              >
-                Abbrechen
-              </button>
-              <button
-                onClick={handleExecuteRebalance}
-                disabled={isExecuting}
-                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-              >
-                {isExecuting ? 'Ausführen...' : 'Bestätigen'}
-              </button>
-            </div>
-          </div>
+      {/* Info Box */}
+      {!aiSuggestion && holdings.length > 0 && (
+        <div className="bg-muted/50 rounded-lg border border-border p-4 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground mb-1">So funktioniert es:</p>
+          <ol className="list-decimal list-inside space-y-1">
+            <li>Klicken Sie auf "KI-Vorschlag" für eine automatische Analyse</li>
+            <li>Die KI schlägt optimale Zielgewichtungen vor</li>
+            <li>Passen Sie die Zielwerte manuell an, falls gewünscht</li>
+            <li>Führen Sie die Käufe/Verkäufe manuell in Ihrem Depot aus</li>
+          </ol>
         </div>
       )}
     </div>

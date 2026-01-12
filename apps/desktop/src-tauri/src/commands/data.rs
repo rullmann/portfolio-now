@@ -278,12 +278,14 @@ pub struct TransactionData {
     pub id: i64,
     pub uuid: String,
     pub owner_type: String,
+    pub owner_id: i64,
     pub owner_name: String,
     pub txn_type: String,
     pub date: String,
     pub amount: f64,
     pub currency: String,
     pub shares: Option<f64>,
+    pub security_id: Option<i64>,
     pub security_name: Option<String>,
     pub security_uuid: Option<String>,
     pub note: Option<String>,
@@ -307,10 +309,10 @@ pub fn get_transactions(
         .ok_or_else(|| "Database not initialized".to_string())?;
 
     let mut sql = String::from(
-        "SELECT t.id, t.uuid, t.owner_type,
+        "SELECT t.id, t.uuid, t.owner_type, t.owner_id,
                 CASE WHEN t.owner_type = 'account' THEN a.name ELSE p.name END as owner_name,
                 t.txn_type, t.date, t.amount, t.currency, t.shares,
-                s.name as security_name, s.uuid as security_uuid, t.note,
+                t.security_id, s.name as security_name, s.uuid as security_uuid, t.note,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'FEE'), 0) as fees,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes,
                 EXISTS(SELECT 1 FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL) as has_forex
@@ -360,27 +362,29 @@ pub fn get_transactions(
 
     let transactions: Vec<TransactionData> = rows
         .mapped(|row| {
-            let amount_cents: i64 = row.get(6)?;
-            let shares_raw: Option<i64> = row.get(8)?;
-            let fees_cents: i64 = row.get(12)?;
-            let taxes_cents: i64 = row.get(13)?;
+            let amount_cents: i64 = row.get(7)?;
+            let shares_raw: Option<i64> = row.get(9)?;
+            let fees_cents: i64 = row.get(14)?;
+            let taxes_cents: i64 = row.get(15)?;
 
             Ok(TransactionData {
                 id: row.get(0)?,
                 uuid: row.get(1)?,
                 owner_type: row.get(2)?,
-                owner_name: row.get(3)?,
-                txn_type: row.get(4)?,
-                date: row.get(5)?,
+                owner_id: row.get(3)?,
+                owner_name: row.get(4)?,
+                txn_type: row.get(5)?,
+                date: row.get(6)?,
                 amount: amount_cents as f64 / 100.0,
-                currency: row.get(7)?,
+                currency: row.get(8)?,
                 shares: shares_raw.map(shares::to_decimal),
-                security_name: row.get(9)?,
-                security_uuid: row.get(10)?,
-                note: row.get(11)?,
+                security_id: row.get(10)?,
+                security_name: row.get(11)?,
+                security_uuid: row.get(12)?,
+                note: row.get(13)?,
                 fees: fees_cents as f64 / 100.0,
                 taxes: taxes_cents as f64 / 100.0,
-                has_forex: row.get::<_, i32>(14)? != 0,
+                has_forex: row.get::<_, i32>(16)? != 0,
             })
         })
         .filter_map(|r| r.ok())

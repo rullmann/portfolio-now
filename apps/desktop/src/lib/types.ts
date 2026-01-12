@@ -293,6 +293,46 @@ export function formatDateTime(dateStr: string): string {
   }).format(date);
 }
 
+/**
+ * Extrahiert das Datum (YYYY-MM-DD) aus einem Datetime-String.
+ * Für HTML <input type="date">.
+ */
+export function extractDateForInput(dateStr: string | null | undefined): string {
+  if (!dateStr) return new Date().toISOString().split('T')[0];
+  // "2024-01-15 09:30:00" → "2024-01-15"
+  // "2024-01-15T09:30:00" → "2024-01-15"
+  const part = dateStr.split(' ')[0].split('T')[0];
+  return part || new Date().toISOString().split('T')[0];
+}
+
+/**
+ * Extrahiert die Uhrzeit (HH:MM) aus einem Datetime-String.
+ * Für HTML <input type="time">.
+ */
+export function extractTimeForInput(dateStr: string | null | undefined): string {
+  if (!dateStr) return '00:00';
+  // "2024-01-15 09:30:00" → "09:30"
+  const parts = dateStr.split(' ');
+  if (parts.length >= 2) {
+    return parts[1].substring(0, 5);
+  }
+  // ISO format: "2024-01-15T09:30:00"
+  const tParts = dateStr.split('T');
+  if (tParts.length >= 2) {
+    return tParts[1].substring(0, 5);
+  }
+  return '00:00';
+}
+
+/**
+ * Kombiniert Datum und Zeit zu einem Datetime-String.
+ * Für Backend-Speicherung.
+ */
+export function combineDateAndTime(date: string, time: string): string {
+  const timePart = time || '00:00';
+  return `${date} ${timePart}:00`;
+}
+
 export function getTransactionTypeLabel(type: string): string {
   const labels: Record<string, string> = {
     DEPOSIT: 'Einlage',
@@ -1022,6 +1062,20 @@ export interface RebalancePreview {
   actions: RebalanceAction[];
   deviationBefore: number;
   deviationAfter: number;
+}
+
+export interface AiRebalanceTargetSuggestion {
+  securityId: number;
+  securityName: string;
+  currentWeight: number;
+  targetWeight: number;
+  reason: string;
+}
+
+export interface AiRebalanceSuggestion {
+  targets: AiRebalanceTargetSuggestion[];
+  reasoning: string;
+  riskAssessment: string;
 }
 
 // ============================================================================

@@ -578,16 +578,85 @@ pub async fn fetch_logos_batch(
     get_logo_urls_batch(client_id, securities_with_isin)
 }
 
+/// Reload all logos: clears cache and downloads fresh logos for all securities
 #[command]
 pub async fn reload_all_logos(
-    _client_id: String,
-    _securities: Vec<(i64, Option<String>, String)>,
+    client_id: String,
+    securities: Vec<(i64, Option<String>, String)>, // (id, ticker, name)
 ) -> Result<ReloadResult, String> {
+    if client_id.is_empty() {
+        return Err("Client ID erforderlich".to_string());
+    }
+
+    // Get unique domains
+    let mut domains: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (_, ticker, name) in &securities {
+        if let Some(domain) = get_domain_for_security(name, ticker.as_deref(), None) {
+            domains.insert(domain);
+        }
+    }
+
+    let total_domains = domains.len() as u32;
+
+    // Clear existing cache
+    let cleared = clear_logo_cache().unwrap_or(0);
+
+    // Download all logos
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let mut downloaded = 0u32;
+    let mut failed = 0u32;
+
+    for domain in domains {
+        let url = build_logo_url(&domain, &client_id);
+
+        match client.get(&url).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            // Save to cache
+                            let cache_dir = match get_logo_cache_dir() {
+                                Ok(dir) => dir,
+                                Err(_) => {
+                                    failed += 1;
+                                    continue;
+                                }
+                            };
+                            let file_name = domain.replace('.', "_") + ".png";
+                            let path = cache_dir.join(&file_name);
+
+                            if std::fs::write(&path, &bytes).is_ok() {
+                                downloaded += 1;
+                                log::info!("Downloaded logo for {}", domain);
+                            } else {
+                                failed += 1;
+                            }
+                        }
+                        Err(_) => {
+                            failed += 1;
+                        }
+                    }
+                } else {
+                    // 404 etc. - domain not found, not a real error
+                    log::debug!("No logo found for {}: {}", domain, response.status());
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to fetch logo for {}: {}", domain, e);
+                failed += 1;
+            }
+        }
+    }
+
     Ok(ReloadResult {
-        cleared: 0,
-        downloaded: 0,
-        failed: 0,
-        total_domains: 0,
+        cleared,
+        downloaded,
+        failed,
+        total_domains,
     })
 }
 

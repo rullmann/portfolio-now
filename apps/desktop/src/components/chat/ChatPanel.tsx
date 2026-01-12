@@ -76,6 +76,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     perplexityApiKey,
     baseCurrency,
     alphaVantageApiKey,
+    userName,
   } = useSettingsStore();
 
   const getApiKey = () => {
@@ -179,6 +180,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           apiKey: getApiKey(),
           baseCurrency: baseCurrency || 'EUR',
           alphaVantageApiKey: alphaVantageApiKey || null,
+          userName: userName || null,
         },
       });
 

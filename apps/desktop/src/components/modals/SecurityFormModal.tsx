@@ -7,6 +7,7 @@ import { X, HelpCircle, ChevronDown, ChevronUp, ChevronRight, Plus, Trash2 } fro
 import type { SecurityData, CreateSecurityRequest, UpdateSecurityRequest } from '../../lib/types';
 import { createSecurity, updateSecurity } from '../../lib/api';
 import { useSettingsStore } from '../../store';
+import { useEscapeKey } from '../../lib/hooks';
 
 // Key-Value Entry Component for attributes/properties editing
 interface KeyValueEntry {
@@ -154,6 +155,8 @@ const CRYPTO_SYMBOLS = [
 ];
 
 export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: SecurityFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const isEditMode = !!security;
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
   const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);

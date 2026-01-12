@@ -10,6 +10,15 @@ use crate::pdf_import::{
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
+/// Format date with optional time for database storage
+fn format_datetime(txn: &ParsedTransaction) -> String {
+    if let Some(time) = txn.time {
+        format!("{} {}", txn.date, time)
+    } else {
+        format_datetime(txn)
+    }
+}
+
 /// Preview result showing what will be imported
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +95,11 @@ pub fn get_supported_banks() -> Vec<SupportedBank> {
             description: "Comdirect Bank AG".to_string(),
         },
         SupportedBank {
+            id: "consorsbank".to_string(),
+            name: "Consorsbank".to_string(),
+            description: "Consorsbank (BNP Paribas)".to_string(),
+        },
+        SupportedBank {
             id: "trade_republic".to_string(),
             name: "Trade Republic".to_string(),
             description: "Trade Republic Bank GmbH".to_string(),
@@ -93,7 +107,7 @@ pub fn get_supported_banks() -> Vec<SupportedBank> {
         SupportedBank {
             id: "scalable".to_string(),
             name: "Scalable Capital".to_string(),
-            description: "Scalable Capital GmbH (via Baader Bank)".to_string(),
+            description: "Scalable Capital GmbH".to_string(),
         },
     ]
 }
@@ -200,7 +214,7 @@ pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> 
                           AND ABS(amount - ?4) <= 1
                         LIMIT 1
                         "#,
-                        rusqlite::params![sec_id, txn.date.to_string(), txn_type_str, amount_cents],
+                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
                         |row| row.get(0),
                     )
                     .ok();
@@ -209,7 +223,7 @@ pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> 
                     potential_duplicates.push(PotentialDuplicate {
                         transaction_index: idx,
                         existing_txn_id: existing_id,
-                        date: txn.date.to_string(),
+                        date: format_datetime(txn),
                         amount: txn.net_amount,
                         security_name: txn.security_name.clone(),
                         txn_type: txn_type_str.to_string(),
@@ -347,7 +361,7 @@ pub fn import_pdf_transactions(
                           AND ABS(amount - ?4) <= 1
                         LIMIT 1
                         "#,
-                        rusqlite::params![sec_id, txn.date.to_string(), txn_type_str, amount_cents],
+                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
                         |_| Ok(true),
                     )
                     .unwrap_or(false);
@@ -401,7 +415,7 @@ pub fn import_pdf_transactions(
                     portfolio_id,
                     security_id,
                     txn_type,
-                    txn.date.to_string(),
+                    format_datetime(txn),
                     amount_cents,
                     txn.currency,
                     shares_scaled,
@@ -434,7 +448,7 @@ pub fn import_pdf_transactions(
                         account_id,
                         security_id,
                         account_txn_type,
-                        txn.date.to_string(),
+                        format_datetime(txn),
                         amount_cents,
                         txn.currency,
                         shares_scaled,
@@ -485,7 +499,7 @@ pub fn import_pdf_transactions(
                     account_id,
                     security_id,
                     txn_type,
-                    txn.date.to_string(),
+                    format_datetime(txn),
                     amount_cents,
                     txn.currency,
                     shares_scaled,
@@ -729,7 +743,7 @@ pub async fn preview_pdf_import_with_ocr(
                           AND ABS(amount - ?4) <= 1
                         LIMIT 1
                         "#,
-                        rusqlite::params![sec_id, txn.date.to_string(), txn_type_str, amount_cents],
+                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
                         |row| row.get(0),
                     )
                     .ok();
@@ -738,7 +752,7 @@ pub async fn preview_pdf_import_with_ocr(
                     potential_duplicates.push(PotentialDuplicate {
                         transaction_index: idx,
                         existing_txn_id: existing_id,
-                        date: txn.date.to_string(),
+                        date: format_datetime(txn),
                         amount: txn.net_amount,
                         security_name: txn.security_name.clone(),
                         txn_type: txn_type_str.to_string(),

@@ -411,3 +411,9 @@ async function fetchAndCacheLogo(
 
 export { usePortfolioBatchAnalysis } from './hooks/usePortfolioBatchAnalysis';
 export type { HoldingForAnalysis, BatchAnalysisOptions, UseBatchAnalysisResult } from './hooks/usePortfolioBatchAnalysis';
+
+// ============================================================================
+// Re-export escape key hook
+// ============================================================================
+
+export { useEscapeKey } from './hooks/useEscapeKey';

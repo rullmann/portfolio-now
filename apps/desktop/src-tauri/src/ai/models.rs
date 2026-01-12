@@ -81,6 +81,12 @@ pub const VISION_MODELS: &[VisionModel] = &[
         provider: "openai",
     },
     VisionModel {
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini",
+        description: "Neuestes GPT-5, schnell & günstig",
+        provider: "openai",
+    },
+    VisionModel {
         id: "gpt-4.1",
         name: "GPT-4.1",
         description: "Coding-fokussiert, 1M Kontext",
@@ -103,15 +109,27 @@ pub const VISION_MODELS: &[VisionModel] = &[
     // Google Gemini - https://ai.google.dev/gemini-api/docs/models
     // -------------------------------------------------------------------------
     VisionModel {
-        id: "gemini-3-flash",
-        name: "Gemini 3 Flash",
-        description: "Pro-Intelligenz, Free Tier",
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        description: "Schnell & günstig, Free Tier",
         provider: "gemini",
     },
     VisionModel {
-        id: "gemini-3-pro",
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Beste Qualität (stabil)",
+        provider: "gemini",
+    },
+    VisionModel {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash",
+        description: "Neuestes Modell (Preview)",
+        provider: "gemini",
+    },
+    VisionModel {
+        id: "gemini-3-pro-preview",
         name: "Gemini 3 Pro",
-        description: "Beste Qualität",
+        description: "Neuestes Pro (Preview)",
         provider: "gemini",
     },
 
@@ -159,15 +177,15 @@ pub const DEPRECATED_MODELS: &[(&str, &str)] = &[
     ("gpt-4-turbo", "gpt-4.1"),
     ("gpt-4-turbo-preview", "gpt-4o"),
 
-    // Gemini - old versions
-    ("gemini-pro-vision", "gemini-3-flash"),
-    ("gemini-2.0-flash", "gemini-3-flash"),
-    ("gemini-2.0-flash-exp", "gemini-3-flash"),
-    ("gemini-2.5-pro", "gemini-3-pro"),
-    ("gemini-2.5-flash", "gemini-3-flash"),
-    ("gemini-1.5-pro", "gemini-3-pro"),
-    ("gemini-1.5-flash", "gemini-3-flash"),
-    ("gemini-3-pro-preview", "gemini-3-pro"),
+    // Gemini - old/invalid model names
+    ("gemini-pro-vision", "gemini-2.5-flash"),
+    ("gemini-2.0-flash", "gemini-2.5-flash"),
+    ("gemini-2.0-flash-exp", "gemini-2.5-flash"),
+    ("gemini-1.5-pro", "gemini-2.5-pro"),
+    ("gemini-1.5-flash", "gemini-2.5-flash"),
+    // Invalid names (without -preview suffix)
+    ("gemini-3-flash", "gemini-2.5-flash"),
+    ("gemini-3-pro", "gemini-2.5-pro"),
 
     // Perplexity - reasoning models have no vision
     ("sonar-reasoning", "sonar-pro"),
@@ -182,8 +200,8 @@ pub const DEPRECATED_MODELS: &[(&str, &str)] = &[
 /// Fallback chain per provider (in order of preference)
 pub const FALLBACK_CHAINS: &[(&str, &[&str])] = &[
     ("claude", &["claude-sonnet-4-5-20250514", "claude-haiku-4-5-20251015"]),
-    ("openai", &["gpt-4.1", "gpt-4o", "gpt-4o-mini"]),
-    ("gemini", &["gemini-3-flash", "gemini-3-pro"]),
+    ("openai", &["gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"]),
+    ("gemini", &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"]),
     ("perplexity", &["sonar-pro", "sonar"]),
 ];
 
@@ -194,8 +212,8 @@ pub const FALLBACK_CHAINS: &[(&str, &[&str])] = &[
 /// Default model per provider
 pub const DEFAULT_MODELS: &[(&str, &str)] = &[
     ("claude", "claude-sonnet-4-5-20250514"),
-    ("openai", "gpt-4.1"),
-    ("gemini", "gemini-3-flash"),
+    ("openai", "gpt-5-mini"),
+    ("gemini", "gemini-2.5-flash"),
     ("perplexity", "sonar-pro"),
 ];
 
@@ -290,8 +308,8 @@ mod tests {
     #[test]
     fn test_default_models() {
         assert_eq!(get_default("claude"), "claude-sonnet-4-5-20250514");
-        assert_eq!(get_default("openai"), "gpt-4.1");
-        assert_eq!(get_default("gemini"), "gemini-3-flash");
+        assert_eq!(get_default("openai"), "gpt-5-mini");
+        assert_eq!(get_default("gemini"), "gemini-2.5-flash");
     }
 
     #[test]

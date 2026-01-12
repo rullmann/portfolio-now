@@ -11,3 +11,4 @@ export { StockSplitModal } from './StockSplitModal';
 export { PdfImportModal } from './PdfImportModal';
 export { PdfExportModal } from './PdfExportModal';
 export { SecuritySearchModal } from './SecuritySearchModal';
+export { WelcomeModal } from './WelcomeModal';

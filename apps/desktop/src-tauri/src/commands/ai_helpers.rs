@@ -805,3 +805,115 @@ async fn fetch_prices_for_security(security_id: i64) {
         }
     }
 }
+
+// ============================================================================
+// Portfolio Value Query
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPortfolioValueResult {
+    pub date: String,
+    pub value: f64,
+    pub currency: String,
+    pub found: bool,
+    pub message: String,
+}
+
+/// Query portfolio value at a specific date.
+/// Used by ChatBot to answer questions like "Wie hoch stand das Depot am 04.04.2025?"
+#[command]
+pub fn ai_query_portfolio_value(date: String) -> Result<AiPortfolioValueResult, String> {
+    use crate::commands::data::get_portfolio_history;
+
+    // Parse and validate date
+    let target_date = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| format!("Ungültiges Datumsformat: {}. Erwartet: YYYY-MM-DD", date))?;
+
+    let target_str = target_date.format("%Y-%m-%d").to_string();
+
+    // Get portfolio history
+    let history = get_portfolio_history()?;
+
+    if history.is_empty() {
+        return Ok(AiPortfolioValueResult {
+            date: target_str,
+            value: 0.0,
+            currency: "EUR".to_string(),
+            found: false,
+            message: "Keine historischen Portfolio-Daten verfügbar.".to_string(),
+        });
+    }
+
+    // Find exact match or closest date before target
+    let mut closest_value: Option<(String, f64)> = None;
+
+    for point in &history {
+        if point.date == target_str {
+            // Exact match
+            return Ok(AiPortfolioValueResult {
+                date: target_str,
+                value: point.value,
+                currency: "EUR".to_string(),
+                found: true,
+                message: format!("Depotwert am {}: {:.2} EUR", date, point.value),
+            });
+        }
+
+        if point.date < target_str {
+            closest_value = Some((point.date.clone(), point.value));
+        }
+    }
+
+    // Check if target is in the future (after last history point)
+    if let Some(last) = history.last() {
+        if target_str > last.date {
+            return Ok(AiPortfolioValueResult {
+                date: target_str,
+                value: 0.0,
+                currency: "EUR".to_string(),
+                found: false,
+                message: format!(
+                    "Datum {} liegt in der Zukunft oder es gibt keine Daten dafür. Letzter bekannter Wert: {} am {}",
+                    date, last.value, last.date
+                ),
+            });
+        }
+    }
+
+    // Use closest date before target
+    if let Some((closest_date, value)) = closest_value {
+        return Ok(AiPortfolioValueResult {
+            date: closest_date.clone(),
+            value,
+            currency: "EUR".to_string(),
+            found: true,
+            message: format!(
+                "Kein exakter Wert für {} verfügbar. Nächster bekannter Wert: {:.2} EUR am {}",
+                date, value, closest_date
+            ),
+        });
+    }
+
+    // Target is before first history point
+    if let Some(first) = history.first() {
+        return Ok(AiPortfolioValueResult {
+            date: target_str,
+            value: 0.0,
+            currency: "EUR".to_string(),
+            found: false,
+            message: format!(
+                "Datum {} liegt vor dem ersten aufgezeichneten Wert. Ältester bekannter Wert: {:.2} EUR am {}",
+                date, first.value, first.date
+            ),
+        });
+    }
+
+    Ok(AiPortfolioValueResult {
+        date: target_str,
+        value: 0.0,
+        currency: "EUR".to_string(),
+        found: false,
+        message: "Keine Daten gefunden.".to_string(),
+    })
+}

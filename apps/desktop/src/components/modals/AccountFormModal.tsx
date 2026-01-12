@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { X, ChevronRight, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import type { AccountData, CreateAccountRequest, UpdateAccountRequest } from '../../lib/types';
 import { createAccount, updateAccount } from '../../lib/api';
+import { useEscapeKey } from '../../lib/hooks';
 
 // Key-Value entry for attributes
 interface KeyValueEntry {
@@ -114,6 +115,8 @@ interface AccountFormModalProps {
 const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'SEK', 'NOK', 'DKK'];
 
 export function AccountFormModal({ isOpen, onClose, onSuccess, account }: AccountFormModalProps) {
+  useEscapeKey(isOpen, onClose);
+
   const isEditMode = !!account;
 
   const [formData, setFormData] = useState({

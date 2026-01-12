@@ -1168,11 +1168,16 @@ pub struct UpdateTransactionRequest {
     pub note: Option<String>,
     pub fee_amount: Option<i64>,     // cents
     pub tax_amount: Option<i64>,     // cents
+    // Full edit support
+    pub owner_type: Option<String>,  // "portfolio" or "account"
+    pub owner_id: Option<i64>,
+    pub txn_type: Option<String>,
+    pub security_id: Option<i64>,    // Can be null for non-security transactions
+    pub currency: Option<String>,
 }
 
 /// Update an existing transaction
-/// Only updates date, amount, shares, note, and units (fees/taxes)
-/// Does not allow changing owner, type, or security (delete and recreate instead)
+/// Supports updating all fields including owner, type, and security
 #[command]
 pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(), String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
@@ -1180,7 +1185,7 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    // Verify transaction exists and get info for FIFO rebuild
+    // Verify transaction exists and get current info for FIFO rebuild
     let txn_info: Option<(String, i64, Option<i64>, Option<i64>)> = conn
         .query_row(
             "SELECT owner_type, owner_id, security_id, cross_entry_id FROM pp_txn WHERE id = ?1",
@@ -1189,8 +1194,57 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
         )
         .ok();
 
-    let (owner_type, _owner_id, security_id, cross_entry_id) =
+    let (old_owner_type, old_owner_id, old_security_id, cross_entry_id) =
         txn_info.ok_or_else(|| format!("Transaction with id {} not found", id))?;
+
+    // Determine new values (use new if provided, else keep old)
+    let new_owner_type = data.owner_type.clone().unwrap_or_else(|| old_owner_type.clone());
+    let new_owner_id = data.owner_id.unwrap_or(old_owner_id);
+    let new_security_id = if data.security_id.is_some() {
+        data.security_id
+    } else {
+        old_security_id
+    };
+
+    // Validate new owner exists
+    if data.owner_type.is_some() || data.owner_id.is_some() {
+        let owner_exists: bool = if new_owner_type == "portfolio" {
+            conn.query_row(
+                "SELECT 1 FROM pp_portfolio WHERE id = ?1",
+                params![new_owner_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+        } else {
+            conn.query_row(
+                "SELECT 1 FROM pp_account WHERE id = ?1",
+                params![new_owner_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+        };
+        if !owner_exists {
+            return Err(format!(
+                "{} with id {} not found",
+                if new_owner_type == "portfolio" { "Portfolio" } else { "Account" },
+                new_owner_id
+            ));
+        }
+    }
+
+    // Validate new security exists (if provided and not clearing it)
+    if let Some(sec_id) = new_security_id {
+        let sec_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM pp_security WHERE id = ?1",
+                params![sec_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !sec_exists {
+            return Err(format!("Security with id {} not found", sec_id));
+        }
+    }
 
     // Build update query dynamically
     let mut updates = Vec::new();
@@ -1211,6 +1265,27 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
     if data.note.is_some() {
         updates.push("note = ?");
         params_vec.push(Box::new(data.note.clone()));
+    }
+    if let Some(owner_type) = &data.owner_type {
+        updates.push("owner_type = ?");
+        params_vec.push(Box::new(owner_type.clone()));
+    }
+    if let Some(owner_id) = data.owner_id {
+        updates.push("owner_id = ?");
+        params_vec.push(Box::new(owner_id));
+    }
+    if let Some(txn_type) = &data.txn_type {
+        updates.push("txn_type = ?");
+        params_vec.push(Box::new(txn_type.clone()));
+    }
+    // Handle security_id - allow setting to NULL by checking if the field was provided
+    if data.security_id.is_some() {
+        updates.push("security_id = ?");
+        params_vec.push(Box::new(data.security_id));
+    }
+    if let Some(currency) = &data.currency {
+        updates.push("currency = ?");
+        params_vec.push(Box::new(currency.clone()));
     }
 
     // Always update updated_at
@@ -1236,7 +1311,7 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
     )
     .map_err(|e| e.to_string())?;
 
-    // Get currency from transaction
+    // Get currency from transaction (may have been updated)
     let currency: String = conn
         .query_row(
             "SELECT currency FROM pp_txn WHERE id = ?1",
@@ -1313,11 +1388,23 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
         }
     }
 
-    // Rebuild FIFO lots if this was a portfolio transaction with a security
-    if owner_type == "portfolio" && security_id.is_some() {
-        let sec_id = security_id.unwrap();
+    // Rebuild FIFO lots for affected securities
+    // If security changed, rebuild for both old and new
+    let security_changed = old_security_id != new_security_id;
+
+    // Rebuild FIFO lots for old security if it was a portfolio transaction
+    if old_owner_type == "portfolio" && old_security_id.is_some() {
+        let sec_id = old_security_id.unwrap();
         if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
-            log::warn!("Failed to rebuild FIFO lots after update: {}", e);
+            log::warn!("Failed to rebuild FIFO lots for old security: {}", e);
+        }
+    }
+
+    // Rebuild FIFO lots for new security if changed and is portfolio transaction
+    if security_changed && new_owner_type == "portfolio" && new_security_id.is_some() {
+        let sec_id = new_security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
+            log::warn!("Failed to rebuild FIFO lots for new security: {}", e);
         }
     }
 
@@ -1360,6 +1447,73 @@ pub fn get_transaction(id: i64) -> Result<TransactionResult, String> {
         },
     )
     .map_err(|e| format!("Transaction not found: {}", e))
+}
+
+// =============================================================================
+// Database Reset
+// =============================================================================
+
+/// Delete all data from the database (complete reset)
+#[command]
+pub fn delete_all_data() -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Delete in correct order to respect foreign key constraints
+    // (child tables first, then parent tables)
+    let tables = [
+        // Dependent tables first
+        "pp_fifo_consumption",
+        "pp_fifo_lot",
+        "pp_txn_unit",
+        "pp_cross_entry",
+        "pp_txn",
+        "pp_price",
+        "pp_latest_price",
+        "pp_exchange_rate",
+        "pp_classification_assignment",
+        "pp_classification",
+        "pp_taxonomy",
+        "pp_watchlist_security",
+        "pp_watchlist",
+        "pp_investment_plan_execution",
+        "pp_investment_plan",
+        "pp_benchmark",
+        "pp_dashboard",
+        "pp_settings",
+        "pp_client_properties",
+        "pp_chart_annotation",
+        "logo_cache",
+        // Main entity tables last
+        "pp_portfolio",
+        "pp_account",
+        "pp_security",
+        "pp_import",
+    ];
+
+    for table in tables {
+        // Check if table exists before trying to delete
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                params![table],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if exists {
+            conn.execute(&format!("DELETE FROM {}", table), [])
+                .map_err(|e| format!("Failed to clear table {}: {}", table, e))?;
+        }
+    }
+
+    // Reset SQLite sequence counters
+    conn.execute("DELETE FROM sqlite_sequence", []).ok();
+
+    log::info!("All data deleted from database");
+    Ok(())
 }
 
 #[cfg(test)]
