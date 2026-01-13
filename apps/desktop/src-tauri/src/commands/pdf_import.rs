@@ -3,19 +3,36 @@
 //! Tauri commands for importing bank statements from PDF files.
 
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pdf_import::{
     extract_pdf_text, parse_pdf, parse_pdf_content, ParsedTransaction, ParsedTransactionType,
     ParseResult,
 };
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle};
 
 /// Format date with optional time for database storage
 fn format_datetime(txn: &ParsedTransaction) -> String {
     if let Some(time) = txn.time {
         format!("{} {}", txn.date, time)
     } else {
-        format_datetime(txn)
+        format!("{}", txn.date)
+    }
+}
+
+/// Get possible DB transaction types for duplicate detection.
+/// Returns all types that could match (original + delivery mode variant).
+/// This is needed because a PDF "Buy" could have been imported as "DELIVERY_INBOUND"
+/// if deliveryMode was active during the original import.
+fn get_duplicate_check_types(txn_type: ParsedTransactionType) -> Vec<&'static str> {
+    match txn_type {
+        ParsedTransactionType::Buy => vec!["BUY", "DELIVERY_INBOUND"],
+        ParsedTransactionType::Sell => vec!["SELL", "DELIVERY_OUTBOUND"],
+        ParsedTransactionType::TransferIn => vec!["DELIVERY_INBOUND"],
+        ParsedTransactionType::TransferOut => vec!["DELIVERY_OUTBOUND"],
+        ParsedTransactionType::Dividend => vec!["DIVIDENDS"],
+        ParsedTransactionType::Interest => vec!["INTEREST"],
+        _ => vec![],
     }
 }
 
@@ -114,8 +131,23 @@ pub fn get_supported_banks() -> Vec<SupportedBank> {
 
 /// Preview PDF import without making changes
 #[command]
-pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> {
+pub async fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> {
     log::info!("PDF Import: Starting preview for {}", pdf_path);
+
+    // Run blocking PDF parsing in a separate thread to not block the main thread
+    let path = pdf_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        preview_pdf_import_sync(&path)
+    })
+    .await
+    .map_err(|e| format!("PDF preview task failed: {}", e))?;
+
+    result
+}
+
+/// Synchronous PDF preview implementation (runs in blocking thread)
+fn preview_pdf_import_sync(pdf_path: &str) -> Result<PdfImportPreview, String> {
+    log::info!("PDF Import: Starting sync preview for {}", pdf_path);
 
     // Parse the PDF
     let result = match parse_pdf(&pdf_path) {
@@ -200,23 +232,43 @@ pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> 
 
             if let Some(sec_id) = security_id {
                 let amount_cents = (txn.net_amount * 100.0) as i64;
-                let txn_type_str = txn.txn_type.to_portfolio_type()
-                    .unwrap_or_else(|| txn.txn_type.to_account_type());
+                // Get all possible DB types (original + delivery mode variant)
+                let txn_types = get_duplicate_check_types(txn.txn_type);
+                if txn_types.is_empty() {
+                    continue; // Skip non-portfolio transactions (Dividend, etc.)
+                }
 
                 // Check if similar transaction exists (same security, date, type, amount within 1 cent)
+                // Use LIKE for date comparison to handle seconds mismatch
+                // Check for multiple type variants (BUY and DELIVERY_INBOUND, etc.)
+                let date_pattern = format!("{}%", format_datetime(txn));
+                let type_placeholders = txn_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", i + 4))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let sql = format!(
+                    r#"
+                    SELECT id FROM pp_txn
+                    WHERE security_id = ?1
+                      AND date LIKE ?2
+                      AND ABS(amount - ?3) <= 1
+                      AND txn_type IN ({})
+                    LIMIT 1
+                    "#,
+                    type_placeholders
+                );
+
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    vec![&sec_id, &date_pattern, &amount_cents];
+                for t in &txn_types {
+                    params.push(t);
+                }
+
                 let existing: Option<i64> = conn
-                    .query_row(
-                        r#"
-                        SELECT id FROM pp_txn
-                        WHERE security_id = ?1
-                          AND date = ?2
-                          AND txn_type = ?3
-                          AND ABS(amount - ?4) <= 1
-                        LIMIT 1
-                        "#,
-                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
-                        |row| row.get(0),
-                    )
+                    .query_row(&sql, params.as_slice(), |row| row.get(0))
                     .ok();
 
                 if let Some(existing_id) = existing {
@@ -226,7 +278,7 @@ pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> 
                         date: format_datetime(txn),
                         amount: txn.net_amount,
                         security_name: txn.security_name.clone(),
-                        txn_type: txn_type_str.to_string(),
+                        txn_type: txn_types[0].to_string(), // Use first type for display
                     });
                 }
             }
@@ -245,7 +297,8 @@ pub fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> 
 
 /// Import transactions from PDF
 #[command]
-pub fn import_pdf_transactions(
+pub async fn import_pdf_transactions(
+    app: AppHandle,
     pdf_path: String,
     portfolio_id: i64,
     account_id: i64,
@@ -257,7 +310,43 @@ pub fn import_pdf_transactions(
     let skip_duplicates = skip_duplicates.unwrap_or(true);
     let type_overrides = type_overrides.unwrap_or_default();
     let fee_overrides = fee_overrides.unwrap_or_default();
-    let result = parse_pdf(&pdf_path)?;
+
+    // Run blocking import in a separate thread
+    let result = tokio::task::spawn_blocking(move || {
+        import_pdf_transactions_sync(
+            &pdf_path,
+            portfolio_id,
+            account_id,
+            create_missing_securities,
+            skip_duplicates,
+            type_overrides,
+            fee_overrides,
+        )
+    })
+    .await
+    .map_err(|e| format!("PDF import task failed: {}", e))?;
+
+    // Emit data changed event if import was successful
+    if let Ok(ref import_result) = result {
+        if import_result.transactions_imported > 0 {
+            emit_data_changed(&app, DataChangedPayload::import(vec![]));
+        }
+    }
+
+    result
+}
+
+/// Synchronous PDF import implementation (runs in blocking thread)
+fn import_pdf_transactions_sync(
+    pdf_path: &str,
+    portfolio_id: i64,
+    account_id: i64,
+    create_missing_securities: bool,
+    skip_duplicates: bool,
+    type_overrides: std::collections::HashMap<usize, String>,
+    fee_overrides: std::collections::HashMap<usize, f64>,
+) -> Result<PdfImportResult, String> {
+    let result = parse_pdf(pdf_path)?;
 
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
@@ -269,6 +358,8 @@ pub fn import_pdf_transactions(
     let mut securities_created = 0;
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
+    // Track affected securities for FIFO rebuild
+    let mut affected_security_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     // Get import_id from portfolio
     let import_id: i64 = conn
@@ -348,33 +439,53 @@ pub fn import_pdf_transactions(
         if skip_duplicates {
             if let Some(sec_id) = security_id {
                 let amount_cents = (txn.net_amount * 100.0) as i64;
-                let txn_type_str = effective_type.to_portfolio_type()
-                    .unwrap_or_else(|| effective_type.to_account_type());
+                // Get all possible DB types (original + delivery mode variant)
+                // This handles the case where the same PDF was previously imported with deliveryMode
+                let txn_types = get_duplicate_check_types(effective_type);
 
-                let is_duplicate: bool = conn
-                    .query_row(
+                if !txn_types.is_empty() {
+                    // Use LIKE for date comparison to handle seconds mismatch
+                    // PDF might have "2026-01-07 09:30" but DB has "2026-01-07 09:30:55"
+                    let date_pattern = format!("{}%", format_datetime(txn));
+                    let type_placeholders = txn_types
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| format!("?{}", i + 4))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    let sql = format!(
                         r#"
                         SELECT 1 FROM pp_txn
                         WHERE security_id = ?1
-                          AND date = ?2
-                          AND txn_type = ?3
-                          AND ABS(amount - ?4) <= 1
+                          AND date LIKE ?2
+                          AND ABS(amount - ?3) <= 1
+                          AND txn_type IN ({})
                         LIMIT 1
                         "#,
-                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false);
+                        type_placeholders
+                    );
 
-                if is_duplicate {
-                    warnings.push(format!(
-                        "Transaktion vom {} übersprungen (Duplikat: {} {})",
-                        txn.date,
-                        txn_type_str,
-                        txn.security_name.as_deref().unwrap_or("Unbekannt")
-                    ));
-                    transactions_skipped += 1;
-                    continue;
+                    let mut params: Vec<&dyn rusqlite::ToSql> =
+                        vec![&sec_id, &date_pattern, &amount_cents];
+                    for t in &txn_types {
+                        params.push(t);
+                    }
+
+                    let is_duplicate: bool = conn
+                        .query_row(&sql, params.as_slice(), |_| Ok(true))
+                        .unwrap_or(false);
+
+                    if is_duplicate {
+                        warnings.push(format!(
+                            "Transaktion vom {} übersprungen (Duplikat: {} {})",
+                            txn.date,
+                            txn_types[0],
+                            txn.security_name.as_deref().unwrap_or("Unbekannt")
+                        ));
+                        transactions_skipped += 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -427,6 +538,11 @@ pub fn import_pdf_transactions(
             })?;
 
             let portfolio_txn_id = conn.last_insert_rowid();
+
+            // Track security for FIFO rebuild
+            if let Some(sec_id) = security_id {
+                affected_security_ids.insert(sec_id);
+            }
 
             // For delivery transactions (TransferIn/TransferOut), skip account transaction
             // They don't affect cash, just add/remove securities
@@ -524,6 +640,20 @@ pub fn import_pdf_transactions(
         }
 
         transactions_imported += 1;
+    }
+
+    // Rebuild FIFO lots for all affected securities
+    // WICHTIG: Ohne FIFO-Rebuild werden neue Transaktionen nicht im Einstandswert berücksichtigt!
+    for sec_id in &affected_security_ids {
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, *sec_id) {
+            log::warn!("Failed to rebuild FIFO lots for security {}: {}", sec_id, e);
+        }
+    }
+    if !affected_security_ids.is_empty() {
+        log::info!(
+            "PDF Import: Rebuilt FIFO lots for {} securities",
+            affected_security_ids.len()
+        );
     }
 
     Ok(PdfImportResult {
@@ -730,22 +860,42 @@ pub async fn preview_pdf_import_with_ocr(
 
             if let Some(sec_id) = security_id {
                 let amount_cents = (txn.net_amount * 100.0) as i64;
-                let txn_type_str = txn.txn_type.to_portfolio_type()
-                    .unwrap_or_else(|| txn.txn_type.to_account_type());
+                // Get all possible DB types (original + delivery mode variant)
+                let txn_types = get_duplicate_check_types(txn.txn_type);
+                if txn_types.is_empty() {
+                    continue; // Skip non-portfolio transactions (Dividend, etc.)
+                }
+
+                // Use LIKE for date comparison to handle seconds mismatch
+                // Check for multiple type variants (BUY and DELIVERY_INBOUND, etc.)
+                let date_pattern = format!("{}%", format_datetime(txn));
+                let type_placeholders = txn_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", i + 4))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let sql = format!(
+                    r#"
+                    SELECT id FROM pp_txn
+                    WHERE security_id = ?1
+                      AND date LIKE ?2
+                      AND ABS(amount - ?3) <= 1
+                      AND txn_type IN ({})
+                    LIMIT 1
+                    "#,
+                    type_placeholders
+                );
+
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    vec![&sec_id, &date_pattern, &amount_cents];
+                for t in &txn_types {
+                    params.push(t);
+                }
 
                 let existing: Option<i64> = conn
-                    .query_row(
-                        r#"
-                        SELECT id FROM pp_txn
-                        WHERE security_id = ?1
-                          AND date = ?2
-                          AND txn_type = ?3
-                          AND ABS(amount - ?4) <= 1
-                        LIMIT 1
-                        "#,
-                        rusqlite::params![sec_id, format_datetime(txn), txn_type_str, amount_cents],
-                        |row| row.get(0),
-                    )
+                    .query_row(&sql, params.as_slice(), |row| row.get(0))
                     .ok();
 
                 if let Some(existing_id) = existing {
@@ -755,7 +905,7 @@ pub async fn preview_pdf_import_with_ocr(
                         date: format_datetime(txn),
                         amount: txn.net_amount,
                         security_name: txn.security_name.clone(),
-                        txn_type: txn_type_str.to_string(),
+                        txn_type: txn_types[0].to_string(), // Use first type for display
                     });
                 }
             }

@@ -24,6 +24,7 @@ export type View =
   | 'plans'
   | 'rebalancing'
   | 'charts'
+  | 'screener'
   | 'benchmark'
   | 'reports'
   | 'settings';
@@ -54,6 +55,7 @@ export const navItems: NavItem[] = [
   { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
   { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
   { id: 'charts', label: 'Technische Analyse', icon: 'CandlestickChart', section: 'tools' },
+  { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
 ];
 
 // ============================================================================
@@ -106,6 +108,21 @@ export const useAppStore = create<AppState>()((set) => ({
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),
+}));
+
+// ============================================================================
+// Data Refresh Trigger (for global data refresh after mutations)
+// ============================================================================
+// Verwende triggerDataRefresh() nach jeder Transaktion/Import um alle Views zu aktualisieren
+
+interface DataRefreshState {
+  refreshVersion: number;
+  triggerDataRefresh: () => void;
+}
+
+export const useDataRefreshStore = create<DataRefreshState>()((set) => ({
+  refreshVersion: 0,
+  triggerDataRefresh: () => set((state) => ({ refreshVersion: state.refreshVersion + 1 })),
 }));
 
 // ============================================================================
@@ -545,4 +562,68 @@ export const toast = {
 export function getViewLabel(view: View): string {
   const item = navItems.find((item) => item.id === view);
   return item?.label || 'Einstellungen';
+}
+
+// ============================================================================
+// Model Capabilities Detection
+// ============================================================================
+
+export interface ModelCapabilities {
+  vision: boolean;
+  webSearch: boolean;
+  pdfUpload: boolean;
+}
+
+/**
+ * Web search capable models.
+ * - OpenAI o3, o4-mini: web_search_preview tool (Note: these are deprecated in vision context)
+ * - Perplexity sonar, sonar-pro: built-in web search via Sonar API
+ */
+const WEB_SEARCH_MODELS = [
+  // OpenAI models with web search (if enabled)
+  'o3',
+  'o4-mini',
+  // Perplexity models always have web search
+  'sonar',
+  'sonar-pro',
+];
+
+/**
+ * PDF direct upload capable providers.
+ * Claude and Gemini can process PDFs directly without converting to images.
+ */
+const PDF_UPLOAD_PROVIDERS = ['claude', 'gemini'];
+
+/**
+ * Get model capabilities based on provider and model.
+ * Used to conditionally enable features like web search, news integration.
+ *
+ * @example
+ * const caps = getModelCapabilities('perplexity', 'sonar-pro');
+ * if (caps.webSearch) {
+ *   // Show "Include News" checkbox
+ * }
+ */
+export function getModelCapabilities(provider: string, model: string): ModelCapabilities {
+  // All listed models have vision support (that's why they're in AI_MODELS)
+  const vision = true;
+
+  // Web search: check if model is in the list OR if provider is perplexity (all perplexity models have web search)
+  const webSearch =
+    provider === 'perplexity' ||
+    WEB_SEARCH_MODELS.some(m => model.startsWith(m));
+
+  // PDF upload: Claude and Gemini support direct PDF upload
+  const pdfUpload = PDF_UPLOAD_PROVIDERS.includes(provider);
+
+  return { vision, webSearch, pdfUpload };
+}
+
+/**
+ * Check if current AI settings support web search.
+ * Convenience function that uses the settings store.
+ */
+export function currentModelSupportsWebSearch(): boolean {
+  const { aiProvider, aiModel } = useSettingsStore.getState();
+  return getModelCapabilities(aiProvider, aiModel).webSearch;
 }

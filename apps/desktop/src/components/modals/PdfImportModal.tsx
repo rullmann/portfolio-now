@@ -31,7 +31,7 @@ interface PdfImportModalProps {
   onSuccess?: () => void;
 }
 
-type Step = 'select' | 'preview' | 'configure' | 'importing' | 'done';
+type Step = 'select' | 'preview' | 'importing' | 'done';
 
 // Transaction type options for override
 const TXN_TYPE_OPTIONS = [
@@ -62,11 +62,14 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
 
   const [step, setStep] = useState<Step>('select');
   const [supportedBanks, setSupportedBanks] = useState<SupportedBank[]>([]);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [preview, setPreview] = useState<PdfImportPreview | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [previews, setPreviews] = useState<Array<PdfImportPreview & { filePath: string; fileName: string }>>([]);
+  // Combined preview for display
+  const [combinedPreview, setCombinedPreview] = useState<PdfImportPreview | null>(null);
   const [portfolios, setPortfolios] = useState<PortfolioData[]>([]);
   const [accounts, setAccounts] = useState<AccountData[]>([]);
-  const [selectedPortfolio, setSelectedPortfolio] = useState<number | null>(null);
+  // Portfolio selection per file (file index -> portfolio id)
+  const [portfolioPerFile, setPortfolioPerFile] = useState<Record<number, number>>({});
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [createMissingSecurities, setCreateMissingSecurities] = useState(true);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -75,8 +78,10 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   const [importResult, setImportResult] = useState<{
     success: boolean;
     transactionsImported: number;
+    transactionsSkipped: number;
     securitiesCreated: number;
     errors: string[];
+    warnings: string[];
   } | null>(null);
   // Transaction type overrides (index -> new type)
   const [txnTypeOverrides, setTxnTypeOverrides] = useState<Record<number, string>>({});
@@ -131,9 +136,6 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
       setIsOcrAvailable(ocrAvailable);
 
       // Set defaults
-      if (portfolioList.length > 0) {
-        setSelectedPortfolio(portfolioList.find(p => !p.isRetired)?.id ?? null);
-      }
       if (accountList.length > 0) {
         setSelectedAccount(accountList.find(a => !a.isRetired)?.id ?? null);
       }
@@ -144,8 +146,10 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
 
   const resetState = () => {
     setStep('select');
-    setSelectedFile(null);
-    setPreview(null);
+    setSelectedFiles([]);
+    setPreviews([]);
+    setCombinedPreview(null);
+    setPortfolioPerFile({});
     setError(null);
     setImportResult(null);
     setTxnTypeOverrides({});
@@ -169,9 +173,9 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
 
   // Change all transaction types at once
   const handleChangeAllTypes = (newType: string) => {
-    if (!preview) return;
+    if (!combinedPreview) return;
     const newOverrides: Record<number, string> = {};
-    preview.transactions.forEach((_, idx) => {
+    combinedPreview.transactions.forEach((_, idx) => {
       newOverrides[idx] = newType;
     });
     setTxnTypeOverrides(newOverrides);
@@ -190,43 +194,129 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     }));
   };
 
+  // Extract filename from path
+  const getFileName = (filePath: string): string => {
+    const parts = filePath.split(/[/\\]/);
+    return parts[parts.length - 1] || filePath;
+  };
+
   const handleSelectFile = async () => {
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
 
-      if (selected) {
-        setSelectedFile(selected as string);
+      if (selected && (Array.isArray(selected) ? selected.length > 0 : selected)) {
+        const files = Array.isArray(selected) ? selected : [selected];
+        setSelectedFiles(files);
         setIsLoading(true);
         setError(null);
         setOcrStatus(null);
 
-        let previewData: PdfImportPreview;
+        const allPreviews: Array<PdfImportPreview & { filePath: string; fileName: string }> = [];
 
-        // Use OCR-enabled preview if option is selected
-        if (useOcrFallback && hasOcrApiKey()) {
-          setOcrStatus('Analysiere PDF...');
-          previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
-            pdfPath: selected as string,
-            useOcr: true,
-            ocrProvider: aiProvider,
-            ocrModel: aiModel,
-            ocrApiKey: getOcrApiKey(),
-          });
-          setOcrStatus(null);
-        } else {
-          // Regular preview
-          previewData = await previewPdfImport(selected as string);
+        // Process each PDF
+        const errors: string[] = [];
+        for (let i = 0; i < files.length; i++) {
+          const filePath = files[i];
+          const fileName = getFileName(filePath);
+          console.log(`[PDF Import] Processing ${i + 1}/${files.length}: ${fileName}`);
+          setOcrStatus(`Analysiere ${fileName} (${i + 1}/${files.length})...`);
+
+          // Allow UI to update
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          try {
+            let previewData: PdfImportPreview;
+
+            // Use OCR-enabled preview if option is selected
+            if (useOcrFallback && hasOcrApiKey()) {
+              console.log(`[PDF Import] Using OCR for ${fileName}`);
+              previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
+                pdfPath: filePath,
+                useOcr: true,
+                ocrProvider: aiProvider,
+                ocrModel: aiModel,
+                ocrApiKey: getOcrApiKey(),
+              });
+            } else {
+              // Regular preview
+              console.log(`[PDF Import] Using regular preview for ${fileName}`);
+              previewData = await previewPdfImport(filePath);
+              console.log(`[PDF Import] Received preview for ${fileName}:`, previewData.transactions.length, 'transactions');
+            }
+
+            allPreviews.push({
+              ...previewData,
+              filePath,
+              fileName,
+            });
+          } catch (err) {
+            console.error(`Failed to parse ${fileName}:`, err);
+            errors.push(`${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
-        setPreview(previewData);
+        // Show errors if any files failed
+        if (errors.length > 0 && allPreviews.length === 0) {
+          throw new Error(`Keine PDFs konnten verarbeitet werden:\n${errors.join('\n')}`);
+        }
+
+        // Add errors as warnings to show in preview
+        if (errors.length > 0) {
+          allPreviews[0] = {
+            ...allPreviews[0],
+            warnings: [...(allPreviews[0].warnings || []), ...errors.map(e => `Fehler: ${e}`)],
+          };
+        }
+
+        setOcrStatus(null);
+        setPreviews(allPreviews);
+
+        // Initialize portfolio selection per file with first available portfolio
+        const defaultPortfolio = portfolios.find(p => !p.isRetired)?.id;
+        if (defaultPortfolio) {
+          const initialPortfolios: Record<number, number> = {};
+          allPreviews.forEach((_, idx) => {
+            initialPortfolios[idx] = defaultPortfolio;
+          });
+          setPortfolioPerFile(initialPortfolios);
+        }
+
+        // Combine all previews into one for display
+        const combined: PdfImportPreview = {
+          bank: allPreviews.map(p => p.bank).filter(Boolean).join(', ') || 'Unbekannt',
+          transactions: allPreviews.flatMap(p =>
+            p.transactions.map(txn => ({
+              ...txn,
+              // Add source info to security name for display
+              _sourceFile: p.fileName,
+              _sourceBank: p.bank,
+            }))
+          ),
+          newSecurities: allPreviews.flatMap(p => p.newSecurities),
+          matchedSecurities: allPreviews.flatMap(p => p.matchedSecurities || []),
+          warnings: allPreviews.flatMap(p =>
+            p.warnings.map(w => `[${p.fileName}] ${w}`)
+          ),
+          potentialDuplicates: allPreviews.flatMap(p => p.potentialDuplicates || []),
+        };
+
+        // Remove duplicate securities (by ISIN)
+        const seenIsins = new Set<string>();
+        combined.newSecurities = combined.newSecurities.filter(sec => {
+          if (sec.isin && seenIsins.has(sec.isin)) return false;
+          if (sec.isin) seenIsins.add(sec.isin);
+          return true;
+        });
+
+        setCombinedPreview(combined);
 
         // If deliveryMode is active, automatically convert Buy → TransferIn
-        if (deliveryMode && previewData.transactions.length > 0) {
+        if (deliveryMode && combined.transactions.length > 0) {
           const autoOverrides: Record<number, string> = {};
-          previewData.transactions.forEach((txn, idx) => {
+          combined.transactions.forEach((txn, idx) => {
             if (txn.txnType === 'Buy') {
               autoOverrides[idx] = 'TransferIn';
             }
@@ -236,7 +326,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
           }
         }
 
-        setStep('preview');
+        // No step change - preview appears inline below upload zone
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -246,45 +336,101 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     }
   };
 
-  const handleProceedToConfig = () => {
-    setStep('configure');
-  };
-
   const handleImport = async () => {
-    if (!selectedFile || !selectedPortfolio || !selectedAccount) return;
+    // Check if all files have a portfolio selected
+    const allFilesHavePortfolio = previews.every((_, idx) => portfolioPerFile[idx]);
+    if (selectedFiles.length === 0 || !allFilesHavePortfolio || !selectedAccount) return;
 
     setStep('importing');
     setError(null);
 
     try {
-      // Convert overrides to the format expected by backend
-      const typeOverrides = Object.keys(txnTypeOverrides).length > 0 ? txnTypeOverrides : undefined;
-      const feesOverrides = Object.keys(feeOverrides).length > 0 ? feeOverrides : undefined;
+      let totalTransactions = 0;
+      let totalSkipped = 0;
+      let totalSecurities = 0;
+      const allErrors: string[] = [];
+      const allWarnings: string[] = [];
 
-      const result = await importPdfTransactions(
-        selectedFile,
-        selectedPortfolio,
-        selectedAccount,
-        createMissingSecurities,
-        skipDuplicates,
-        typeOverrides,
-        feesOverrides
-      );
+      // Track transaction index offset for overrides
+      let txnIndexOffset = 0;
 
+      // Import each PDF
+      for (let i = 0; i < previews.length; i++) {
+        const preview = previews[i];
+        const filePortfolio = portfolioPerFile[i];
+
+        if (!filePortfolio) {
+          allErrors.push(`[${preview.fileName}] Kein Portfolio ausgewählt`);
+          continue;
+        }
+
+        setOcrStatus(`Importiere ${preview.fileName} (${i + 1}/${previews.length})...`);
+
+        // Allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Get overrides for this file's transactions
+        const fileTypeOverrides: Record<number, string> = {};
+        const fileFeesOverrides: Record<number, number> = {};
+
+        for (let j = 0; j < preview.transactions.length; j++) {
+          const globalIdx = txnIndexOffset + j;
+          if (txnTypeOverrides[globalIdx] !== undefined) {
+            fileTypeOverrides[j] = txnTypeOverrides[globalIdx];
+          }
+          if (feeOverrides[globalIdx] !== undefined) {
+            fileFeesOverrides[j] = feeOverrides[globalIdx];
+          }
+        }
+
+        const typeOverrides = Object.keys(fileTypeOverrides).length > 0 ? fileTypeOverrides : undefined;
+        const feesOverrides = Object.keys(fileFeesOverrides).length > 0 ? fileFeesOverrides : undefined;
+
+        try {
+          const result = await importPdfTransactions(
+            preview.filePath,
+            filePortfolio,
+            selectedAccount,
+            createMissingSecurities,
+            skipDuplicates,
+            typeOverrides,
+            feesOverrides
+          );
+
+          totalTransactions += result.transactionsImported;
+          totalSkipped += result.transactionsSkipped;
+          totalSecurities += result.securitiesCreated;
+          if (result.errors.length > 0) {
+            allErrors.push(...result.errors.map(e => `[${preview.fileName}] ${e}`));
+          }
+          if (result.warnings.length > 0) {
+            allWarnings.push(...result.warnings.map(w => `[${preview.fileName}] ${w}`));
+          }
+        } catch (err) {
+          allErrors.push(`[${preview.fileName}] ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        txnIndexOffset += preview.transactions.length;
+      }
+
+      setOcrStatus(null);
       setImportResult({
-        success: result.success,
-        transactionsImported: result.transactionsImported,
-        securitiesCreated: result.securitiesCreated,
-        errors: result.errors,
+        success: allErrors.length === 0 || totalTransactions > 0,
+        transactionsImported: totalTransactions,
+        transactionsSkipped: totalSkipped,
+        securitiesCreated: totalSecurities,
+        errors: allErrors,
+        warnings: allWarnings,
       });
       setStep('done');
 
-      if (result.success && onSuccess) {
+      if (totalTransactions > 0 && onSuccess) {
         onSuccess();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setStep('configure');
+      setOcrStatus(null);
+      setStep('preview');
     }
   };
 
@@ -347,223 +493,227 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
             </div>
           )}
 
-          {/* Step: Select File */}
-          {step === 'select' && (
-            <div className="space-y-6">
+          {/* Single-Page Layout: Upload + Preview */}
+          {(step === 'select' || step === 'preview') && (
+            <div className="space-y-2">
+              {/* Compact Upload Zone */}
               <div
                 onClick={handleSelectFile}
-                className="border-2 border-dashed border-border rounded-lg p-12 text-center cursor-pointer hover:border-primary hover:bg-muted/50 transition-colors"
+                className={`border-2 border-dashed border-border rounded-lg text-center cursor-pointer hover:border-primary hover:bg-muted/50 transition-colors ${
+                  combinedPreview ? 'py-2 px-4' : 'p-8'
+                }`}
               >
                 {isLoading ? (
-                  <>
-                    <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
-                    <p className="text-lg font-medium mb-2">
-                      {ocrStatus || 'PDF wird analysiert...'}
-                    </p>
-                    {ocrStatus && (
-                      <p className="text-sm text-muted-foreground">
-                        OCR-Texterkennung mit KI läuft...
-                      </p>
-                    )}
-                  </>
+                  <div className="flex items-center justify-center gap-3">
+                    <Loader2 className="w-5 h-5 text-primary animate-spin" />
+                    <span className="text-sm font-medium">{ocrStatus || 'PDF wird analysiert...'}</span>
+                  </div>
+                ) : combinedPreview ? (
+                  <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <Upload size={16} />
+                    <span>Weitere PDFs hinzufügen oder neu auswählen</span>
+                  </div>
                 ) : (
                   <>
-                    <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-lg font-medium mb-2">PDF-Datei auswählen</p>
+                    <Upload className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
+                    <p className="font-medium mb-1">PDF-Dateien auswählen</p>
                     <p className="text-sm text-muted-foreground">
-                      Klicken Sie hier oder ziehen Sie eine PDF-Datei hierher
+                      Klicken oder Dateien hierher ziehen
                     </p>
                   </>
                 )}
               </div>
 
-              {/* OCR Options */}
-              <div className="border border-border rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <ScanText className="w-5 h-5 mt-0.5 text-muted-foreground" />
-                  <div className="flex-1">
-                    <label className="flex items-center justify-between cursor-pointer">
+              {/* OCR Options & Banks - Only show before PDFs are loaded */}
+              {!combinedPreview && !isLoading && (
+                <details className="border border-border rounded-lg">
+                  <summary className="px-4 py-2 cursor-pointer text-sm font-medium flex items-center gap-2">
+                    <ScanText size={14} />
+                    Erweiterte Optionen
+                  </summary>
+                  <div className="px-4 pb-4 space-y-4">
+                    {/* OCR Option */}
+                    <label className="flex items-center justify-between cursor-pointer text-sm">
                       <div>
-                        <div className="font-medium text-sm">OCR für gescannte PDFs</div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Nutzt KI-Texterkennung wenn normale Extraktion zu wenig Text liefert.
-                        </div>
+                        <span className="font-medium">OCR für gescannte PDFs</span>
+                        <span className="text-xs text-muted-foreground ml-2">
+                          (KI-Texterkennung)
+                        </span>
                       </div>
                       <input
                         type="checkbox"
                         checked={useOcrFallback}
                         onChange={(e) => setUseOcrFallback(e.target.checked)}
                         disabled={!isOcrAvailable || !hasOcrApiKey()}
-                        className="rounded border-border ml-4"
+                        className="rounded border-border"
                       />
                     </label>
-
-                    {!isOcrAvailable && (
-                      <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-600">
-                        <div className="flex items-center gap-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          <span className="font-medium">poppler-utils nicht installiert</span>
-                        </div>
-                        <div className="mt-1">
-                          macOS: <code className="bg-amber-500/20 px-1 rounded">brew install poppler</code><br />
-                          Ubuntu: <code className="bg-amber-500/20 px-1 rounded">apt install poppler-utils</code>
-                        </div>
+                    {/* Supported Banks */}
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-2">Unterstützte Banken:</div>
+                      <div className="flex flex-wrap gap-2">
+                        {supportedBanks.map((bank) => (
+                          <span key={bank.id} className="px-2 py-1 bg-muted rounded text-xs">
+                            {bank.name}
+                          </span>
+                        ))}
                       </div>
-                    )}
-
-                    {isOcrAvailable && !hasOcrApiKey() && (
-                      <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-600">
-                        <div className="flex items-center gap-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          <span>Bitte {aiProvider.toUpperCase()} API-Key in Einstellungen konfigurieren.</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {isOcrAvailable && hasOcrApiKey() && useOcrFallback && (
-                      <div className="mt-3 p-2 bg-muted rounded text-xs flex items-center gap-2">
-                        <AIProviderLogo provider={aiProvider} size={14} />
-                        <span className="text-muted-foreground">
-                          OCR mit {aiModel}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Supported Banks */}
-              <div>
-                <h3 className="font-medium mb-3">Unterstützte Banken</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {supportedBanks.map((bank) => (
-                    <div
-                      key={bank.id}
-                      className="p-3 bg-muted rounded-md"
-                    >
-                      <div className="font-medium text-sm">{bank.name}</div>
-                      <div className="text-xs text-muted-foreground">{bank.description}</div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step: Preview */}
-          {step === 'preview' && preview && (
-            <div className="space-y-6">
-              {/* Summary */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-muted rounded-lg p-4">
-                  <div className="text-sm text-muted-foreground">Erkannte Bank</div>
-                  <div className="text-lg font-bold">{preview.bank || 'Unbekannt'}</div>
-                </div>
-                <div className="bg-muted rounded-lg p-4">
-                  <div className="text-sm text-muted-foreground">Transaktionen</div>
-                  <div className="text-lg font-bold">{preview.transactions.length}</div>
-                </div>
-                <div className="bg-muted rounded-lg p-4">
-                  <div className="text-sm text-muted-foreground">Neue Wertpapiere</div>
-                  <div className="text-lg font-bold">{preview.newSecurities.length}</div>
-                </div>
-                <div className="bg-muted rounded-lg p-4">
-                  <div className="text-sm text-muted-foreground">Warnungen</div>
-                  <div className="text-lg font-bold">{preview.warnings.length}</div>
-                </div>
-              </div>
-
-              {/* Warnings */}
-              {preview.warnings.length > 0 && (
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
-                  <h4 className="font-medium text-amber-600 mb-2">Warnungen</h4>
-                  <ul className="text-sm space-y-1">
-                    {preview.warnings.map((warning, idx) => (
-                      <li key={idx} className="text-amber-600">{warning}</li>
-                    ))}
-                  </ul>
-                </div>
+                  </div>
+                </details>
               )}
 
-              {/* Potential Duplicates */}
-              {preview.potentialDuplicates && preview.potentialDuplicates.length > 0 && (
-                <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg p-4">
-                  <h4 className="font-medium text-orange-600 mb-2">
-                    Mögliche Duplikate ({preview.potentialDuplicates.length})
-                  </h4>
-                  <p className="text-sm text-orange-600 mb-3">
-                    Folgende Transaktionen existieren möglicherweise bereits in der Datenbank:
-                  </p>
-                  <ul className="text-sm space-y-2">
-                    {preview.potentialDuplicates.slice(0, 5).map((dup, idx) => (
-                      <li key={idx} className="text-orange-600 flex items-center gap-2">
-                        <span className="font-medium">{formatDate(dup.date)}</span>
-                        <span className="px-2 py-0.5 rounded text-xs bg-orange-500/20">
-                          {getTxnTypeLabel(dup.txnType)}
-                        </span>
-                        <span>{dup.securityName || 'Unbekannt'}</span>
-                        <span className="ml-auto font-mono">
-                          {formatCurrency(dup.amount, 'EUR')}
-                        </span>
-                      </li>
-                    ))}
-                    {preview.potentialDuplicates.length > 5 && (
-                      <li className="text-orange-500 text-xs">
-                        ... und {preview.potentialDuplicates.length - 5} weitere
-                      </li>
-                    )}
-                  </ul>
-                </div>
-              )}
+              {/* Preview Content - Shows immediately after PDFs are loaded */}
+              {combinedPreview && (
+                <>
+              {/* Compact Summary - single line */}
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{selectedFiles.length} Dateien</span>
+                <span>•</span>
+                <span>{combinedPreview.bank}</span>
+                <span>•</span>
+                <span>{combinedPreview.transactions.length} Transaktionen</span>
+                {combinedPreview.potentialDuplicates && combinedPreview.potentialDuplicates.length > 0 && (
+                  <span className="text-orange-600 font-medium">• {combinedPreview.potentialDuplicates.length} Duplikate</span>
+                )}
+                {combinedPreview.newSecurities.length > 0 && (
+                  <span>• {combinedPreview.newSecurities.length} neue</span>
+                )}
+              </div>
 
-              {/* Transactions Preview */}
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-medium">Erkannte Transaktionen</h3>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">Alle ändern:</span>
+              {/* Files with Portfolio Selection - Compact */}
+              <div className="space-y-1">
+                {previews.map((p, idx) => (
+                  <div key={idx} className="flex items-center gap-2 text-sm">
+                    <FileText size={14} className="text-muted-foreground flex-shrink-0" />
+                    <span className="truncate flex-1 min-w-0" title={p.fileName}>{p.fileName}</span>
+                    <span className="text-xs text-muted-foreground flex-shrink-0">
+                      {p.bank && `${p.bank} •`} {p.transactions.length}
+                    </span>
+                    <span className="text-muted-foreground">→</span>
                     <select
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          handleChangeAllTypes(e.target.value);
-                          e.target.value = ''; // Reset selection
-                        }
-                      }}
-                      className="px-2 py-1 text-sm border border-border rounded-md bg-background"
-                      defaultValue=""
+                      value={portfolioPerFile[idx] || ''}
+                      onChange={(e) => setPortfolioPerFile(prev => ({ ...prev, [idx]: Number(e.target.value) }))}
+                      className="px-2 py-0.5 text-xs border border-border rounded bg-background w-28"
                     >
-                      <option value="" disabled>Typ wählen...</option>
-                      {TXN_TYPE_OPTIONS.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      <option value="">Portfolio...</option>
+                      {portfolios.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
                   </div>
+                ))}
+              </div>
+
+              {/* Account & Options - Single row */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <span>Konto:</span>
+                  <select
+                    value={selectedAccount || ''}
+                    onChange={(e) => setSelectedAccount(Number(e.target.value))}
+                    className="px-1.5 py-0.5 text-xs border border-border rounded bg-background"
+                  >
+                    <option value="">Wählen...</option>
+                    {accounts.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={createMissingSecurities}
+                    onChange={(e) => setCreateMissingSecurities(e.target.checked)}
+                    className="rounded border-border w-3 h-3"
+                  />
+                  <span>Wertpapiere anlegen</span>
+                </label>
+                {combinedPreview && combinedPreview.potentialDuplicates && combinedPreview.potentialDuplicates.length > 0 && (
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipDuplicates}
+                      onChange={(e) => setSkipDuplicates(e.target.checked)}
+                      className="rounded border-border w-3 h-3"
+                    />
+                    <span>Duplikate überspringen</span>
+                  </label>
+                )}
+              </div>
+
+              {/* Warnings - Compact inline */}
+              {combinedPreview.warnings.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+                  <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <span className="text-amber-600">
+                    {combinedPreview.warnings.slice(0, 3).join(' · ')}
+                    {combinedPreview.warnings.length > 3 && ` (+${combinedPreview.warnings.length - 3} weitere)`}
+                  </span>
+                </div>
+              )}
+
+              {/* Potential Duplicates - Compact inline */}
+              {combinedPreview.potentialDuplicates && combinedPreview.potentialDuplicates.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-orange-500/5 border border-orange-500/20 rounded-lg px-3 py-2">
+                  <AlertCircle size={14} className="text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-orange-600 font-medium">{combinedPreview.potentialDuplicates.length} mögliche Duplikate: </span>
+                    <span className="text-orange-600">
+                      {combinedPreview.potentialDuplicates.map((dup, idx) => (
+                        <span key={idx}>
+                          {idx > 0 && ' · '}
+                          {formatDate(dup.date)} {getTxnTypeLabel(dup.txnType)} {dup.securityName || 'Unbekannt'} {formatCurrency(dup.amount, 'EUR')}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Transactions Preview - Compact */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium text-xs">Transaktionen</span>
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleChangeAllTypes(e.target.value);
+                        e.target.value = '';
+                      }
+                    }}
+                    className="px-1.5 py-0.5 text-xs border border-border rounded bg-background"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Alle: Typ...</option>
+                    {TXN_TYPE_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="border border-border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto max-h-80">
+                  <div className="overflow-y-auto max-h-48">
                     <table className="w-full text-sm">
                       <thead className="bg-muted sticky top-0">
                         <tr>
-                          <th className="text-left py-2 px-3 font-medium">Datum</th>
-                          <th className="text-left py-2 px-3 font-medium">Typ</th>
-                          <th className="text-left py-2 px-3 font-medium">Wertpapier</th>
-                          <th className="text-right py-2 px-3 font-medium">Stück</th>
-                          <th className="text-right py-2 px-3 font-medium">Kurs</th>
-                          <th className="text-right py-2 px-3 font-medium">Betrag</th>
-                          <th className="text-right py-2 px-3 font-medium">Gebühren</th>
+                          <th className="text-left py-1.5 px-3 font-medium text-xs">Datum</th>
+                          <th className="text-left py-1.5 px-3 font-medium text-xs">Typ</th>
+                          <th className="text-left py-1.5 px-3 font-medium text-xs">Wertpapier</th>
+                          <th className="text-right py-1.5 px-3 font-medium text-xs">Betrag</th>
+                          <th className="text-right py-1.5 px-3 font-medium text-xs w-16">Gebühr</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {preview.transactions.map((txn, idx) => {
+                        {combinedPreview.transactions.map((txn, idx) => {
                           const effectiveType = getEffectiveTxnType(idx, txn.txnType);
                           return (
                           <tr key={idx} className="border-t border-border">
-                            <td className="py-2 px-3">{formatDate(txn.date)}</td>
-                            <td className="py-2 px-3">
+                            <td className="py-1.5 px-3 text-xs">{formatDate(txn.date)}</td>
+                            <td className="py-1.5 px-3">
                               <select
                                 value={effectiveType}
                                 onChange={(e) => handleTxnTypeChange(idx, e.target.value)}
-                                className={`px-2 py-1 rounded text-xs border-0 cursor-pointer ${
+                                className={`px-1.5 py-0.5 rounded text-xs border-0 cursor-pointer ${
                                   effectiveType === 'Buy' || effectiveType === 'TransferIn' ? 'bg-green-500/10 text-green-600' :
                                   effectiveType === 'Sell' || effectiveType === 'TransferOut' ? 'bg-red-500/10 text-red-600' :
                                   effectiveType === 'Dividend' ? 'bg-blue-500/10 text-blue-600' :
@@ -575,26 +725,21 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                                 ))}
                               </select>
                             </td>
-                            <td className="py-2 px-3">
-                              <div className="font-medium">{txn.securityName || '-'}</div>
-                              <div className="text-xs text-muted-foreground">{txn.isin || txn.wkn || ''}</div>
+                            <td className="py-1.5 px-3">
+                              <span className="font-medium text-sm">{txn.securityName || '-'}</span>
+                              {txn.isin && <span className="text-xs text-muted-foreground ml-1">{txn.isin}</span>}
                             </td>
-                            <td className="py-2 px-3 text-right">{txn.shares?.toLocaleString('de-DE', { maximumFractionDigits: 6 }) || '-'}</td>
-                            <td className="py-2 px-3 text-right">
-                              {txn.pricePerShare ? formatCurrency(txn.pricePerShare, txn.currency) : '-'}
-                            </td>
-                            <td className="py-2 px-3 text-right font-medium">
+                            <td className="py-1.5 px-3 text-right font-medium text-sm">
                               {formatCurrency(txn.netAmount, txn.currency)}
                             </td>
-                            <td className="py-2 px-3 text-right">
+                            <td className="py-1.5 px-3 text-right">
                               <input
                                 type="number"
                                 step="0.01"
                                 min="0"
                                 value={getEffectiveFee(idx, txn.fees)}
                                 onChange={(e) => handleFeeChange(idx, parseFloat(e.target.value) || 0)}
-                                className="w-20 px-2 py-1 text-right text-xs border border-border rounded bg-background"
-                                placeholder="0,00"
+                                className="w-14 px-1 py-0.5 text-right text-xs border border-border rounded bg-background"
                               />
                             </td>
                           </tr>
@@ -605,107 +750,19 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                 </div>
               </div>
 
-              {/* New Securities */}
-              {preview.newSecurities.length > 0 && (
-                <div>
-                  <h3 className="font-medium mb-3">Neue Wertpapiere (werden angelegt)</h3>
-                  <div className="space-y-2">
-                    {preview.newSecurities.map((sec, idx) => (
-                      <div key={idx} className="flex items-center gap-4 p-3 bg-muted rounded-lg">
-                        <div className="flex-1">
-                          <div className="font-medium">{sec.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {sec.isin && `ISIN: ${sec.isin}`}
-                            {sec.wkn && ` WKN: ${sec.wkn}`}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+              {/* New Securities - Compact inline */}
+              {combinedPreview.newSecurities.length > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-medium">{combinedPreview.newSecurities.length} neue Wertpapiere:</span>{' '}
+                  {combinedPreview.newSecurities.map((sec, idx) => (
+                    <span key={idx}>
+                      {idx > 0 && ', '}
+                      {sec.name} <span className="opacity-60">({sec.isin || sec.wkn})</span>
+                    </span>
+                  ))}
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Step: Configure */}
-          {step === 'configure' && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="font-medium mb-4">Import-Einstellungen</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Portfolio</label>
-                    <select
-                      value={selectedPortfolio || ''}
-                      onChange={(e) => setSelectedPortfolio(Number(e.target.value))}
-                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
-                    >
-                      <option value="">Portfolio wählen...</option>
-                      {portfolios.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Für Kauf-/Verkauf-Transaktionen
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Verrechnungskonto</label>
-                    <select
-                      value={selectedAccount || ''}
-                      onChange={(e) => setSelectedAccount(Number(e.target.value))}
-                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
-                    >
-                      <option value="">Konto wählen...</option>
-                      {accounts.map(a => (
-                        <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Für Buchungen und Dividenden
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={createMissingSecurities}
-                      onChange={(e) => setCreateMissingSecurities(e.target.checked)}
-                      className="rounded border-border"
-                    />
-                    <span className="text-sm">Fehlende Wertpapiere automatisch anlegen</span>
-                  </label>
-
-                  {preview && preview.potentialDuplicates && preview.potentialDuplicates.length > 0 && (
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={skipDuplicates}
-                        onChange={(e) => setSkipDuplicates(e.target.checked)}
-                        className="rounded border-border"
-                      />
-                      <span className="text-sm">
-                        Mögliche Duplikate überspringen ({preview.potentialDuplicates.length} gefunden)
-                      </span>
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              {/* Summary */}
-              {preview && (
-                <div className="bg-muted rounded-lg p-4">
-                  <h4 className="font-medium mb-2">Zusammenfassung</h4>
-                  <ul className="text-sm space-y-1">
-                    <li>{preview.transactions.length} Transaktionen werden importiert</li>
-                    {preview.newSecurities.length > 0 && (
-                      <li>{preview.newSecurities.length} neue Wertpapiere werden angelegt</li>
-                    )}
-                  </ul>
-                </div>
+              </>
               )}
             </div>
           )}
@@ -714,7 +771,9 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
           {step === 'importing' && (
             <div className="text-center py-12">
               <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
-              <p className="text-lg font-medium">Transaktionen werden importiert...</p>
+              <p className="text-lg font-medium">
+                {ocrStatus || 'Transaktionen werden importiert...'}
+              </p>
               <p className="text-sm text-muted-foreground mt-2">Bitte warten Sie einen Moment.</p>
             </div>
           )}
@@ -727,7 +786,11 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                   <CheckCircle className="w-16 h-16 mx-auto mb-4 text-green-600" />
                   <h3 className="text-xl font-bold mb-2">Import erfolgreich!</h3>
                   <p className="text-muted-foreground mb-6">
+                    {selectedFiles.length > 1 && `${selectedFiles.length} PDFs verarbeitet. `}
                     {importResult.transactionsImported} Transaktionen wurden importiert.
+                    {importResult.transactionsSkipped > 0 && (
+                      <> {importResult.transactionsSkipped} Duplikate wurden übersprungen.</>
+                    )}
                     {importResult.securitiesCreated > 0 && (
                       <> {importResult.securitiesCreated} neue Wertpapiere wurden angelegt.</>
                     )}
@@ -738,6 +801,17 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                   <AlertCircle className="w-16 h-16 mx-auto mb-4 text-destructive" />
                   <h3 className="text-xl font-bold mb-2">Import fehlgeschlagen</h3>
                 </>
+              )}
+
+              {importResult.warnings.length > 0 && (
+                <div className="text-left bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 mt-4">
+                  <h4 className="font-medium text-yellow-600 dark:text-yellow-500 mb-2">Hinweise</h4>
+                  <ul className="text-sm text-yellow-600 dark:text-yellow-500 space-y-1 max-h-32 overflow-y-auto">
+                    {importResult.warnings.map((warning, idx) => (
+                      <li key={idx}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
 
               {importResult.errors.length > 0 && (
@@ -758,25 +832,17 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
         {/* Footer */}
         <div className="flex justify-between p-4 border-t border-border">
           <button
-            onClick={step === 'done' ? onClose : () => setStep('select')}
+            onClick={step === 'done' ? onClose : combinedPreview ? () => { setPreviews([]); setCombinedPreview(null); setSelectedFiles([]); } : onClose}
             className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
           >
-            {step === 'done' ? 'Schließen' : 'Zurück'}
+            {step === 'done' ? 'Schließen' : combinedPreview ? 'Neu starten' : 'Abbrechen'}
           </button>
 
-          {step === 'preview' && (
-            <button
-              onClick={handleProceedToConfig}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-            >
-              Weiter zur Konfiguration
-            </button>
-          )}
-
-          {step === 'configure' && (
+          {/* Show import button when preview is available */}
+          {combinedPreview && step !== 'importing' && step !== 'done' && (
             <button
               onClick={handleImport}
-              disabled={!selectedPortfolio || !selectedAccount}
+              disabled={!previews.every((_, idx) => portfolioPerFile[idx]) || !selectedAccount}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
               Import starten

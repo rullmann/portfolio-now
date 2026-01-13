@@ -31,6 +31,11 @@ import type {
   IndicatorConfig,
   LineData as IndicatorLineData,
   HistogramData as IndicatorHistogramData,
+  StochasticResult,
+  ADXResult,
+  IchimokuResult,
+  PivotPointsResult,
+  FibonacciResult,
 } from '../../lib/indicators';
 import type { ChartAnnotationWithId } from '../../lib/types';
 import {
@@ -40,6 +45,12 @@ import {
   calculateMACD,
   calculateBollinger,
   calculateATR,
+  calculateStochastic,
+  calculateOBV,
+  calculateADX,
+  calculateIchimoku,
+  calculatePivotPoints,
+  calculateFibonacci,
 } from '../../lib/indicators';
 
 // ============================================================================
@@ -168,7 +179,38 @@ export function TradingViewChart({
             );
             break;
           case 'atr':
-            result[indicator.id] = calculateATR(data, indicator.params.period);
+            result[indicator.id] = calculateATR(data, indicator.params.period as number);
+            break;
+          case 'stochastic':
+            result[indicator.id] = calculateStochastic(
+              data,
+              indicator.params.kPeriod as number,
+              indicator.params.kSlowPeriod as number,
+              indicator.params.dPeriod as number
+            );
+            break;
+          case 'obv':
+            result[indicator.id] = calculateOBV(data);
+            break;
+          case 'adx':
+            result[indicator.id] = calculateADX(data, indicator.params.period as number);
+            break;
+          case 'ichimoku':
+            result[indicator.id] = calculateIchimoku(
+              data,
+              indicator.params.tenkan as number,
+              indicator.params.kijun as number,
+              indicator.params.senkouB as number
+            );
+            break;
+          case 'pivot':
+            result[indicator.id] = calculatePivotPoints(
+              data,
+              indicator.pivotType || 'standard'
+            );
+            break;
+          case 'fibonacci':
+            result[indicator.id] = calculateFibonacci(data, indicator.params.lookback as number);
             break;
         }
       } catch (e) {
@@ -361,6 +403,214 @@ export function TradingViewChart({
 
           chart.priceScale('atr').applyOptions({
             scaleMargins: { top: 0.9, bottom: 0.02 },
+          });
+        }
+
+        // Stochastic Oscillator
+        if (indicator.type === 'stochastic') {
+          const stoch = indData as StochasticResult;
+
+          const kSeries = chart.addSeries(LineSeries, {
+            color: '#2196f3',
+            lineWidth: 2,
+            priceScaleId: 'stochastic',
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          kSeries.setData(convertToLineData(stoch.k));
+
+          const dSeries = chart.addSeries(LineSeries, {
+            color: '#ff9800',
+            lineWidth: 1,
+            priceScaleId: 'stochastic',
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          dSeries.setData(convertToLineData(stoch.d));
+
+          chart.priceScale('stochastic').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0.02 },
+          });
+
+          // Overbought/Oversold lines
+          kSeries.createPriceLine({ price: 80, color: '#ef5350', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false });
+          kSeries.createPriceLine({ price: 20, color: '#26a69a', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false });
+        }
+
+        // OBV (On-Balance Volume)
+        if (indicator.type === 'obv') {
+          const obvSeries = chart.addSeries(LineSeries, {
+            color: '#9c27b0',
+            lineWidth: 2,
+            priceScaleId: 'obv',
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          obvSeries.setData(convertToLineData(indData as IndicatorLineData[]));
+
+          chart.priceScale('obv').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0.02 },
+          });
+        }
+
+        // ADX with +DI/-DI
+        if (indicator.type === 'adx') {
+          const adxData = indData as ADXResult;
+
+          const adxSeries = chart.addSeries(LineSeries, {
+            color: '#ffffff',
+            lineWidth: 2,
+            priceScaleId: 'adx',
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          adxSeries.setData(convertToLineData(adxData.adx));
+
+          const diPlusSeries = chart.addSeries(LineSeries, {
+            color: '#26a69a',
+            lineWidth: 1,
+            priceScaleId: 'adx',
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          diPlusSeries.setData(convertToLineData(adxData.diPlus));
+
+          const diMinusSeries = chart.addSeries(LineSeries, {
+            color: '#ef5350',
+            lineWidth: 1,
+            priceScaleId: 'adx',
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          diMinusSeries.setData(convertToLineData(adxData.diMinus));
+
+          chart.priceScale('adx').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0.02 },
+          });
+
+          // Trend strength threshold line
+          adxSeries.createPriceLine({ price: 25, color: '#ffeb3b', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false });
+        }
+
+        // Ichimoku Cloud
+        if (indicator.type === 'ichimoku') {
+          const ichi = indData as IchimokuResult;
+          const baseColor = indicator.color || '#00bcd4';
+
+          // Tenkan-sen (Conversion Line)
+          const tenkanSeries = chart.addSeries(LineSeries, {
+            color: '#2196f3',
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          tenkanSeries.setData(convertToLineData(ichi.tenkan));
+
+          // Kijun-sen (Base Line)
+          const kijunSeries = chart.addSeries(LineSeries, {
+            color: '#ef5350',
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          kijunSeries.setData(convertToLineData(ichi.kijun));
+
+          // Senkou Span A (cloud upper)
+          const senkouASeries = chart.addSeries(LineSeries, {
+            color: 'rgba(38, 166, 154, 0.8)',
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          senkouASeries.setData(convertToLineData(ichi.senkouA));
+
+          // Senkou Span B (cloud lower)
+          const senkouBSeries = chart.addSeries(LineSeries, {
+            color: 'rgba(239, 83, 80, 0.8)',
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          senkouBSeries.setData(convertToLineData(ichi.senkouB));
+
+          // Chikou Span (Lagging)
+          const chikouSeries = chart.addSeries(LineSeries, {
+            color: baseColor,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          chikouSeries.setData(convertToLineData(ichi.chikou));
+        }
+
+        // Pivot Points
+        if (indicator.type === 'pivot') {
+          const pivots = indData as PivotPointsResult;
+
+          // Pivot line (main)
+          const pivotSeries = chart.addSeries(LineSeries, {
+            color: '#ffeb3b',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          pivotSeries.setData(convertToLineData(pivots.pivot));
+
+          // Resistance lines (R1, R2, R3)
+          const r1Series = chart.addSeries(LineSeries, {
+            color: 'rgba(239, 83, 80, 0.8)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          r1Series.setData(convertToLineData(pivots.r1));
+
+          const r2Series = chart.addSeries(LineSeries, {
+            color: 'rgba(239, 83, 80, 0.6)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          r2Series.setData(convertToLineData(pivots.r2));
+
+          // Support lines (S1, S2, S3)
+          const s1Series = chart.addSeries(LineSeries, {
+            color: 'rgba(38, 166, 154, 0.8)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          s1Series.setData(convertToLineData(pivots.s1));
+
+          const s2Series = chart.addSeries(LineSeries, {
+            color: 'rgba(38, 166, 154, 0.6)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          s2Series.setData(convertToLineData(pivots.s2));
+        }
+
+        // Fibonacci Retracements
+        if (indicator.type === 'fibonacci') {
+          const fib = indData as FibonacciResult;
+
+          // Draw horizontal lines for each level
+          fib.levels.forEach((level, idx) => {
+            const colors = ['#ef5350', '#ff9800', '#ffeb3b', '#4caf50', '#2196f3', '#9c27b0', '#26a69a'];
+            candlestickSeries.createPriceLine({
+              price: level.price,
+              color: colors[idx % colors.length],
+              lineWidth: 1,
+              lineStyle: idx === 0 || idx === fib.levels.length - 1 ? LineStyle.Solid : LineStyle.Dashed,
+              axisLabelVisible: true,
+              title: level.label,
+            });
           });
         }
       } catch (e) {

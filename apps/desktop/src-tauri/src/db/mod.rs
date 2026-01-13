@@ -749,6 +749,91 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Created pp_chart_annotation table");
     }
 
+    // Migration: Create pp_price_alert table for price alerts
+    if !table_exists(conn, "pp_price_alert") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_price_alert (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                security_id INTEGER NOT NULL,
+                alert_type TEXT NOT NULL CHECK(alert_type IN (
+                    'price_above', 'price_below', 'price_crosses',
+                    'rsi_above', 'rsi_below',
+                    'volume_spike', 'divergence',
+                    'pattern_detected', 'support_break', 'resistance_break'
+                )),
+                target_value REAL NOT NULL,
+                target_value_2 REAL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_triggered INTEGER NOT NULL DEFAULT 0,
+                trigger_count INTEGER NOT NULL DEFAULT 0,
+                last_triggered_at TEXT,
+                last_triggered_price REAL,
+                note TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_price_alert_security ON pp_price_alert(security_id);
+            CREATE INDEX idx_pp_price_alert_active ON pp_price_alert(is_active);
+            CREATE INDEX idx_pp_price_alert_security_active ON pp_price_alert(security_id, is_active);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_price_alert table");
+    }
+
+    // Migration: Create pp_pattern_history table for tracking pattern success rates
+    if !table_exists(conn, "pp_pattern_history") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                security_id INTEGER NOT NULL,
+                pattern_type TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                price_at_detection REAL NOT NULL,
+                predicted_direction TEXT NOT NULL CHECK(predicted_direction IN ('bullish', 'bearish', 'neutral')),
+                actual_outcome TEXT CHECK(actual_outcome IN ('success', 'failure', 'pending')),
+                price_after_5d REAL,
+                price_after_10d REAL,
+                price_change_5d_percent REAL,
+                price_change_10d_percent REAL,
+                evaluated_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_pattern_history_security ON pp_pattern_history(security_id);
+            CREATE INDEX idx_pp_pattern_history_pattern ON pp_pattern_history(pattern_type);
+            CREATE INDEX idx_pp_pattern_history_outcome ON pp_pattern_history(actual_outcome);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_pattern_history table");
+    }
+
+    // Migration: Create pp_chart_drawing table for user-drawn chart elements
+    if !table_exists(conn, "pp_chart_drawing") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chart_drawing (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                security_id INTEGER NOT NULL,
+                drawing_type TEXT NOT NULL CHECK(drawing_type IN ('trendline', 'horizontal', 'fibonacci', 'rectangle', 'text')),
+                points_json TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '#2563eb',
+                line_width INTEGER NOT NULL DEFAULT 2,
+                fib_levels_json TEXT,
+                is_visible INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_chart_drawing_security ON pp_chart_drawing(security_id);
+            CREATE INDEX idx_pp_chart_drawing_visible ON pp_chart_drawing(security_id, is_visible);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chart_drawing table");
+    }
+
     Ok(())
 }
 

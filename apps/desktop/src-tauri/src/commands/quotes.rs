@@ -1239,6 +1239,304 @@ fn save_heuristic_split_to_db(
     Ok(())
 }
 
+// ============================================================================
+// Provider Status
+// ============================================================================
+
+/// Status of quote providers for the portfolio
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStatus {
+    /// Total securities count
+    pub total_securities: usize,
+    /// Securities with working providers (free or API key configured)
+    pub configured_count: usize,
+    /// Securities missing API keys
+    pub missing_api_key_count: usize,
+    /// Securities with manual/no provider
+    pub manual_count: usize,
+    /// List of providers that need API keys but don't have them
+    pub missing_providers: Vec<ProviderInfo>,
+    /// Securities grouped by provider
+    pub by_provider: Vec<ProviderSecurityCount>,
+    /// Securities that cannot sync (missing API key or no provider)
+    pub cannot_sync: Vec<SecurityProviderInfo>,
+    /// Quote sync status for today
+    pub quote_status: QuoteSyncStatus,
+}
+
+/// Status of quote synchronization for held securities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSyncStatus {
+    /// Total held securities (with positions > 0)
+    pub held_count: usize,
+    /// Securities with quotes from today
+    pub synced_today_count: usize,
+    /// Securities with outdated or no quotes
+    pub outdated_count: usize,
+    /// Today's date (for reference)
+    pub today: String,
+    /// Securities with outdated quotes (name, last quote date)
+    pub outdated_securities: Vec<OutdatedQuoteInfo>,
+}
+
+/// Info about a security with outdated or missing quote
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutdatedQuoteInfo {
+    pub id: i64,
+    pub name: String,
+    pub ticker: Option<String>,
+    pub last_quote_date: Option<String>,
+    pub days_old: Option<i64>,
+}
+
+/// Info about a provider that needs an API key
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInfo {
+    pub name: String,
+    pub securities_count: usize,
+    pub requires_api_key: bool,
+    pub has_api_key: bool,
+}
+
+/// Count of securities per provider
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSecurityCount {
+    pub provider: String,
+    pub count: usize,
+    pub can_sync: bool,
+}
+
+/// Security that cannot sync prices
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityProviderInfo {
+    pub id: i64,
+    pub name: String,
+    pub provider: String,
+    pub reason: String,
+}
+
+/// Get status of all quote providers
+#[command]
+pub fn get_provider_status(api_keys: Option<ApiKeys>) -> Result<ProviderStatus, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let keys = api_keys.unwrap_or_default();
+
+    // Get all securities with their providers
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.name,
+                COALESCE(NULLIF(s.latest_feed, ''), NULLIF(s.feed, ''), 'YAHOO') as provider,
+                s.ticker, s.isin
+         FROM pp_security s
+         WHERE s.is_retired = 0"
+    ).map_err(|e| e.to_string())?;
+
+    let securities: Vec<(i64, String, String, Option<String>, Option<String>)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let total_securities = securities.len();
+    let mut configured_count = 0;
+    let mut missing_api_key_count = 0;
+    let mut manual_count = 0;
+    let mut cannot_sync: Vec<SecurityProviderInfo> = Vec::new();
+    let mut provider_counts: std::collections::HashMap<String, (usize, bool)> = std::collections::HashMap::new();
+
+    // Check which providers need API keys
+    let providers_needing_keys = ["FINNHUB", "ALPHA-VANTAGE", "ALPHA_VANTAGE", "TWELVE-DATA", "TWELVE_DATA"];
+
+    for (id, name, provider, ticker, isin) in &securities {
+        let provider_upper = provider.to_uppercase();
+        let has_symbol = ticker.is_some() || isin.is_some();
+
+        // Check if provider needs API key
+        let needs_key = providers_needing_keys.iter().any(|p| provider_upper.contains(p));
+        let has_key = if provider_upper.contains("FINNHUB") {
+            keys.finnhub.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else if provider_upper.contains("ALPHA") {
+            keys.alpha_vantage.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else if provider_upper.contains("TWELVE") {
+            keys.twelve_data.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else {
+            true // Free providers don't need keys
+        };
+
+        let is_manual = provider_upper == "MANUAL" || provider_upper.is_empty();
+        let can_sync = !is_manual && has_symbol && (!needs_key || has_key);
+
+        // Update provider counts
+        let entry = provider_counts.entry(provider.clone()).or_insert((0, can_sync));
+        entry.0 += 1;
+
+        if is_manual {
+            manual_count += 1;
+        } else if needs_key && !has_key {
+            missing_api_key_count += 1;
+            cannot_sync.push(SecurityProviderInfo {
+                id: *id,
+                name: name.clone(),
+                provider: provider.clone(),
+                reason: format!("{} benötigt API-Key", provider),
+            });
+        } else if !has_symbol {
+            cannot_sync.push(SecurityProviderInfo {
+                id: *id,
+                name: name.clone(),
+                provider: provider.clone(),
+                reason: "Kein Ticker oder ISIN".to_string(),
+            });
+        } else {
+            configured_count += 1;
+        }
+    }
+
+    // Build provider info list
+    let mut missing_providers: Vec<ProviderInfo> = Vec::new();
+    let mut by_provider: Vec<ProviderSecurityCount> = Vec::new();
+
+    for (provider, (count, can_sync)) in &provider_counts {
+        let provider_upper = provider.to_uppercase();
+        let needs_key = providers_needing_keys.iter().any(|p| provider_upper.contains(p));
+        let has_key = if provider_upper.contains("FINNHUB") {
+            keys.finnhub.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else if provider_upper.contains("ALPHA") {
+            keys.alpha_vantage.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else if provider_upper.contains("TWELVE") {
+            keys.twelve_data.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        } else {
+            true
+        };
+
+        by_provider.push(ProviderSecurityCount {
+            provider: provider.clone(),
+            count: *count,
+            can_sync: *can_sync,
+        });
+
+        if needs_key && !has_key {
+            missing_providers.push(ProviderInfo {
+                name: provider.clone(),
+                securities_count: *count,
+                requires_api_key: true,
+                has_api_key: false,
+            });
+        }
+    }
+
+    // Sort by count descending
+    by_provider.sort_by(|a, b| b.count.cmp(&a.count));
+
+    // Query quote sync status for held securities
+    let quote_status = get_quote_sync_status(conn)?;
+
+    Ok(ProviderStatus {
+        total_securities,
+        configured_count,
+        missing_api_key_count,
+        manual_count,
+        missing_providers,
+        by_provider,
+        cannot_sync,
+        quote_status,
+    })
+}
+
+/// Get quote sync status for held securities
+fn get_quote_sync_status(conn: &rusqlite::Connection) -> Result<QuoteSyncStatus, String> {
+    let today = chrono::Utc::now().date_naive();
+    let today_str = today.to_string();
+
+    // Query all held securities with their latest quote dates
+    let sql = r#"
+        SELECT
+            s.id,
+            s.name,
+            s.ticker,
+            lp.date as last_quote_date,
+            julianday(?) - julianday(lp.date) as days_old
+        FROM pp_security s
+        LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+        WHERE s.is_retired = 0
+          AND (
+              SELECT COALESCE(SUM(CASE
+                  WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                  WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                  ELSE 0
+              END), 0)
+              FROM pp_txn t
+              WHERE t.security_id = s.id AND t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+          ) > 0
+        ORDER BY days_old DESC NULLS FIRST
+    "#;
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([&today_str], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<f64>>(4)?,
+        ))
+    }).map_err(|e| e.to_string())?;
+
+    let mut held_count = 0;
+    let mut synced_today_count = 0;
+    let mut outdated_securities: Vec<OutdatedQuoteInfo> = Vec::new();
+
+    for row in rows {
+        let (id, name, ticker, last_quote_date, days_old_f) = row.map_err(|e| e.to_string())?;
+        held_count += 1;
+
+        let days_old = days_old_f.map(|d| d.round() as i64);
+
+        // Check if synced today (days_old == 0 or quote date == today)
+        let is_today = match &last_quote_date {
+            Some(date) => date == &today_str,
+            None => false,
+        };
+
+        if is_today || days_old == Some(0) {
+            synced_today_count += 1;
+        } else {
+            outdated_securities.push(OutdatedQuoteInfo {
+                id,
+                name,
+                ticker,
+                last_quote_date,
+                days_old,
+            });
+        }
+    }
+
+    let outdated_count = outdated_securities.len();
+
+    Ok(QuoteSyncStatus {
+        held_count,
+        synced_today_count,
+        outdated_count,
+        today: today_str,
+        outdated_securities,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

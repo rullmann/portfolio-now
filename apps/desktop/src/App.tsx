@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import './index.css';
 
@@ -58,6 +59,7 @@ import {
   InvestmentPlansView,
   RebalancingView,
   ChartsView,
+  ScreenerView,
   BenchmarkView,
   ReportsView,
   SettingsView,
@@ -190,6 +192,21 @@ function App() {
     loadDbData();
   }, [loadDbData]);
 
+  // Listen for data_changed events from backend
+  useEffect(() => {
+    const unlisten = listen<{ entity: string; action: string }>('data_changed', (event) => {
+      console.log('Data changed event received:', event.payload);
+      // Invalidate all TanStack Query caches
+      invalidateAllQueries();
+      // Reload local state data
+      loadDbData();
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [loadDbData]);
+
   // Set up global error handler
   useEffect(() => {
     setGlobalErrorHandler((error) => {
@@ -293,6 +310,8 @@ function App() {
         return <RebalancingView />;
       case 'charts':
         return <ChartsView />;
+      case 'screener':
+        return <ScreenerView />;
       case 'benchmark':
         return <BenchmarkView />;
       case 'reports':

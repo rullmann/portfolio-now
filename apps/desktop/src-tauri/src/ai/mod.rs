@@ -192,6 +192,136 @@ pub struct ChartContext {
     pub indicators: Vec<String>,
 }
 
+// ============================================================================
+// Enhanced Chart Analysis Types
+// ============================================================================
+
+/// A single indicator reading with current value and signal
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndicatorValue {
+    pub name: String,                    // e.g., "RSI"
+    pub params: String,                  // e.g., "14"
+    pub current_value: f64,              // e.g., 72.5
+    pub previous_value: Option<f64>,     // For trend detection
+    pub signal: Option<String>,          // "overbought", "oversold", "bullish_crossover", etc.
+}
+
+/// OHLC candlestick data for a single period
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandleData {
+    pub date: String,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: Option<i64>,
+}
+
+/// Volume analysis context
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeAnalysis {
+    pub current_volume: i64,
+    pub avg_volume_20d: f64,
+    pub volume_ratio: f64,               // current / avg
+    pub volume_trend: String,            // "increasing", "decreasing", "stable"
+}
+
+/// Enhanced chart context with indicator values, OHLC data, and volume analysis
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhancedChartContext {
+    // Basic info
+    pub security_name: String,
+    pub ticker: Option<String>,
+    pub currency: String,
+    pub current_price: f64,
+    pub timeframe: String,
+
+    // Enhanced indicators with actual values
+    pub indicator_values: Vec<IndicatorValue>,
+
+    // OHLC data (last N candles)
+    pub candles: Option<Vec<CandleData>>,
+
+    // Volume analysis
+    pub volume_analysis: Option<VolumeAnalysis>,
+
+    // Price statistics
+    pub price_change_percent: Option<f64>,
+    pub high_52_week: Option<f64>,
+    pub low_52_week: Option<f64>,
+    pub distance_from_high_percent: Option<f64>,
+
+    // Web context (news, earnings, analyst ratings)
+    // When true, AI should search for recent news and incorporate into analysis
+    #[serde(default)]
+    pub include_web_context: bool,
+}
+
+/// AI-suggested price alert
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertSuggestion {
+    pub price: f64,
+    pub condition: String,               // "above", "below", "crosses_up", "crosses_down"
+    pub reason: String,
+    pub priority: String,                // "high", "medium", "low"
+}
+
+/// Risk/Reward analysis from AI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RiskRewardAnalysis {
+    #[serde(default)]
+    pub entry_price: Option<f64>,
+    #[serde(default)]
+    pub stop_loss: Option<f64>,
+    #[serde(default)]
+    pub take_profit: Option<f64>,
+    #[serde(default)]
+    pub risk_reward_ratio: Option<f64>,
+    #[serde(default)]
+    pub rationale: Option<String>,
+}
+
+/// Request for enhanced chart analysis
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhancedChartAnalysisRequest {
+    pub image_base64: String,
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub context: EnhancedChartContext,
+}
+
+/// Extended annotation response with alerts and risk/reward
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedAnnotationAnalysisJson {
+    pub analysis: String,
+    pub trend: TrendInfo,
+    pub annotations: Vec<ChartAnnotation>,
+    pub alerts: Vec<AlertSuggestion>,
+    pub risk_reward: Option<RiskRewardAnalysis>,
+}
+
+/// Response from enhanced AI analysis with annotations
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhancedAnnotationAnalysisResponse {
+    pub analysis: String,
+    pub trend: TrendInfo,
+    pub annotations: Vec<ChartAnnotation>,
+    pub alerts: Vec<AlertSuggestion>,
+    pub risk_reward: Option<RiskRewardAnalysis>,
+    pub provider: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+}
+
 /// Response from AI analysis
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -328,6 +458,14 @@ pub struct HoldingSummary {
     pub weight_percent: f64,
     pub gain_loss_percent: Option<f64>,
     pub currency: String,
+    /// Average cost per share (Einstandskurs)
+    pub avg_cost_per_share: Option<f64>,
+    /// First purchase date
+    pub first_buy_date: Option<String>,
+    /// Total fees paid for this position
+    pub total_fees: f64,
+    /// Total taxes paid for this position
+    pub total_taxes: f64,
 }
 
 /// Recent transaction for context
@@ -428,6 +566,113 @@ pub struct PortfolioInsightsContext {
 
     // User profile
     pub user_name: Option<String>,
+
+    // Quote provider status (for AI to know about sync issues)
+    pub provider_status: Option<QuoteProviderStatusSummary>,
+
+    // Fees & Taxes
+    pub fees_and_taxes: FeesAndTaxesSummary,
+
+    // Investment summary
+    pub investment_summary: InvestmentSummary,
+
+    // Taxonomy/Sector allocation
+    pub sector_allocation: Vec<SectorAllocation>,
+
+    // Portfolio historical extremes
+    pub portfolio_extremes: Option<PortfolioExtremes>,
+}
+
+/// Summary of fees and taxes paid
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeesAndTaxesSummary {
+    pub total_fees: f64,
+    pub total_taxes: f64,
+    pub fees_this_year: f64,
+    pub taxes_this_year: f64,
+    pub by_year: Vec<YearlyFeesAndTaxes>,
+}
+
+/// Fees and taxes for a specific year
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YearlyFeesAndTaxes {
+    pub year: i32,
+    pub fees: f64,
+    pub taxes: f64,
+}
+
+/// Investment summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestmentSummary {
+    /// Total amount invested (sum of all buys)
+    pub total_invested: f64,
+    /// Total amount withdrawn (sum of all sells)
+    pub total_withdrawn: f64,
+    /// Net invested (invested - withdrawn)
+    pub net_invested: f64,
+    /// Total deposits to accounts
+    pub total_deposits: f64,
+    /// Total removals from accounts
+    pub total_removals: f64,
+    /// First investment date
+    pub first_investment_date: Option<String>,
+}
+
+/// Sector/Taxonomy allocation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectorAllocation {
+    pub taxonomy_name: String,
+    pub allocations: Vec<(String, f64)>, // (category name, percentage)
+}
+
+/// Portfolio historical extremes (high/low)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioExtremes {
+    pub all_time_high: f64,
+    pub all_time_high_date: String,
+    pub all_time_low: f64,
+    pub all_time_low_date: String,
+    pub year_high: f64,
+    pub year_high_date: String,
+    pub year_low: f64,
+    pub year_low_date: String,
+}
+
+/// Summary of quote provider status for AI context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteProviderStatusSummary {
+    /// Securities that can sync prices
+    pub can_sync_count: usize,
+    /// Securities that cannot sync (missing API key or no provider)
+    pub cannot_sync_count: usize,
+    /// List of providers that need API keys but don't have them configured
+    pub missing_api_keys: Vec<String>,
+    /// Securities that cannot sync with reasons
+    pub issues: Vec<String>,
+    /// Quote sync status
+    pub quote_sync: QuoteSyncInfo,
+}
+
+/// Info about quote synchronization status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSyncInfo {
+    /// Total held securities
+    pub held_count: usize,
+    /// Securities with quotes from today
+    pub synced_today_count: usize,
+    /// Securities with outdated or no quotes
+    pub outdated_count: usize,
+    /// Today's date
+    pub today: String,
+    /// Securities with outdated quotes (name, days old)
+    pub outdated: Vec<String>,
 }
 
 /// Response from portfolio insights AI analysis
@@ -626,6 +871,203 @@ pub fn parse_annotation_response(raw: &str) -> Result<AnnotationAnalysisJson> {
         .map_err(|e| anyhow!("Failed to parse AI JSON response: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
 }
 
+/// Build enhanced annotation prompt with indicator values, OHLC data, volume analysis,
+/// and requests for alerts and risk/reward analysis.
+pub fn build_enhanced_annotation_prompt(ctx: &EnhancedChartContext) -> String {
+    // Format indicator values with signals
+    let indicators_str = if ctx.indicator_values.is_empty() {
+        "Keine aktiven Indikatoren".to_string()
+    } else {
+        ctx.indicator_values
+            .iter()
+            .map(|i| {
+                let signal_str = i.signal.as_ref()
+                    .map(|s| format!(" [{}]", s))
+                    .unwrap_or_default();
+                let prev_str = i.previous_value
+                    .map(|p| format!(" (vorher: {:.2})", p))
+                    .unwrap_or_default();
+                format!("- {}({}): {:.2}{}{}", i.name, i.params, i.current_value, signal_str, prev_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Format volume analysis
+    let volume_str = ctx.volume_analysis.as_ref()
+        .map(|v| format!(
+            "Aktuelles Volumen: {} | 20-Tage-Ø: {:.0} | Ratio: {:.2}x | Trend: {}",
+            v.current_volume, v.avg_volume_20d, v.volume_ratio, v.volume_trend
+        ))
+        .unwrap_or_else(|| "Keine Volumendaten verfügbar".to_string());
+
+    // Format price statistics
+    let price_stats = format!(
+        "Aktueller Kurs: {:.2} {} | Veränderung: {:+.2}%",
+        ctx.current_price,
+        ctx.currency,
+        ctx.price_change_percent.unwrap_or(0.0)
+    );
+
+    let high_low_str = match (ctx.high_52_week, ctx.low_52_week) {
+        (Some(high), Some(low)) => {
+            let dist = ctx.distance_from_high_percent.unwrap_or(0.0);
+            format!("52W-Hoch: {:.2} | 52W-Tief: {:.2} | Abstand vom Hoch: {:.1}%", high, low, dist)
+        }
+        _ => String::new(),
+    };
+
+    // Format candles summary
+    let candles_summary = ctx.candles.as_ref()
+        .map(|candles| {
+            if candles.is_empty() {
+                return "Keine Kerzendaten".to_string();
+            }
+            let last_10: Vec<_> = candles.iter().rev().take(10).collect();
+            let bullish_count = last_10.iter().filter(|c| c.close > c.open).count();
+            let bearish_count = last_10.len() - bullish_count;
+            let avg_range: f64 = if !last_10.is_empty() {
+                last_10.iter()
+                    .map(|c| if c.close > 0.0 { (c.high - c.low) / c.close * 100.0 } else { 0.0 })
+                    .sum::<f64>() / last_10.len() as f64
+            } else {
+                0.0
+            };
+            format!(
+                "Letzte 10 Kerzen: {} bullish, {} bearish | Ø-Range: {:.2}%",
+                bullish_count, bearish_count, avg_range
+            )
+        })
+        .unwrap_or_else(|| "Keine Kerzendaten".to_string());
+
+    // Format last 5 candles as table for precise data
+    let candles_table = ctx.candles.as_ref()
+        .map(|candles| {
+            let last_5: Vec<_> = candles.iter().rev().take(5).rev().collect();
+            if last_5.is_empty() {
+                return String::new();
+            }
+            let rows: Vec<String> = last_5.iter()
+                .map(|c| {
+                    let vol_str = c.volume.map(|v| format!("{}", v)).unwrap_or_else(|| "-".to_string());
+                    format!("{}: O={:.2} H={:.2} L={:.2} C={:.2} V={}", c.date, c.open, c.high, c.low, c.close, vol_str)
+                })
+                .collect();
+            format!("\n**Letzte 5 Kerzen (OHLCV):**\n{}", rows.join("\n"))
+        })
+        .unwrap_or_default();
+
+    // Build web context instructions if enabled
+    let web_context_str = if ctx.include_web_context {
+        format!(
+            r##"
+
+=== WEB-RECHERCHE (AKTIV) ===
+Recherchiere im Web nach aktuellen Informationen zu {} und integriere sie in deine Analyse:
+1. **Aktuelle Nachrichten**: Suche nach relevanten News der letzten 7 Tage
+2. **Earnings-Termine**: Prüfe bevorstehende oder kürzliche Quartalsberichte
+3. **Analysteneinschätzungen**: Aktuelle Ratings und Kursziele
+4. **Sektor-Entwicklung**: Relevante Branchennews
+
+Füge einen "news_summary" Abschnitt zur Analyse hinzu mit den wichtigsten Erkenntnissen."##,
+            ctx.security_name
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"Du bist ein erfahrener technischer Analyst. Analysiere den Chart und gib strukturierte Annotations zurück.{}
+
+**Wertpapier:** {} ({})
+**Zeitraum:** {}
+{}
+{}
+
+**TECHNISCHE INDIKATOREN (BERECHNETE WERTE):**
+{}
+
+**VOLUMEN-ANALYSE:**
+{}
+
+**KERZEN-STATISTIK:**
+{}{}
+
+WICHTIG: Die Indikatorwerte oben sind BERECHNET - nutze sie für präzise Analyse!
+- RSI > 70 = überkauft, RSI < 30 = überverkauft
+- MACD Histogramm > 0 = bullisches Momentum
+- Volumen-Ratio > 1.5 = erhöhtes Interesse, < 0.5 = geringes Interesse
+
+Antworte AUSSCHLIESSLICH mit validem JSON (keine Markdown-Formatierung, kein Text davor oder danach):
+{{
+  "analysis": "2-3 Sätze Gesamteinschätzung mit Bezug auf die konkreten Indikatorwerte",
+  "trend": {{
+    "direction": "bullish" | "bearish" | "neutral",
+    "strength": "strong" | "moderate" | "weak"
+  }},
+  "annotations": [
+    {{
+      "type": "support" | "resistance" | "pattern" | "signal" | "target" | "stoploss",
+      "price": 123.45,
+      "time": "2024-01-15" | null,
+      "time_end": null,
+      "title": "Kurzer Titel",
+      "description": "Ausführliche Erklärung",
+      "confidence": 0.85,
+      "signal": "bullish" | "bearish" | "neutral" | null
+    }}
+  ],
+  "alerts": [
+    {{
+      "price": 150.00,
+      "condition": "above" | "below" | "crosses_up" | "crosses_down",
+      "reason": "Wichtiger Widerstand - Ausbruch wäre bullisch",
+      "priority": "high" | "medium" | "low"
+    }}
+  ],
+  "risk_reward": {{
+    "entry_price": 145.50,
+    "stop_loss": 140.00,
+    "take_profit": 160.00,
+    "risk_reward_ratio": 2.64,
+    "rationale": "Entry bei Support, SL unter letztem Tief, TP bei Widerstand"
+  }} | null
+}}
+
+WICHTIGE REGELN:
+1. Identifiziere 2-5 relevante Annotations basierend auf Chart UND Indikatoren
+2. Schlage 1-3 sinnvolle Preisalarme vor (z.B. bei Support/Resistance-Durchbruch)
+3. Berechne ein Risk/Reward-Setup wenn ein klares Setup erkennbar ist (sonst null)
+4. Preise müssen exakt aus dem Chart abgelesen werden
+5. Confidence: 0.5 (unsicher) bis 1.0 (sehr sicher)
+6. Gib NUR valides JSON zurück"##,
+        web_context_str,
+        ctx.security_name,
+        ctx.ticker.as_deref().unwrap_or("N/A"),
+        ctx.timeframe,
+        price_stats,
+        high_low_str,
+        indicators_str,
+        volume_str,
+        candles_summary,
+        candles_table
+    )
+}
+
+/// Parse enhanced JSON response from AI into structured annotations with alerts and risk/reward.
+pub fn parse_enhanced_annotation_response(raw: &str) -> Result<EnhancedAnnotationAnalysisJson> {
+    // Remove markdown code blocks if present
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    serde_json::from_str(cleaned)
+        .map_err(|e| anyhow!("Failed to parse enhanced AI JSON response: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
+}
+
 /// Calculate exponential backoff delay
 pub fn calculate_backoff_delay(attempt: u32) -> std::time::Duration {
     let delay_ms = RETRY_BASE_DELAY_MS * 2u64.pow(attempt);
@@ -760,7 +1202,7 @@ WICHTIG:
 
 /// Build the system prompt for portfolio chat
 pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
-    // Format ALL holdings for context
+    // Format ALL holdings for context (with extended details)
     let holdings_str = ctx
         .holdings
         .iter()
@@ -771,10 +1213,12 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
                 .unwrap_or_else(|| "-".to_string());
             let ticker_str = h.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
             let price_str = h.current_price.map(|p| format!(", Kurs: {:.2}", p)).unwrap_or_default();
+            let avg_cost_str = h.avg_cost_per_share.map(|a| format!(", Ø-Kurs: {:.2}", a)).unwrap_or_default();
+            let first_buy_str = h.first_buy_date.as_ref().map(|d| format!(", Erstkauf: {}", d)).unwrap_or_default();
             format!(
-                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}",
+                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}{}{}",
                 h.name, ticker_str, h.shares, h.current_value, ctx.base_currency,
-                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str
+                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str, avg_cost_str, first_buy_str
             )
         })
         .collect::<Vec<_>>()
@@ -883,10 +1327,120 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
         .collect::<Vec<_>>()
         .join(", ");
 
+    // Fees and taxes summary
+    let fees_taxes_str = {
+        let ft = &ctx.fees_and_taxes;
+        let current_year = chrono::Utc::now().format("%Y").to_string();
+        format!(
+            "Gesamt Gebühren: {:.2} {}, Gesamt Steuern: {:.2} {}\n{} Gebühren: {:.2} {}, {} Steuern: {:.2} {}",
+            ft.total_fees, ctx.base_currency, ft.total_taxes, ctx.base_currency,
+            current_year, ft.fees_this_year, ctx.base_currency, current_year, ft.taxes_this_year, ctx.base_currency
+        )
+    };
+
+    // Investment summary
+    let investment_str = {
+        let inv = &ctx.investment_summary;
+        let first_date_str = inv.first_investment_date.as_ref()
+            .map(|d| format!(", Erste Investition: {}", d))
+            .unwrap_or_default();
+        format!(
+            "Investiert: {:.2} {}, Entnommen: {:.2} {}, Netto: {:.2} {}, Einzahlungen: {:.2} {}, Auszahlungen: {:.2} {}{}",
+            inv.total_invested, ctx.base_currency,
+            inv.total_withdrawn, ctx.base_currency,
+            inv.net_invested, ctx.base_currency,
+            inv.total_deposits, ctx.base_currency,
+            inv.total_removals, ctx.base_currency,
+            first_date_str
+        )
+    };
+
+    // Sector/Taxonomy allocation
+    let sector_str = if ctx.sector_allocation.is_empty() {
+        "Keine Taxonomie-Zuordnungen".to_string()
+    } else {
+        ctx.sector_allocation
+            .iter()
+            .map(|s| {
+                let allocs = s.allocations
+                    .iter()
+                    .take(5)
+                    .map(|(name, pct)| format!("{}: {:.1}%", name, pct))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}: {}", s.taxonomy_name, allocs)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Portfolio extremes
+    let extremes_str = match &ctx.portfolio_extremes {
+        Some(e) => format!(
+            "Allzeithoch: {:.2} {} ({}), Allzeittief: {:.2} {} ({})\nJahreshoch {}: {:.2} {} ({}), Jahrestief: {:.2} {} ({})",
+            e.all_time_high, ctx.base_currency, e.all_time_high_date,
+            e.all_time_low, ctx.base_currency, e.all_time_low_date,
+            chrono::Utc::now().format("%Y"),
+            e.year_high, ctx.base_currency, e.year_high_date,
+            e.year_low, ctx.base_currency, e.year_low_date
+        ),
+        None => "Keine historischen Daten verfügbar".to_string(),
+    };
+
     // User greeting
     let user_greeting = match &ctx.user_name {
         Some(name) if !name.is_empty() => format!("Der Benutzer heißt {}. Sprich ihn gelegentlich mit Namen an, aber nicht in jeder Nachricht.", name),
         _ => "Der Benutzer hat keinen Namen angegeben.".to_string(),
+    };
+
+    // Provider status and quote sync info
+    let provider_status_str = match &ctx.provider_status {
+        Some(status) => {
+            let mut sections: Vec<String> = Vec::new();
+
+            // Quote sync status (always show)
+            let sync = &status.quote_sync;
+            let sync_str = if sync.synced_today_count == sync.held_count {
+                format!(
+                    "=== KURS-STATUS ({}) ===\nAlle {} Wertpapiere haben aktuelle Kurse von heute.",
+                    sync.today, sync.held_count
+                )
+            } else {
+                let outdated_str = sync.outdated.iter().take(10).cloned().collect::<Vec<_>>().join("\n- ");
+                let more_str = if sync.outdated.len() > 10 {
+                    format!("\n- ... und {} weitere", sync.outdated.len() - 10)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "=== KURS-STATUS ({}) ===\n{} von {} Wertpapieren haben KEINEN aktuellen Kurs von heute:\n- {}{}",
+                    sync.today, sync.outdated_count, sync.held_count, outdated_str, more_str
+                )
+            };
+            sections.push(sync_str);
+
+            // Provider issues (only if any)
+            if status.cannot_sync_count > 0 {
+                let issues_str = status.issues.iter().take(5).cloned().collect::<Vec<_>>().join("\n- ");
+                let more_str = if status.issues.len() > 5 {
+                    format!("\n- ... und {} weitere", status.issues.len() - 5)
+                } else {
+                    String::new()
+                };
+                let api_key_hint = if !status.missing_api_keys.is_empty() {
+                    format!("\nFehlende API-Keys: {}", status.missing_api_keys.join(", "))
+                } else {
+                    String::new()
+                };
+                sections.push(format!(
+                    "=== PROVIDER-PROBLEME ===\n{} Wertpapiere können generell keine Kurse abrufen:\n- {}{}{}",
+                    status.cannot_sync_count, issues_str, more_str, api_key_hint
+                ));
+            }
+
+            format!("\n\n{}", sections.join("\n\n"))
+        }
+        None => String::new(),
     };
 
     format!(
@@ -904,7 +1458,7 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 - Dividendenrendite: {:.2}%
 - Währungsverteilung: {}
 - Portfolio-Alter: {} Tage
-- Stand: {}
+- Stand: {}{}
 
 === ALLE HOLDINGS ({} Positionen) ===
 {}
@@ -922,6 +1476,18 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 {}
 
 === JAHRESÜBERSICHT ===
+{}
+
+=== GEBÜHREN & STEUERN ===
+{}
+
+=== INVESTITIONSÜBERSICHT ===
+{}
+
+=== SEKTOR-ALLOKATION ===
+{}
+
+=== PORTFOLIO EXTREMWERTE ===
 {}
 
 === DEINE FÄHIGKEITEN ===
@@ -1010,6 +1576,7 @@ WICHTIG: Gib den Befehl am ANFANG deiner Antwort aus!
         currency_str,
         ctx.portfolio_age_days,
         ctx.analysis_date,
+        provider_status_str,
         ctx.holdings.len(),
         holdings_str,
         txn_str,
@@ -1017,6 +1584,10 @@ WICHTIG: Gib den Befehl am ANFANG deiner Antwort aus!
         watchlist_str,
         sold_positions_str,
         yearly_str,
+        fees_taxes_str,
+        investment_str,
+        sector_str,
+        extremes_str,
     )
 }
 

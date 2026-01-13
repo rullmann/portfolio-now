@@ -14,6 +14,7 @@ export { RebalancingView } from './Rebalancing';
 export { ChartsView } from './Charts';
 export { BenchmarkView } from './Benchmark';
 export { ReportsView } from './Reports';
+export { ScreenerView } from './Screener';
 export { SettingsView } from './Settings';
 
 // Export types

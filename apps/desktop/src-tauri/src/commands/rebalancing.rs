@@ -4,9 +4,10 @@
 
 use crate::ai::{claude, gemini, openai, perplexity, AiError, get_model_upgrade};
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pp::common::{prices, shares};
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle};
 
 /// Target allocation for rebalancing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +321,7 @@ pub fn preview_rebalance(
 /// Execute rebalancing by creating transactions
 #[command]
 pub fn execute_rebalance(
+    app: AppHandle,
     portfolio_id: i64,
     account_id: i64,
     actions: Vec<RebalanceAction>,
@@ -349,6 +351,8 @@ pub fn execute_rebalance(
     let mut transactions_created = 0;
     let mut total_bought = 0.0;
     let mut total_sold = 0.0;
+    // Track affected securities for FIFO rebuild
+    let mut affected_security_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     for action in &actions {
         let amount_cents = (action.amount * 100.0) as i64;
@@ -402,6 +406,7 @@ pub fn execute_rebalance(
         ).map_err(|e| e.to_string())?;
 
         transactions_created += 1;
+        affected_security_ids.insert(action.security_id);
 
         if action.action == "BUY" {
             total_bought += action.amount;
@@ -409,6 +414,22 @@ pub fn execute_rebalance(
             total_sold += action.amount;
         }
     }
+
+    // Rebuild FIFO lots for all affected securities
+    for sec_id in &affected_security_ids {
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, *sec_id) {
+            log::warn!("Rebalancing: Failed to rebuild FIFO lots for security {}: {}", sec_id, e);
+        }
+    }
+    if !affected_security_ids.is_empty() {
+        log::info!("Rebalancing: Rebuilt FIFO lots for {} securities", affected_security_ids.len());
+    }
+
+    // Emit data changed event for frontend refresh
+    emit_data_changed(
+        &app,
+        DataChangedPayload::rebalance(affected_security_ids.into_iter().collect()),
+    );
 
     Ok(RebalanceResult {
         success: true,

@@ -5,9 +5,9 @@ use app_lib::{db, fifo};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
-    // macOS: ~/Library/Application Support/com.portfolio-performance.desktop/portfolio.db
+    // macOS: ~/Library/Application Support/com.portfolio-now.app/portfolio.db
     let db_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-        .join("Library/Application Support/com.portfolio-performance.desktop/portfolio.db");
+        .join("Library/Application Support/com.portfolio-now.app/portfolio.db");
 
     println!("Opening database: {:?}", db_path);
     db::init_database(&db_path)?;

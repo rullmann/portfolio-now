@@ -1,6 +1,6 @@
 # PDF Import Feature - Status & Dokumentation
 
-**Datum:** 2026-01-10
+**Datum:** 2026-01-13
 **Status:** Funktioniert im Dev-Modus, Release-Modus noch nicht getestet
 
 ---
@@ -18,6 +18,7 @@ PDF-Import-Funktion zum Einlesen von Bank-Abrechnungen (Kauf/Verkauf, Dividenden
 | Comdirect | `comdirect.rs` | Comdirect Bank AG |
 | Trade Republic | `trade_republic.rs` | Trade Republic Bank GmbH |
 | Scalable Capital | `scalable.rs` | Scalable Capital GmbH (via Baader Bank) |
+| Consorsbank | `consorsbank.rs` | Consorsbank (BNP Paribas) |
 
 ---
 
@@ -167,6 +168,65 @@ Transaktionen Toolbar:
 4. User wählt Portfolio und Konto
 5. Optional: Fehlende Wertpapiere automatisch anlegen
 6. Import durchführen
+
+---
+
+## Duplikat-Erkennung (2026-01-13)
+
+### Problem
+PDF-Importe konnten doppelt importiert werden, wenn beim ersten Import `deliveryMode` aktiv war:
+- PDF enthält "Buy" Transaktion
+- Mit `deliveryMode` wird daraus "TransferIn" → DB speichert "DELIVERY_INBOUND"
+- Beim erneuten Import ohne `deliveryMode` sucht das System nach "BUY" → kein Match
+
+### Lösung
+Die Duplikat-Erkennung prüft nun mehrere Typ-Varianten:
+
+| PDF-Typ | Prüft auf DB-Typen |
+|---------|-------------------|
+| Buy | `BUY`, `DELIVERY_INBOUND` |
+| Sell | `SELL`, `DELIVERY_OUTBOUND` |
+| TransferIn | `DELIVERY_INBOUND` |
+| TransferOut | `DELIVERY_OUTBOUND` |
+| Dividend | `DIVIDENDS` |
+| Interest | `INTEREST` |
+
+### Implementierung
+```rust
+fn get_duplicate_check_types(txn_type: ParsedTransactionType) -> Vec<&'static str> {
+    match txn_type {
+        ParsedTransactionType::Buy => vec!["BUY", "DELIVERY_INBOUND"],
+        ParsedTransactionType::Sell => vec!["SELL", "DELIVERY_OUTBOUND"],
+        ParsedTransactionType::Dividend => vec!["DIVIDENDS"],
+        ParsedTransactionType::Interest => vec!["INTEREST"],
+        // ...
+    }
+}
+```
+
+SQL verwendet jetzt `txn_type IN (?, ?)` statt `txn_type = ?`.
+
+---
+
+## UI Optimierung (2026-01-13)
+
+### Änderungen
+Das PDF Import Modal wurde für Platzeffizienz optimiert:
+
+| Element | Vorher | Nachher |
+|---------|--------|---------|
+| Summary | Mehrzeilig mit Box | Einzeilige Textzeile |
+| Dateien-Liste | Box mit Header | Kompakte Inline-Zeilen |
+| Konto/Optionen | Große Checkboxen | Kleine Inline-Elemente |
+| Warnungen | Collapsible Box | Kompakte Inline-Anzeige |
+| Duplikate | Collapsible mit Liste | Inline-Text mit Separator |
+| Neue Wertpapiere | Collapsible | Inline-Text |
+| Abstände | `space-y-4` | `space-y-2` |
+
+### Ergebnis
+- Modal-Höhe reduziert um ca. 40%
+- Alle wichtigen Informationen sofort sichtbar
+- Kein Scrolling mehr nötig auf Standard-Displays
 
 ---
 

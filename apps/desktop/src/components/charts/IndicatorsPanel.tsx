@@ -31,7 +31,7 @@ interface IndicatorInfo {
   name: string;
   description: string;
   icon: typeof TrendingUp;
-  category: 'overlay' | 'oscillator' | 'volatility';
+  category: 'overlay' | 'oscillator' | 'volatility' | 'trend';
   params: { key: string; label: string; min: number; max: number; step: number }[];
 }
 
@@ -40,6 +40,7 @@ interface IndicatorInfo {
 // ============================================================================
 
 const indicatorInfo: IndicatorInfo[] = [
+  // Overlay Indicators
   {
     type: 'sma',
     name: 'SMA',
@@ -57,16 +58,34 @@ const indicatorInfo: IndicatorInfo[] = [
     params: [{ key: 'period', label: 'Periode', min: 2, max: 200, step: 1 }],
   },
   {
-    type: 'bollinger',
-    name: 'Bollinger Bands',
-    description: 'Volatilitätsbänder',
-    icon: Activity,
-    category: 'volatility',
+    type: 'ichimoku',
+    name: 'Ichimoku',
+    description: 'Ichimoku Cloud (Trend + Support/Resistance)',
+    icon: TrendingUp,
+    category: 'overlay',
     params: [
-      { key: 'period', label: 'Periode', min: 2, max: 50, step: 1 },
-      { key: 'stdDev', label: 'Std. Abw.', min: 1, max: 4, step: 0.5 },
+      { key: 'tenkan', label: 'Tenkan', min: 5, max: 20, step: 1 },
+      { key: 'kijun', label: 'Kijun', min: 10, max: 50, step: 1 },
+      { key: 'senkouB', label: 'Senkou B', min: 20, max: 100, step: 1 },
     ],
   },
+  {
+    type: 'pivot',
+    name: 'Pivot Points',
+    description: 'Tägliche Support/Resistance Levels',
+    icon: TrendingUp,
+    category: 'overlay',
+    params: [],  // pivotType is handled via dropdown
+  },
+  {
+    type: 'fibonacci',
+    name: 'Fibonacci',
+    description: 'Auto-Fibonacci Retracements',
+    icon: TrendingUp,
+    category: 'overlay',
+    params: [{ key: 'lookback', label: 'Lookback', min: 20, max: 200, step: 10 }],
+  },
+  // Oscillator Indicators
   {
     type: 'rsi',
     name: 'RSI',
@@ -85,6 +104,47 @@ const indicatorInfo: IndicatorInfo[] = [
       { key: 'fast', label: 'Schnell', min: 2, max: 50, step: 1 },
       { key: 'slow', label: 'Langsam', min: 2, max: 100, step: 1 },
       { key: 'signal', label: 'Signal', min: 2, max: 50, step: 1 },
+    ],
+  },
+  {
+    type: 'stochastic',
+    name: 'Stochastic',
+    description: 'Stochastischer Oszillator (%K/%D)',
+    icon: BarChart3,
+    category: 'oscillator',
+    params: [
+      { key: 'kPeriod', label: '%K Periode', min: 5, max: 30, step: 1 },
+      { key: 'kSlowPeriod', label: '%K Glättung', min: 1, max: 10, step: 1 },
+      { key: 'dPeriod', label: '%D Periode', min: 1, max: 10, step: 1 },
+    ],
+  },
+  {
+    type: 'obv',
+    name: 'OBV',
+    description: 'On-Balance Volume',
+    icon: BarChart3,
+    category: 'oscillator',
+    params: [],
+  },
+  // Trend Indicators
+  {
+    type: 'adx',
+    name: 'ADX',
+    description: 'Average Directional Index (Trendstärke)',
+    icon: Activity,
+    category: 'trend',
+    params: [{ key: 'period', label: 'Periode', min: 7, max: 30, step: 1 }],
+  },
+  // Volatility Indicators
+  {
+    type: 'bollinger',
+    name: 'Bollinger Bands',
+    description: 'Volatilitätsbänder',
+    icon: Activity,
+    category: 'volatility',
+    params: [
+      { key: 'period', label: 'Periode', min: 2, max: 50, step: 1 },
+      { key: 'stdDev', label: 'Std. Abw.', min: 1, max: 4, step: 0.5 },
     ],
   },
   {
@@ -165,6 +225,7 @@ export function IndicatorsPanel({ indicators, onIndicatorsChange }: IndicatorsPa
   const groupedIndicators = {
     overlay: indicatorInfo.filter(i => i.category === 'overlay'),
     oscillator: indicatorInfo.filter(i => i.category === 'oscillator'),
+    trend: indicatorInfo.filter(i => i.category === 'trend'),
     volatility: indicatorInfo.filter(i => i.category === 'volatility'),
   };
 
@@ -313,6 +374,27 @@ export function IndicatorsPanel({ indicators, onIndicatorsChange }: IndicatorsPa
               </div>
               <div className="flex flex-wrap gap-1">
                 {groupedIndicators.oscillator.map(info => (
+                  <button
+                    key={info.type}
+                    onClick={() => handleAddIndicator(info.type)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs bg-muted hover:bg-muted/80 rounded transition-colors"
+                    title={info.description}
+                    disabled={indicators.some(i => i.type === info.type && i.enabled)}
+                  >
+                    <Plus size={12} />
+                    {info.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Trend Indicators */}
+            <div className="mb-3">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">
+                Trend
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {groupedIndicators.trend.map(info => (
                   <button
                     key={info.type}
                     onClick={() => handleAddIndicator(info.type)}

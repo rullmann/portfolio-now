@@ -233,6 +233,65 @@ export async function getAvailableQuoteProviders(apiKeys?: ApiKeys): Promise<Quo
 }
 
 /**
+ * Provider status information
+ */
+export interface ProviderInfo {
+  name: string;
+  securitiesCount: number;
+  requiresApiKey: boolean;
+  hasApiKey: boolean;
+}
+
+export interface ProviderSecurityCount {
+  provider: string;
+  count: number;
+  canSync: boolean;
+}
+
+export interface SecurityProviderInfo {
+  id: number;
+  name: string;
+  provider: string;
+  reason: string;
+}
+
+export interface OutdatedQuoteInfo {
+  id: number;
+  name: string;
+  ticker: string | null;
+  lastQuoteDate: string | null;
+  daysOld: number | null;
+}
+
+export interface QuoteSyncStatus {
+  heldCount: number;
+  syncedTodayCount: number;
+  outdatedCount: number;
+  today: string;
+  outdatedSecurities: OutdatedQuoteInfo[];
+}
+
+export interface ProviderStatus {
+  totalSecurities: number;
+  configuredCount: number;
+  missingApiKeyCount: number;
+  manualCount: number;
+  missingProviders: ProviderInfo[];
+  byProvider: ProviderSecurityCount[];
+  cannotSync: SecurityProviderInfo[];
+  quoteStatus: QuoteSyncStatus;
+}
+
+/**
+ * Get status of quote providers for all securities.
+ * Shows which providers are configured, which need API keys, and which securities cannot sync.
+ * @param apiKeys Optional API keys to check availability
+ */
+export async function getProviderStatus(apiKeys?: ApiKeys): Promise<ProviderStatus> {
+  return invoke<ProviderStatus>('get_provider_status', { apiKeys });
+}
+
+/**
  * Fetch historical prices from the provider and save to database.
  * @param securityId ID of the security
  * @param from Start date (YYYY-MM-DD)
@@ -1705,4 +1764,72 @@ export async function toggleAnnotationVisibility(annotationId: number): Promise<
  */
 export async function clearAiAnnotations(securityId: number): Promise<number> {
   return invoke<number>('clear_ai_annotations', { securityId });
+}
+
+// ============================================================================
+// Price Alerts
+// ============================================================================
+
+import type {
+  PriceAlert,
+  CreateAlertRequest,
+  UpdateAlertRequest,
+  TriggeredAlert,
+} from './types';
+
+/**
+ * Get all price alerts, optionally filtered by security.
+ */
+export async function getPriceAlerts(securityId?: number): Promise<PriceAlert[]> {
+  return invoke<PriceAlert[]>('get_price_alerts', { securityId });
+}
+
+/**
+ * Get only active alerts.
+ */
+export async function getActiveAlerts(): Promise<PriceAlert[]> {
+  return invoke<PriceAlert[]>('get_active_alerts');
+}
+
+/**
+ * Create a new price alert.
+ */
+export async function createPriceAlert(request: CreateAlertRequest): Promise<PriceAlert> {
+  return invoke<PriceAlert>('create_price_alert', { request });
+}
+
+/**
+ * Update an existing price alert.
+ */
+export async function updatePriceAlert(request: UpdateAlertRequest): Promise<PriceAlert> {
+  return invoke<PriceAlert>('update_price_alert', { request });
+}
+
+/**
+ * Delete a price alert.
+ */
+export async function deletePriceAlert(id: number): Promise<void> {
+  return invoke('delete_price_alert', { id });
+}
+
+/**
+ * Toggle alert active status.
+ */
+export async function togglePriceAlert(id: number): Promise<PriceAlert> {
+  return invoke<PriceAlert>('toggle_price_alert', { id });
+}
+
+/**
+ * Check all active alerts against current prices.
+ * Returns list of triggered alerts.
+ */
+export async function checkPriceAlerts(): Promise<TriggeredAlert[]> {
+  return invoke<TriggeredAlert[]>('check_price_alerts');
+}
+
+/**
+ * Reset triggered status for an alert (to allow re-triggering).
+ */
+export async function resetAlertTrigger(id: number): Promise<void> {
+  return invoke('reset_alert_trigger', { id });
 }

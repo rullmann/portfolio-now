@@ -2,9 +2,25 @@
 
 use crate::db;
 use crate::performance;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use serde::Serialize;
 use tauri::command;
+
+/// Parse date string flexibly - handles both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
+fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
+}
 
 /// Performance result for frontend
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +74,7 @@ pub fn calculate_performance(
 
     // Parse dates or use defaults
     let start = start_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .and_then(|s| parse_date_flexible(&s))
         .unwrap_or_else(|| {
             // Default to first transaction date
             get_first_transaction_date(conn, portfolio_id)
@@ -66,29 +82,49 @@ pub fn calculate_performance(
         });
 
     let end = end_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .and_then(|s| parse_date_flexible(&s))
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
 
     // Calculate TTWROR
     let ttwror_result = performance::calculate_ttwror(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
+    log::info!(
+        "Performance TTWROR: {} periods, total_return={:.2}%, days={}",
+        ttwror_result.periods.len(),
+        ttwror_result.total_return * 100.0,
+        ttwror_result.days
+    );
+
     // Get cash flows for IRR calculation
     let cash_flows = get_cash_flows_for_irr(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
+    log::info!("Performance IRR: {} cash flows found", cash_flows.len());
+    for cf in &cash_flows {
+        log::debug!("  Cash flow: {} on {}", cf.amount, cf.date);
+    }
+
     // Get current portfolio value
     let current_value = get_current_value(conn, portfolio_id).map_err(|e| e.to_string())?;
+
+    log::info!("Performance: current_value={:.2}", current_value);
 
     // Calculate IRR
     let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
         .map_err(|e| e.to_string())?;
 
-    // Calculate total invested (negative cash flows = money invested)
-    let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount < 0.0).map(|cf| -cf.amount).sum();
+    log::info!(
+        "Performance IRR result: irr={:.2}%, converged={}",
+        irr_result.irr * 100.0,
+        irr_result.converged
+    );
 
-    // Calculate total withdrawn (positive cash flows = money withdrawn)
-    let total_withdrawn: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
+    // Calculate total invested (positive cash flows = money invested)
+    let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
+
+    // Calculate total withdrawn (negative cash flows = money withdrawn)
+    let total_withdrawn: f64 = cash_flows.iter().filter(|cf| cf.amount < 0.0).map(|cf| -cf.amount).sum();
 
     // Absolute gain = current value + withdrawals - investments
     let absolute_gain = current_value + total_withdrawn - total_invested;
@@ -120,14 +156,14 @@ pub fn get_period_returns(
         .ok_or_else(|| "Database not initialized".to_string())?;
 
     let start = start_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .and_then(|s| parse_date_flexible(&s))
         .unwrap_or_else(|| {
             get_first_transaction_date(conn, portfolio_id)
                 .unwrap_or_else(|| NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
         });
 
     let end = end_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .and_then(|s| parse_date_flexible(&s))
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
 
     let ttwror_result = performance::calculate_ttwror(conn, portfolio_id, start, end)
@@ -166,7 +202,7 @@ fn get_first_transaction_date(
         conn.query_row(sql, [], |row| row.get(0)).ok()
     };
 
-    result.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+    result.and_then(|s| parse_date_flexible(&s))
 }
 
 /// Helper: Get cash flows for IRR
@@ -215,12 +251,13 @@ fn get_cash_flows_for_irr(
 
     for row in rows.flatten() {
         let (date_str, txn_type, amount) = row;
-        if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+        if let Some(date) = parse_date_flexible(&date_str) {
             let amount_f = amount as f64 / 100.0;
-            // For IRR: inflows are negative (money going INTO portfolio), outflows are positive
+            // For IRR convention: positive = money invested, negative = money withdrawn
+            // calculate_irr() will invert these internally for NPV calculation
             let cf_amount = match txn_type.as_str() {
-                "BUY" | "DELIVERY_INBOUND" => -amount_f,  // Money invested (negative cash flow)
-                "SELL" | "DELIVERY_OUTBOUND" => amount_f, // Money withdrawn (positive cash flow)
+                "BUY" | "DELIVERY_INBOUND" => amount_f,   // Money invested (positive)
+                "SELL" | "DELIVERY_OUTBOUND" => -amount_f, // Money withdrawn (negative)
                 _ => 0.0,
             };
             if cf_amount != 0.0 {
@@ -256,11 +293,12 @@ fn get_cash_flows_for_irr(
 
         for row in rows.flatten() {
             let (date_str, txn_type, amount) = row;
-            if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+            if let Some(date) = parse_date_flexible(&date_str) {
                 let amount_f = amount as f64 / 100.0;
+                // Same convention: positive = invested, negative = withdrawn
                 let cf_amount = match txn_type.as_str() {
-                    "DEPOSIT" => -amount_f,  // Money invested
-                    "REMOVAL" => amount_f,   // Money withdrawn
+                    "DEPOSIT" => amount_f,   // Money invested (positive)
+                    "REMOVAL" => -amount_f,  // Money withdrawn (negative)
                     _ => 0.0,
                 };
                 if cf_amount != 0.0 {

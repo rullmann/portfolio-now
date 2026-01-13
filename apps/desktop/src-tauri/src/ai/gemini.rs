@@ -2,8 +2,10 @@
 
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
+    build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
     build_portfolio_insights_prompt, build_chat_system_prompt,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
+    EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
     get_fallback, parse_retry_delay, calculate_backoff_delay, normalize_markdown_response,
     REQUEST_TIMEOUT_SECS, MAX_RETRIES,
@@ -490,6 +492,110 @@ pub async fn analyze_with_annotations(
             analysis: parsed.analysis,
             trend: parsed.trend,
             annotations: parsed.annotations,
+            provider: "Gemini".to_string(),
+            model: model.to_string(),
+            tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+        });
+    }
+
+    Err(last_error)
+}
+
+/// Analyze a chart image using Google Gemini with enhanced context and return structured annotations
+/// with alerts and risk/reward analysis
+pub async fn analyze_enhanced(
+    image_base64: &str,
+    model: &str,
+    api_key: &str,
+    context: &EnhancedChartContext,
+) -> Result<EnhancedAnnotationAnalysisResponse, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("Gemini", model, &e.to_string()))?;
+
+    let request_body = GenerateContentRequest {
+        contents: vec![Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text {
+                    text: build_enhanced_annotation_prompt(context),
+                },
+                Part::InlineData {
+                    inline_data: InlineData {
+                        mime_type: "image/jpeg".to_string(),
+                        data: image_base64.to_string(),
+                    },
+                },
+            ],
+        }],
+    };
+
+    let api_endpoint = api_url(model, api_key);
+    let mut last_error = AiError::other("Gemini", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        let response = match client.post(&api_endpoint).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("Gemini", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("Gemini", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("Gemini", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: GenerateContentResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("Gemini", model, &format!("JSON parse error: {}", e)))?;
+
+        let raw_response = data
+            .candidates
+            .and_then(|c| c.into_iter().next())
+            .and_then(|c| c.content)
+            .and_then(|c| c.parts)
+            .and_then(|p| p.into_iter().next())
+            .and_then(|p| p.text)
+            .unwrap_or_default();
+
+        let parsed = parse_enhanced_annotation_response(&raw_response)
+            .map_err(|e| AiError::other("Gemini", model, &e.to_string()))?;
+
+        return Ok(EnhancedAnnotationAnalysisResponse {
+            analysis: parsed.analysis,
+            trend: parsed.trend,
+            annotations: parsed.annotations,
+            alerts: parsed.alerts,
+            risk_reward: parsed.risk_reward,
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),

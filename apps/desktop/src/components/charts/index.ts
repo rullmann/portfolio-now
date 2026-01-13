@@ -7,3 +7,7 @@ export { TradingViewPortfolioChart } from './TradingViewPortfolioChart';
 export { TradingViewBenchmarkChart } from './TradingViewBenchmarkChart';
 export { TradingViewChart } from './TradingViewChart';
 export { IndicatorsPanel } from './IndicatorsPanel';
+export { ComparisonChart, COMPARISON_COLORS } from './ComparisonChart';
+export type { ComparisonSecurity } from './ComparisonChart';
+export { DrawingTools } from './DrawingTools';
+export type { Drawing, DrawingTool } from './DrawingTools';

@@ -1,12 +1,13 @@
 //! CSV import and export commands for Tauri
 
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pp::common::{prices, shares};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use tauri::command;
+use tauri::{command, AppHandle};
 
 // ============================================================================
 // Export Types
@@ -470,6 +471,7 @@ pub fn preview_csv(path: String) -> Result<CsvPreview, String> {
 /// Import transactions from CSV
 #[command]
 pub fn import_transactions_csv(
+    app: AppHandle,
     path: String,
     mapping: CsvColumnMapping,
     portfolio_id: i64,
@@ -493,6 +495,8 @@ pub fn import_transactions_csv(
     let mut imported = 0;
     let mut skipped = 0;
     let mut errors: Vec<String> = Vec::new();
+    // Track affected securities for FIFO rebuild
+    let mut affected_security_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     // Get latest import_id
     let import_id: i64 = conn
@@ -623,6 +627,11 @@ pub fn import_transactions_csv(
                     );
                 }
 
+                // Track security for FIFO rebuild
+                if let Some(sec_id) = security_id {
+                    affected_security_ids.insert(sec_id);
+                }
+
                 imported += 1;
             }
             Err(e) => {
@@ -631,6 +640,22 @@ pub fn import_transactions_csv(
             }
         }
     }
+
+    // Rebuild FIFO lots for all affected securities
+    for sec_id in &affected_security_ids {
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, *sec_id) {
+            log::warn!("CSV Import: Failed to rebuild FIFO lots for security {}: {}", sec_id, e);
+        }
+    }
+    if !affected_security_ids.is_empty() {
+        log::info!("CSV Import: Rebuilt FIFO lots for {} securities", affected_security_ids.len());
+    }
+
+    // Emit data changed event for frontend refresh
+    emit_data_changed(
+        &app,
+        DataChangedPayload::import(affected_security_ids.into_iter().collect()),
+    );
 
     Ok(CsvImportResult {
         rows_imported: imported,

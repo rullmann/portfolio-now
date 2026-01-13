@@ -1,9 +1,10 @@
 //! CRUD commands for managing securities, accounts, portfolios, and transactions.
 
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle};
 use uuid::Uuid;
 
 // =============================================================================
@@ -890,7 +891,10 @@ const AMOUNT_SCALE: f64 = 100.0;
 /// Create a new transaction
 /// For portfolio BUY/SELL, also creates a matching account transaction and cross-entry
 #[command]
-pub fn create_transaction(data: CreateTransactionRequest) -> Result<TransactionResult, String> {
+pub fn create_transaction(
+    app: AppHandle,
+    data: CreateTransactionRequest,
+) -> Result<TransactionResult, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -1069,6 +1073,9 @@ pub fn create_transaction(data: CreateTransactionRequest) -> Result<TransactionR
         }
     }
 
+    // Emit data changed event for frontend refresh
+    emit_data_changed(&app, DataChangedPayload::transaction("created", data.security_id));
+
     Ok(TransactionResult {
         id,
         uuid,
@@ -1088,7 +1095,7 @@ pub fn create_transaction(data: CreateTransactionRequest) -> Result<TransactionR
 /// Delete a transaction
 /// Also deletes linked cross-entry and account transaction if applicable
 #[command]
-pub fn delete_transaction(id: i64) -> Result<(), String> {
+pub fn delete_transaction(app: AppHandle, id: i64) -> Result<(), String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -1155,6 +1162,9 @@ pub fn delete_transaction(id: i64) -> Result<(), String> {
         }
     }
 
+    // Emit data changed event for frontend refresh
+    emit_data_changed(&app, DataChangedPayload::transaction("deleted", security_id));
+
     Ok(())
 }
 
@@ -1179,7 +1189,11 @@ pub struct UpdateTransactionRequest {
 /// Update an existing transaction
 /// Supports updating all fields including owner, type, and security
 #[command]
-pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(), String> {
+pub fn update_transaction(
+    app: AppHandle,
+    id: i64,
+    data: UpdateTransactionRequest,
+) -> Result<(), String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -1407,6 +1421,15 @@ pub fn update_transaction(id: i64, data: UpdateTransactionRequest) -> Result<(),
             log::warn!("Failed to rebuild FIFO lots for new security: {}", e);
         }
     }
+
+    // Emit data changed event for frontend refresh
+    // Include both old and new security if changed
+    let affected_security = if security_changed {
+        new_security_id.or(old_security_id)
+    } else {
+        new_security_id
+    };
+    emit_data_changed(&app, DataChangedPayload::transaction("updated", affected_security));
 
     Ok(())
 }

@@ -23,11 +23,11 @@ interface TransactionData {
   date: string;
   amount: number;
   currency: string;
-  shares: number | null;
-  securityId: number | null;
-  securityName: string | null;
-  securityUuid: string | null;
-  note: string | null;
+  shares?: number;
+  securityId?: number;
+  securityName?: string;
+  securityUuid?: string;
+  note?: string;
   fees: number;
   taxes: number;
   hasForex: boolean;
@@ -288,7 +288,7 @@ export function TransactionsView() {
                             )}
                           </td>
                           <td className="py-2 text-right font-mono">
-                            {tx.shares !== null ? tx.shares.toLocaleString('de-DE', { maximumFractionDigits: 6 }) : '-'}
+                            {tx.shares != null ? tx.shares.toLocaleString('de-DE', { maximumFractionDigits: 6 }) : '-'}
                           </td>
                           <td className={`py-2 text-right font-mono ${isPositive ? 'text-green-600' : isNegative ? 'text-red-600' : ''}`}>
                             {tx.amount.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {tx.currency}

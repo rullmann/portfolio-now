@@ -2,8 +2,10 @@
 
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
+    build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
     build_portfolio_insights_prompt, build_chat_system_prompt,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
+    EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
     get_fallback, parse_retry_delay, calculate_backoff_delay, normalize_markdown_response,
     REQUEST_TIMEOUT_SECS, MAX_RETRIES, MAX_TOKENS, MAX_TOKENS_INSIGHTS, MAX_TOKENS_CHAT,
@@ -532,6 +534,119 @@ pub async fn analyze_with_annotations(
             analysis: parsed.analysis,
             trend: parsed.trend,
             annotations: parsed.annotations,
+            provider: "Claude".to_string(),
+            model: model.to_string(),
+            tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+        });
+    }
+
+    Err(last_error)
+}
+
+/// Analyze a chart image using Claude with enhanced context and return structured annotations
+/// with alerts and risk/reward analysis
+pub async fn analyze_enhanced(
+    image_base64: &str,
+    model: &str,
+    api_key: &str,
+    context: &EnhancedChartContext,
+) -> Result<EnhancedAnnotationAnalysisResponse, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-api-key",
+        HeaderValue::from_str(api_key)
+            .map_err(|_| AiError::invalid_api_key("Claude", model))?,
+    );
+    headers.insert(
+        "anthropic-version",
+        HeaderValue::from_static("2023-06-01"),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("Claude", model, &e.to_string()))?;
+
+    let request_body = MessagesRequest {
+        model: model.to_string(),
+        max_tokens: MAX_TOKENS,
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: "image/jpeg".to_string(),
+                        data: image_base64.to_string(),
+                    },
+                },
+                ContentBlock::Text {
+                    text: build_enhanced_annotation_prompt(context),
+                },
+            ],
+        }],
+    };
+
+    let mut last_error = AiError::other("Claude", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        let response = match client.post(API_URL).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("Claude", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("Claude", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("Claude", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: MessagesResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("Claude", model, &format!("JSON parse error: {}", e)))?;
+
+        let raw_response = data
+            .content
+            .first()
+            .and_then(|c| c.text.clone())
+            .unwrap_or_default();
+
+        // Parse the JSON response into enhanced structured annotations
+        let parsed = parse_enhanced_annotation_response(&raw_response)
+            .map_err(|e| AiError::other("Claude", model, &e.to_string()))?;
+
+        return Ok(EnhancedAnnotationAnalysisResponse {
+            analysis: parsed.analysis,
+            trend: parsed.trend,
+            annotations: parsed.annotations,
+            alerts: parsed.alerts,
+            risk_reward: parsed.risk_reward,
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),

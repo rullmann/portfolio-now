@@ -23,6 +23,7 @@ import {
   Table2,
   CandlestickChart,
   Coins,
+  Search,
 } from 'lucide-react';
 import { useUIStore, navItems, type NavItem } from '../../store';
 
@@ -43,6 +44,7 @@ const iconComponents = {
   Table2,
   CandlestickChart,
   Coins,
+  Search,
 };
 
 function getIcon(iconName: string) {

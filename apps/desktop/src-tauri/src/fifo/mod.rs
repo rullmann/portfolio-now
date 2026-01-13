@@ -144,10 +144,11 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
         match txn.txn_type.as_str() {
             "BUY" | "DELIVERY_INBOUND" => {
                 // Create new lot
-                // PP CostCalculation.java: gross_amount INCLUDES fees and taxes (= Purchase Value)
-                // net_amount EXCLUDES fees and taxes
-                let gross_amount = txn.amount;
-                let net_amount = txn.amount - txn.fees - txn.taxes;
+                // PP Trade.java: gross_amount (entryValue) INCLUDES fees and taxes (= Purchase Value / Einstandswert)
+                // net_amount (entryValueWithoutTaxesAndFees) EXCLUDES fees and taxes
+                // txn.amount is the base transaction amount, fees/taxes are stored in pp_txn_unit
+                let gross_amount = txn.amount + txn.fees + txn.taxes;
+                let net_amount = txn.amount;
 
                 let lot = FifoLot {
                     id: next_lot_id,
@@ -411,8 +412,9 @@ fn create_lot_for_transfer(
     security_id: i64,
     next_lot_id: &mut i64,
 ) {
-    // PP CostCalculation.java: gross_amount INCLUDES fees and taxes (= Purchase Value)
-    // net_amount EXCLUDES fees and taxes
+    // PP Trade.java: gross_amount (entryValue) INCLUDES fees and taxes (= Purchase Value / Einstandswert)
+    // net_amount (entryValueWithoutTaxesAndFees) EXCLUDES fees and taxes
+    // txn.amount is the base transaction amount, fees/taxes are stored in pp_txn_unit
     let lot = FifoLot {
         id: *next_lot_id,
         security_id,
@@ -421,8 +423,8 @@ fn create_lot_for_transfer(
         purchase_date: txn.date.clone(),
         original_shares: txn.shares,
         remaining_shares: txn.shares,
-        gross_amount: txn.amount,
-        net_amount: txn.amount - txn.fees - txn.taxes,
+        gross_amount: txn.amount + txn.fees + txn.taxes,
+        net_amount: txn.amount,
         currency: txn.currency.clone(),
     };
     *next_lot_id += 1;
@@ -469,6 +471,190 @@ pub fn get_fifo_cost_basis(conn: &Connection, security_id: i64) -> Result<(i64, 
     let result: (i64, i64) = stmt.query_row([security_id], |row| {
         Ok((row.get(0)?, row.get(1)?))
     })?;
+
+    Ok(result)
+}
+
+// =============================================================================
+// SINGLE SOURCE OF TRUTH: Cost Basis with Currency Conversion
+// =============================================================================
+// WICHTIG: Diese Funktionen sind die EINZIGE korrekte Quelle für Einstandswerte!
+// Niemals GROUP BY bei FIFO-Lots verwenden - jedes Lot kann eine andere Währung haben!
+// Beispiel: NESTLE hat Lots in CHF UND EUR.
+// =============================================================================
+
+/// SINGLE SOURCE OF TRUTH: Gesamter Einstandswert mit Währungskonvertierung
+///
+/// Konvertiert jedes FIFO-Lot einzeln in die Basiswährung, dann Summe.
+/// NICHT gruppieren! Securities können Lots in verschiedenen Währungen haben.
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `portfolio_id` - Optional: Filter auf ein Portfolio
+/// * `base_currency` - Zielwährung (z.B. "EUR")
+///
+/// # Returns
+/// Gesamter Einstandswert in base_currency
+pub fn get_total_cost_basis_converted(
+    conn: &Connection,
+    portfolio_id: Option<i64>,
+    base_currency: &str,
+) -> Result<f64, String> {
+    let today = chrono::Utc::now().date_naive();
+
+    let portfolio_filter = portfolio_id
+        .map(|id| format!("AND l.portfolio_id = {}", id))
+        .unwrap_or_default();
+
+    // KEIN GROUP BY! Jedes Lot einzeln laden
+    let sql = format!(
+        r#"
+        SELECT l.currency,
+               CASE WHEN l.original_shares > 0 THEN
+                   (l.remaining_shares * l.gross_amount / l.original_shares)
+               ELSE 0 END as cost_basis
+        FROM pp_fifo_lot l
+        WHERE l.remaining_shares > 0 {}
+        "#,
+        portfolio_filter
+    );
+
+    let mut total = 0.0;
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, i64>(1)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows.flatten() {
+        let (lot_currency, cost_cents) = row;
+        let cost = cost_cents as f64 / AMOUNT_SCALE as f64;
+
+        // Jedes Lot einzeln konvertieren
+        let converted = if !lot_currency.is_empty() && lot_currency != base_currency {
+            crate::currency::convert(conn, cost, &lot_currency, base_currency, today)
+                .unwrap_or(cost)
+        } else {
+            cost
+        };
+        total += converted;
+    }
+
+    Ok(total)
+}
+
+/// SINGLE SOURCE OF TRUTH: Einstandswert pro Security mit Währungskonvertierung
+///
+/// Gibt HashMap<identifier, cost_basis_in_base_currency> zurück.
+/// Identifier = ISIN oder UUID falls keine ISIN vorhanden.
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `base_currency` - Zielwährung (z.B. "EUR")
+///
+/// # Returns
+/// HashMap mit identifier -> Einstandswert in base_currency
+pub fn get_cost_basis_by_security_converted(
+    conn: &Connection,
+    base_currency: &str,
+) -> Result<HashMap<String, f64>, String> {
+    let today = chrono::Utc::now().date_naive();
+
+    // KEIN GROUP BY! Jedes Lot einzeln mit Security-Identifier
+    let sql = r#"
+        SELECT COALESCE(s.isin, s.uuid) as identifier,
+               l.currency,
+               CASE WHEN l.original_shares > 0 THEN
+                   (l.remaining_shares * l.gross_amount / l.original_shares)
+               ELSE 0 END as cost_basis
+        FROM pp_fifo_lot l
+        JOIN pp_security s ON l.security_id = s.id
+        WHERE l.remaining_shares > 0
+    "#;
+
+    let mut result: HashMap<String, f64> = HashMap::new();
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows.flatten() {
+        let (identifier, lot_currency, cost_cents) = row;
+        let cost = cost_cents as f64 / AMOUNT_SCALE as f64;
+
+        // Jedes Lot einzeln konvertieren
+        let converted = if !lot_currency.is_empty() && lot_currency != base_currency {
+            crate::currency::convert(conn, cost, &lot_currency, base_currency, today)
+                .unwrap_or(cost)
+        } else {
+            cost
+        };
+
+        *result.entry(identifier).or_insert(0.0) += converted;
+    }
+
+    Ok(result)
+}
+
+/// SINGLE SOURCE OF TRUTH: Einstandswert pro Security-ID mit Währungskonvertierung
+///
+/// Wie get_cost_basis_by_security_converted, aber mit security_id als Key.
+///
+/// # Returns
+/// HashMap mit security_id -> Einstandswert in base_currency
+pub fn get_cost_basis_by_security_id_converted(
+    conn: &Connection,
+    base_currency: &str,
+) -> Result<HashMap<i64, f64>, String> {
+    let today = chrono::Utc::now().date_naive();
+
+    // KEIN GROUP BY! Jedes Lot einzeln
+    let sql = r#"
+        SELECT l.security_id,
+               l.currency,
+               CASE WHEN l.original_shares > 0 THEN
+                   (l.remaining_shares * l.gross_amount / l.original_shares)
+               ELSE 0 END as cost_basis
+        FROM pp_fifo_lot l
+        WHERE l.remaining_shares > 0
+    "#;
+
+    let mut result: HashMap<i64, f64> = HashMap::new();
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows.flatten() {
+        let (security_id, lot_currency, cost_cents) = row;
+        let cost = cost_cents as f64 / AMOUNT_SCALE as f64;
+
+        // Jedes Lot einzeln konvertieren
+        let converted = if !lot_currency.is_empty() && lot_currency != base_currency {
+            crate::currency::convert(conn, cost, &lot_currency, base_currency, today)
+                .unwrap_or(cost)
+        } else {
+            cost
+        };
+
+        *result.entry(security_id).or_insert(0.0) += converted;
+    }
 
     Ok(result)
 }

@@ -174,7 +174,7 @@ describe('PdfImportModal', () => {
 
   describe('File Selection', () => {
     it('should open file dialog when clicking upload area', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -187,7 +187,7 @@ describe('PdfImportModal', () => {
 
       await waitFor(() => {
         expect(open).toHaveBeenCalledWith({
-          multiple: false,
+          multiple: true,
           filters: [{ name: 'PDF', extensions: ['pdf'] }],
         });
       });
@@ -213,7 +213,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should call previewPdfImport after file selection', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -249,7 +249,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should display error when previewPdfImport fails', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('PDF parsing failed'));
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -267,7 +267,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should display error for unsupported bank', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('Could not detect bank from PDF content')
       );
@@ -289,7 +289,7 @@ describe('PdfImportModal', () => {
 
   describe('Preview Step', () => {
     it('should show preview after successful file selection', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -307,7 +307,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should display transaction details in preview', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -334,7 +334,7 @@ describe('PdfImportModal', () => {
         ...mockPreview,
         warnings: ['[Warnung] betrag: Betrag konnte nicht geparst werden (Wert: "abc")'],
       };
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockResolvedValue(previewWithWarnings);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -367,7 +367,7 @@ describe('PdfImportModal', () => {
           },
         ],
       };
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockResolvedValue(previewWithDuplicates);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -391,7 +391,7 @@ describe('PdfImportModal', () => {
           { isin: 'IE00BK5BQT80', wkn: 'A2PKXG', name: 'MSCI World ETF' },
         ],
       };
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockResolvedValue(previewWithNewSecurities);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -411,7 +411,7 @@ describe('PdfImportModal', () => {
 
   describe('Configure Step', () => {
     it('should navigate to configure step when clicking continue', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -434,7 +434,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should show portfolio and account selectors', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -458,7 +458,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should pre-select first portfolio and account', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -485,7 +485,7 @@ describe('PdfImportModal', () => {
 
   describe('Import Execution', () => {
     it('should call importPdfTransactions when clicking import', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -525,7 +525,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should show success message after import', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -558,7 +558,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should call onSuccess callback after successful import', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       const onSuccess = vi.fn();
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} onSuccess={onSuccess} />);
@@ -593,7 +593,7 @@ describe('PdfImportModal', () => {
 
   describe('Error Handling - Import', () => {
     it('should display error when import fails', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (importPdfTransactions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Import failed'));
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -626,7 +626,7 @@ describe('PdfImportModal', () => {
     });
 
     it('should return to configure step on import error', async () => {
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (importPdfTransactions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Import failed'));
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -666,7 +666,7 @@ describe('PdfImportModal', () => {
         success: false,
         errors: ['Transaction 1: Missing security', 'Transaction 2: Invalid date'],
       };
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (importPdfTransactions as ReturnType<typeof vi.fn>).mockResolvedValue(resultWithErrors);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
@@ -738,10 +738,384 @@ describe('PdfImportModal', () => {
     });
   });
 
+  describe('Multi-PDF Import', () => {
+    const mockPreview2 = {
+      bank: 'Trade Republic',
+      transactions: [
+        {
+          date: '2024-02-20',
+          txnType: 'Buy',
+          securityName: 'DAX ETF',
+          isin: 'DE0005933931',
+          wkn: '593393',
+          shares: 2.0,
+          pricePerShare: 150,
+          grossAmount: 300,
+          fees: 1.0,
+          taxes: 0,
+          netAmount: 301.0,
+          currency: 'EUR',
+          note: null,
+          exchangeRate: null,
+          forexCurrency: null,
+        },
+      ],
+      warnings: [],
+      newSecurities: [],
+      matchedSecurities: [],
+      potentialDuplicates: [],
+    };
+
+    const mockPreview3 = {
+      bank: 'DKB',
+      transactions: [
+        {
+          date: '2024-03-10',
+          txnType: 'Buy',
+          securityName: 'S&P 500 ETF',
+          isin: 'IE00B5BMR087',
+          wkn: 'A0YEDG',
+          shares: 1.0,
+          pricePerShare: 450,
+          grossAmount: 450,
+          fees: 0.5,
+          taxes: 0,
+          netAmount: 450.5,
+          currency: 'EUR',
+          note: null,
+          exchangeRate: null,
+          forexCurrency: null,
+        },
+      ],
+      warnings: [],
+      newSecurities: [],
+      matchedSecurities: [],
+      potentialDuplicates: [],
+    };
+
+    it('should handle multiple PDF selection', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        expect(previewPdfImport).toHaveBeenCalledTimes(2);
+        expect(previewPdfImport).toHaveBeenCalledWith('/path/to/test1.pdf');
+        expect(previewPdfImport).toHaveBeenCalledWith('/path/to/test2.pdf');
+      });
+    });
+
+    it('should show combined transactions from multiple PDFs', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        // Should show both transactions
+        expect(screen.getByText('MSCI World ETF')).toBeInTheDocument();
+        expect(screen.getByText('DAX ETF')).toBeInTheDocument();
+        // Should show PDFs count
+        expect(screen.getByText('2')).toBeInTheDocument(); // PDFs count
+      });
+    });
+
+    it('should show source column for multiple PDFs', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        // Source column header should appear for multiple PDFs
+        expect(screen.getByText('Quelle')).toBeInTheDocument();
+      });
+    });
+
+    it('should handle three PDFs sequentially', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+        '/path/to/test3.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2)
+        .mockResolvedValueOnce(mockPreview3);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        expect(previewPdfImport).toHaveBeenCalledTimes(3);
+      }, { timeout: 5000 });
+
+      await waitFor(() => {
+        // All three transactions should be visible
+        expect(screen.getByText('MSCI World ETF')).toBeInTheDocument();
+        expect(screen.getByText('DAX ETF')).toBeInTheDocument();
+        expect(screen.getByText('S&P 500 ETF')).toBeInTheDocument();
+      });
+    });
+
+    it('should continue processing if one PDF fails', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+        '/path/to/test3.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockRejectedValueOnce(new Error('PDF parsing failed'))
+        .mockResolvedValueOnce(mockPreview3);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        expect(previewPdfImport).toHaveBeenCalledTimes(3);
+      }, { timeout: 5000 });
+
+      await waitFor(() => {
+        // Should show successful PDFs
+        expect(screen.getByText('MSCI World ETF')).toBeInTheDocument();
+        expect(screen.getByText('S&P 500 ETF')).toBeInTheDocument();
+        // Failed PDF should not block others
+        expect(screen.queryByText('DAX ETF')).not.toBeInTheDocument();
+      });
+    });
+
+    it('should show error warning when one PDF fails', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockRejectedValueOnce(new Error('Bank not recognized'));
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        // Should show warning about the failed PDF
+        expect(screen.getByText(/Fehler:.*test2.pdf.*Bank not recognized/)).toBeInTheDocument();
+      });
+    });
+
+    it('should fail entirely when all PDFs fail', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Error 1'))
+        .mockRejectedValueOnce(new Error('Error 2'));
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Keine PDFs konnten verarbeitet werden/)).toBeInTheDocument();
+      });
+    });
+
+    it('should combine banks from multiple PDFs', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      await waitFor(() => {
+        // Banks should be combined
+        expect(screen.getByText('Scalable Capital, Trade Republic')).toBeInTheDocument();
+      });
+    });
+
+    it('should import all PDFs when executing import', async () => {
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      // Select files
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      // Wait for preview
+      await waitFor(() => {
+        expect(screen.getByText('MSCI World ETF')).toBeInTheDocument();
+      });
+
+      // Go to configure
+      fireEvent.click(screen.getByText('Weiter zur Konfiguration'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Import starten')).toBeInTheDocument();
+      });
+
+      // Start import
+      fireEvent.click(screen.getByText('Import starten'));
+
+      await waitFor(() => {
+        // Should call importPdfTransactions for each PDF
+        expect(importPdfTransactions).toHaveBeenCalledTimes(2);
+        expect(importPdfTransactions).toHaveBeenCalledWith(
+          '/path/to/test1.pdf',
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Boolean),
+          expect.any(Boolean),
+          expect.anything(),
+          expect.anything()
+        );
+        expect(importPdfTransactions).toHaveBeenCalledWith(
+          '/path/to/test2.pdf',
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Boolean),
+          expect.any(Boolean),
+          expect.anything(),
+          expect.anything()
+        );
+      });
+    });
+
+    it('should show combined import result for multiple PDFs', async () => {
+      const mockResult1 = { ...mockImportResult, transactionsImported: 1 };
+      const mockResult2 = { ...mockImportResult, transactionsImported: 1, bank: 'Trade Republic' };
+
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue([
+        '/path/to/test1.pdf',
+        '/path/to/test2.pdf',
+      ]);
+      (previewPdfImport as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockPreview)
+        .mockResolvedValueOnce(mockPreview2);
+      (importPdfTransactions as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockResult1)
+        .mockResolvedValueOnce(mockResult2);
+
+      render(<PdfImportModal isOpen={true} onClose={() => {}} />);
+
+      // Select files
+      await waitFor(() => {
+        expect(screen.getByText('PDF-Datei auswählen')).toBeInTheDocument();
+      });
+
+      const uploadArea = screen.getByText('PDF-Datei auswählen').parentElement!;
+      fireEvent.click(uploadArea);
+
+      // Wait for preview
+      await waitFor(() => {
+        expect(screen.getByText('MSCI World ETF')).toBeInTheDocument();
+      });
+
+      // Go to configure
+      fireEvent.click(screen.getByText('Weiter zur Konfiguration'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Import starten')).toBeInTheDocument();
+      });
+
+      // Start import
+      fireEvent.click(screen.getByText('Import starten'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Import erfolgreich!')).toBeInTheDocument();
+        // Should show combined count
+        expect(screen.getByText(/2 PDFs verarbeitet/)).toBeInTheDocument();
+        expect(screen.getByText(/2 Transaktionen wurden importiert/)).toBeInTheDocument();
+      });
+    });
+  });
+
   describe('Edge Cases', () => {
     it('should handle empty portfolios list', async () => {
       (getPortfolios as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -769,7 +1143,7 @@ describe('PdfImportModal', () => {
 
     it('should handle empty accounts list', async () => {
       (getAccounts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);
 
@@ -800,7 +1174,7 @@ describe('PdfImportModal', () => {
         ...mockPreview,
         transactions: [],
       };
-      (open as ReturnType<typeof vi.fn>).mockResolvedValue('/path/to/test.pdf');
+      (open as ReturnType<typeof vi.fn>).mockResolvedValue(['/path/to/test.pdf']);
       (previewPdfImport as ReturnType<typeof vi.fn>).mockResolvedValue(emptyPreview);
 
       render(<PdfImportModal isOpen={true} onClose={() => {}} />);

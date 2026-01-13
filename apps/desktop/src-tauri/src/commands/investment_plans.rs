@@ -3,9 +3,10 @@
 //! Manage recurring investment plans for automated purchases.
 
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle};
 
 /// Plan interval
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -413,6 +414,7 @@ pub fn get_investment_plan_executions(plan_id: i64) -> Result<Vec<InvestmentPlan
 /// Execute an investment plan manually
 #[command]
 pub fn execute_investment_plan(
+    app: AppHandle,
     plan_id: i64,
     date: String,
     price: Option<i64>,
@@ -508,6 +510,14 @@ pub fn execute_investment_plan(
     ).map_err(|e| e.to_string())?;
 
     let exec_id = conn.last_insert_rowid();
+
+    // Rebuild FIFO lots for affected security
+    if let Err(e) = crate::fifo::build_fifo_lots(conn, plan.security_id) {
+        log::warn!("Failed to rebuild FIFO lots for security {}: {}", plan.security_id, e);
+    }
+
+    // Emit data changed event for frontend refresh
+    emit_data_changed(&app, DataChangedPayload::investment_plan_executed(plan.security_id));
 
     Ok(InvestmentPlanExecution {
         id: exec_id,

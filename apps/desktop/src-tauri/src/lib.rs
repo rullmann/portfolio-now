@@ -2,6 +2,7 @@ pub mod ai;
 mod commands;
 pub mod currency;
 pub mod db;
+pub mod events;
 pub mod fifo;
 mod models;
 pub mod pdf_import;
@@ -59,6 +60,7 @@ pub fn run() {
             commands::quotes::fetch_historical_exchange_rates,
             commands::quotes::get_available_quote_providers,
             commands::quotes::search_external_securities,
+            commands::quotes::get_provider_status,
             // Corporate Actions (Stock Splits, etc.)
             commands::quotes::detect_security_splits,
             commands::quotes::detect_all_splits,
@@ -218,6 +220,7 @@ pub fn run() {
             // AI Chart Analysis
             commands::ai::analyze_chart_with_ai,
             commands::ai::analyze_chart_with_annotations,
+            commands::ai::analyze_chart_enhanced,
             commands::ai::get_ai_models,
             commands::ai::get_vision_models,
             // AI Portfolio Insights & Chat
@@ -229,6 +232,25 @@ pub fn run() {
             commands::annotations::delete_annotation,
             commands::annotations::toggle_annotation_visibility,
             commands::annotations::clear_ai_annotations,
+            // Price Alerts
+            commands::alerts::get_price_alerts,
+            commands::alerts::get_active_alerts,
+            commands::alerts::create_price_alert,
+            commands::alerts::update_price_alert,
+            commands::alerts::delete_price_alert,
+            commands::alerts::toggle_price_alert,
+            commands::alerts::check_price_alerts,
+            commands::alerts::reset_alert_trigger,
+            // Pattern Tracking
+            commands::patterns::save_pattern_detection,
+            commands::patterns::evaluate_pattern_outcomes,
+            commands::patterns::get_pattern_statistics,
+            commands::patterns::get_pattern_history,
+            // Chart Drawings
+            commands::drawings::save_chart_drawing,
+            commands::drawings::get_chart_drawings,
+            commands::drawings::delete_chart_drawing,
+            commands::drawings::clear_chart_drawings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

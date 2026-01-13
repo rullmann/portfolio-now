@@ -24,14 +24,21 @@ import {
   Plus,
   Maximize2,
   Minimize2,
+  CandlestickChart,
+  GitCompare,
+  Check,
+  Pencil,
 } from 'lucide-react';
 import { TradingViewChart } from '../../components/charts/TradingViewChart';
 import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
 import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
+import { SignalsPanel } from '../../components/charts/SignalsPanel';
+import { AlertsPanel } from '../../components/charts/AlertsPanel';
+import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
 import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
-import { convertToOHLC } from '../../lib/indicators';
+import { convertToOHLC, convertToHeikinAshi } from '../../lib/indicators';
 import { useSettingsStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
 import { getWatchlists, getWatchlistSecurities } from '../../lib/api';
@@ -168,6 +175,18 @@ export function ChartsView() {
 
   // AI Annotations state
   const [chartAnnotations, setChartAnnotations] = useState<ChartAnnotationWithId[]>([]);
+
+  // Heikin-Ashi mode
+  const [useHeikinAshi, setUseHeikinAshi] = useState(false);
+
+  // Comparison mode
+  const [isComparisonMode, setIsComparisonMode] = useState(false);
+  const [comparisonSecurities, setComparisonSecurities] = useState<Set<number>>(new Set());
+  const [comparisonData, setComparisonData] = useState<Map<number, { date: string; close: number }[]>>(new Map());
+
+  // Drawing mode
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
 
   // Refs for AI chart capture (normal and fullscreen)
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -357,11 +376,94 @@ export function ChartsView() {
     loadPriceData();
   }, [loadPriceData]);
 
-  // Convert to OHLC data
+  // Load comparison data when comparison securities change
+  useEffect(() => {
+    if (!isComparisonMode || comparisonSecurities.size === 0) {
+      setComparisonData(new Map());
+      return;
+    }
+
+    const loadComparisonData = async () => {
+      const startDate = new Date();
+      switch (timeRange) {
+        case '1M': startDate.setMonth(startDate.getMonth() - 1); break;
+        case '3M': startDate.setMonth(startDate.getMonth() - 3); break;
+        case '6M': startDate.setMonth(startDate.getMonth() - 6); break;
+        case '1Y': startDate.setFullYear(startDate.getFullYear() - 1); break;
+        case '2Y': startDate.setFullYear(startDate.getFullYear() - 2); break;
+        case '5Y': startDate.setFullYear(startDate.getFullYear() - 5); break;
+        case 'MAX': startDate.setFullYear(2000); break;
+        default: startDate.setFullYear(startDate.getFullYear() - 1);
+      }
+
+      const newData = new Map<number, { date: string; close: number }[]>();
+
+      for (const secId of comparisonSecurities) {
+        try {
+          const data = await invoke<PriceData[]>('get_price_history', {
+            securityId: secId,
+            startDate: startDate.toISOString().split('T')[0],
+            endDate: null,
+          });
+          if (data.length > 0) {
+            newData.set(secId, data.map(d => ({ date: d.date, close: d.value })));
+          }
+        } catch (err) {
+          console.error(`Failed to load comparison data for security ${secId}:`, err);
+        }
+      }
+
+      setComparisonData(newData);
+    };
+
+    loadComparisonData();
+  }, [isComparisonMode, comparisonSecurities, timeRange]);
+
+  // Toggle comparison security selection
+  const toggleComparisonSecurity = (securityId: number) => {
+    setComparisonSecurities(prev => {
+      const next = new Set(prev);
+      if (next.has(securityId)) {
+        next.delete(securityId);
+      } else if (next.size < 8) { // Max 8 securities for comparison
+        next.add(securityId);
+      }
+      return next;
+    });
+  };
+
+  // Prepare comparison chart data
+  const comparisonSecuritiesData = useMemo<ComparisonSecurity[]>(() => {
+    if (!isComparisonMode) return [];
+
+    const result: ComparisonSecurity[] = [];
+    let colorIndex = 0;
+
+    comparisonSecurities.forEach(secId => {
+      const security = securities.find(s => s.id === secId);
+      const data = comparisonData.get(secId);
+
+      if (security && data && data.length > 0) {
+        result.push({
+          id: secId,
+          name: security.name,
+          ticker: security.ticker || undefined,
+          color: COMPARISON_COLORS[colorIndex % COMPARISON_COLORS.length],
+          data,
+        });
+        colorIndex++;
+      }
+    });
+
+    return result;
+  }, [isComparisonMode, comparisonSecurities, comparisonData, securities]);
+
+  // Convert to OHLC data (with optional Heikin-Ashi)
   const ohlcData = useMemo<OHLCData[]>(() => {
     if (priceData.length === 0) return [];
-    return convertToOHLC(priceData, 1.5);
-  }, [priceData]);
+    const data = convertToOHLC(priceData, 1.5);
+    return useHeikinAshi ? convertToHeikinAshi(data) : data;
+  }, [priceData, useHeikinAshi]);
 
   // Handle search modal security added
   const handleSecurityAdded = (securityId: number) => {
@@ -423,6 +525,20 @@ export function ChartsView() {
                 </button>
               ))}
             </div>
+
+            {/* Heikin-Ashi Toggle */}
+            <button
+              onClick={() => setUseHeikinAshi(!useHeikinAshi)}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                useHeikinAshi
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              }`}
+              title={useHeikinAshi ? 'Zu normalen Kerzen wechseln' : 'Zu Heikin-Ashi wechseln'}
+            >
+              <CandlestickChart size={14} />
+              HA
+            </button>
           </div>
 
           <button
@@ -472,14 +588,21 @@ export function ChartsView() {
                 currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
                 timeRange={timeRange}
                 indicators={indicators}
+                ohlcData={ohlcData}
                 onAnnotationsChange={setChartAnnotations}
               />
             </div>
           </div>
 
-          {/* Indicators Panel (narrower in fullscreen) */}
-          <div className="w-64 border-l border-border p-4 overflow-auto">
+          {/* Indicators, Signals & Alerts Panel (narrower in fullscreen) */}
+          <div className="w-64 border-l border-border p-4 overflow-auto space-y-4">
             <IndicatorsPanel indicators={indicators} onIndicatorsChange={setIndicators} />
+            <SignalsPanel data={ohlcData} />
+            <AlertsPanel
+              securityId={selectedSecurity?.id || null}
+              currentPrice={ohlcData[ohlcData.length - 1]?.close}
+              currency={selectedSecurity?.currency}
+            />
           </div>
         </div>
       </div>
@@ -568,35 +691,58 @@ export function ChartsView() {
                     : 'Keine Wertpapiere gefunden'}
                 </div>
               ) : (
-                filteredSecurities.map(security => (
-                  <button
-                    key={security.id}
-                    onClick={() => setSelectedSecurity(security)}
-                    className={`w-full text-left px-3 py-2 border-b border-border/50 hover:bg-muted/50 transition-colors ${
-                      selectedSecurity?.id === security.id
-                        ? 'bg-primary/10 border-l-2 border-l-primary'
-                        : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <SecurityLogo securityId={security.id} logos={logos} size={28} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <div className="font-medium text-sm truncate">{security.name}</div>
-                          {security.isWatchlistOnly && (
-                            <span className="px-1 py-0.5 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded flex-shrink-0">
-                              Watchlist
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {security.ticker && <span className="mr-2">{security.ticker}</span>}
-                          {security.isin && <span>{security.isin}</span>}
+                filteredSecurities.map(security => {
+                  const isSelected = isComparisonMode
+                    ? comparisonSecurities.has(security.id)
+                    : selectedSecurity?.id === security.id;
+
+                  return (
+                    <button
+                      key={security.id}
+                      onClick={() => {
+                        if (isComparisonMode) {
+                          toggleComparisonSecurity(security.id);
+                        } else {
+                          setSelectedSecurity(security);
+                        }
+                      }}
+                      className={`w-full text-left px-3 py-2 border-b border-border/50 hover:bg-muted/50 transition-colors ${
+                        isSelected
+                          ? 'bg-primary/10 border-l-2 border-l-primary'
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {isComparisonMode && (
+                          <div
+                            className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 ${
+                              isSelected
+                                ? 'bg-primary border-primary text-primary-foreground'
+                                : 'border-muted-foreground'
+                            }`}
+                          >
+                            {isSelected && <Check size={12} />}
+                          </div>
+                        )}
+                        <SecurityLogo securityId={security.id} logos={logos} size={28} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="font-medium text-sm truncate">{security.name}</div>
+                            {security.isWatchlistOnly && (
+                              <span className="px-1 py-0.5 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded flex-shrink-0">
+                                Watchlist
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {security.ticker && <span className="mr-2">{security.ticker}</span>}
+                            {security.isin && <span>{security.isin}</span>}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
-                ))
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>
@@ -626,7 +772,63 @@ export function ChartsView() {
               </div>
 
               <div className="flex items-center gap-2">
-                {selectedSecurity && (
+                {/* Comparison Mode Toggle */}
+                <button
+                  onClick={() => {
+                    setIsComparisonMode(!isComparisonMode);
+                    if (!isComparisonMode && selectedSecurity) {
+                      // When entering comparison mode, add current security
+                      setComparisonSecurities(new Set([selectedSecurity.id]));
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                    isComparisonMode
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  }`}
+                  title={isComparisonMode ? 'Vergleich beenden' : 'Wertpapiere vergleichen'}
+                >
+                  <GitCompare size={14} />
+                  Vergleich
+                </button>
+
+                {/* Heikin-Ashi Toggle */}
+                {!isComparisonMode && (
+                  <button
+                    onClick={() => setUseHeikinAshi(!useHeikinAshi)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                      useHeikinAshi
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                    title={useHeikinAshi ? 'Zu normalen Kerzen wechseln' : 'Zu Heikin-Ashi wechseln'}
+                  >
+                    <CandlestickChart size={14} />
+                    HA
+                  </button>
+                )}
+
+                {/* Drawing Tools Toggle */}
+                {!isComparisonMode && (
+                  <button
+                    onClick={() => setIsDrawingMode(!isDrawingMode)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                      isDrawingMode
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                    title={isDrawingMode ? 'Zeichnen beenden' : 'Zeichenwerkzeuge'}
+                  >
+                    <Pencil size={14} />
+                    Zeichnen
+                  </button>
+                )}
+
+                {isComparisonMode ? (
+                  <span className="text-xs text-muted-foreground">
+                    {comparisonSecurities.size}/8 ausgewählt
+                  </span>
+                ) : selectedSecurity && (
                   <div className="flex items-center gap-2 text-sm">
                     <SecurityLogo securityId={selectedSecurity.id} logos={logos} size={24} />
                     <span className="font-semibold">{selectedSecurity.name}</span>
@@ -648,45 +850,86 @@ export function ChartsView() {
               ref={chartContainerRef}
               className="flex-1 bg-card border border-border rounded-lg overflow-hidden min-h-0"
             >
-              {isLoading ? (
-                <div className="h-full flex items-center justify-center">
-                  <Loader2 size={32} className="animate-spin text-muted-foreground" />
-                </div>
-              ) : ohlcData.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                  <TrendingUp size={48} className="mb-4 opacity-50" />
-                  <p className="text-lg font-medium">Keine Preisdaten verfügbar</p>
-                  <p className="text-sm">Wähle ein Wertpapier aus oder synchronisiere die Kurse.</p>
-                </div>
+              {isComparisonMode ? (
+                // Comparison Mode Chart
+                comparisonSecuritiesData.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <GitCompare size={48} className="mb-4 opacity-50" />
+                    <p className="text-lg font-medium">Wertpapiere auswählen</p>
+                    <p className="text-sm">Wähle bis zu 8 Wertpapiere zum Vergleichen aus.</p>
+                  </div>
+                ) : (
+                  <ChartErrorBoundary>
+                    <ComparisonChart
+                      securities={comparisonSecuritiesData}
+                      height={500}
+                      theme={resolvedTheme}
+                      normalize={true}
+                    />
+                  </ChartErrorBoundary>
+                )
               ) : (
-                <ChartErrorBoundary>
-                  <TradingViewChart
-                    data={ohlcData}
-                    indicators={indicators}
-                    height={500}
-                    theme={resolvedTheme}
-                    showVolume={true}
-                    symbol={selectedSecurity?.ticker || selectedSecurity?.name}
-                    annotations={chartAnnotations}
-                  />
-                </ChartErrorBoundary>
+                // Single Security Chart
+                isLoading ? (
+                  <div className="h-full flex items-center justify-center">
+                    <Loader2 size={32} className="animate-spin text-muted-foreground" />
+                  </div>
+                ) : ohlcData.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <TrendingUp size={48} className="mb-4 opacity-50" />
+                    <p className="text-lg font-medium">Keine Preisdaten verfügbar</p>
+                    <p className="text-sm">Wähle ein Wertpapier aus oder synchronisiere die Kurse.</p>
+                  </div>
+                ) : (
+                  <div className="relative h-full">
+                    <ChartErrorBoundary>
+                      <TradingViewChart
+                        data={ohlcData}
+                        indicators={indicators}
+                        height={500}
+                        theme={resolvedTheme}
+                        showVolume={true}
+                        symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                        annotations={chartAnnotations}
+                      />
+                    </ChartErrorBoundary>
+                    {/* Drawing Tools Overlay */}
+                    <DrawingTools
+                      chartApi={null}
+                      width={chartContainerRef.current?.clientWidth || 800}
+                      height={500}
+                      enabled={isDrawingMode}
+                      initialDrawings={drawings}
+                      onDrawingsChange={setDrawings}
+                    />
+                  </div>
+                )
               )}
             </div>
 
-            {/* AI Analysis Panel */}
-            <AIAnalysisPanel
-              chartRef={chartContainerRef}
-              security={selectedSecurity}
-              currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
-              timeRange={timeRange}
-              indicators={indicators}
-              onAnnotationsChange={setChartAnnotations}
-            />
+            {/* AI Analysis Panel - only in single security mode */}
+            {!isComparisonMode && (
+              <AIAnalysisPanel
+                chartRef={chartContainerRef}
+                security={selectedSecurity}
+                currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
+                timeRange={timeRange}
+                indicators={indicators}
+                ohlcData={ohlcData}
+                onAnnotationsChange={setChartAnnotations}
+              />
+            )}
           </div>
 
-          {/* Right Sidebar - Indicators */}
-          <div className="w-72 flex-shrink-0">
+          {/* Right Sidebar - Indicators, Signals & Alerts */}
+          <div className="w-72 flex-shrink-0 space-y-4 overflow-auto max-h-full">
             <IndicatorsPanel indicators={indicators} onIndicatorsChange={setIndicators} />
+            <SignalsPanel data={ohlcData} />
+            <AlertsPanel
+              securityId={selectedSecurity?.id || null}
+              currentPrice={ohlcData[ohlcData.length - 1]?.close}
+              currency={selectedSecurity?.currency}
+            />
 
             {/* Chart Info */}
             {ohlcData.length > 0 && (

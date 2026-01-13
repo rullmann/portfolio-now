@@ -15,14 +15,17 @@ apps/desktop/
 │   ├── store/              # Zustand State Management
 │   ├── components/         # UI (layout/, common/, modals/, charts/, chat/)
 │   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, ...)
-│   │   ├── charts/         # TradingViewChart, AIAnalysisPanel
+│   │   ├── charts/         # TradingViewChart, AIAnalysisPanel, DrawingTools, SignalsPanel
 │   │   ├── chat/           # ChatPanel, ChatMessage, ChatButton
 │   │   └── modals/         # PortfolioInsightsModal, TransactionFormModal, etc.
 │   ├── views/              # View-Komponenten pro Route
 │   └── lib/                # API, Types, Hooks
+│       ├── indicators.ts   # Technische Indikatoren (SMA, EMA, RSI, MACD, BB, Stochastic, OBV, ADX, ATR)
+│       ├── patterns.ts     # Candlestick-Pattern-Erkennung (22 Patterns)
+│       └── signals.ts      # Signal-Erkennung und Divergenzen
 └── src-tauri/              # Rust Backend
     └── src/
-        ├── commands/       # Tauri IPC Commands (24 Module)
+        ├── commands/       # Tauri IPC Commands (26 Module)
         ├── db/             # SQLite (rusqlite)
         ├── pp/             # Portfolio Performance Datenmodelle
         ├── protobuf/       # .portfolio Parser
@@ -77,6 +80,46 @@ GROUP BY security_id, owner_id
 
 ---
 
+## Einstandswert / Cost Basis (KRITISCH - SINGLE SOURCE OF TRUTH!)
+
+**NIEMALS** eigene Cost-Basis-Berechnung schreiben! Immer die zentralen Funktionen in `src/fifo/mod.rs` verwenden.
+
+### Warum?
+
+Securities können FIFO-Lots in **verschiedenen Währungen** haben (z.B. NESTLE mit CHF und EUR Lots). GROUP BY würde die Währungen vermischen und falsche Werte liefern.
+
+### Zentrale Funktionen (SSOT)
+
+```rust
+// Gesamter Einstandswert
+fifo::get_total_cost_basis_converted(conn, portfolio_id, base_currency) -> f64
+
+// Pro Security (identifier = ISIN oder UUID)
+fifo::get_cost_basis_by_security_converted(conn, base_currency) -> HashMap<String, f64>
+
+// Pro Security-ID
+fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i64, f64>
+```
+
+### Verwendung
+
+| Datei | Zweck |
+|-------|-------|
+| `commands/data.rs` | `get_holdings()`, `get_invested_capital_history()` |
+| `commands/ai.rs` | ChatBot Portfolio-Kontext |
+| `performance/mod.rs` | TTWROR-Berechnung |
+
+### VERBOTEN (führt zu falschen Werten!)
+
+```sql
+-- FALSCH: GROUP BY mit MAX(currency) vermischt Währungen!
+SELECT security_id, MAX(currency), SUM(cost_basis)
+FROM pp_fifo_lot
+GROUP BY security_id
+```
+
+---
+
 ## Transaktionstypen
 
 **PortfolioTransaction:** `BUY`, `SELL`, `TRANSFER_IN`, `TRANSFER_OUT`, `DELIVERY_INBOUND`, `DELIVERY_OUTBOUND`
@@ -127,6 +170,7 @@ GROUP BY security_id, owner_id
 ### AI Features
 - `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren
 - `analyze_chart_with_annotations(request)` - Chart-Analyse mit strukturierten Markern
+- `analyze_chart_enhanced(request)` - Erweiterte Analyse mit Indikator-Werten, Alerts & Risk/Reward
 - `analyze_portfolio_with_ai(request)` - Portfolio Insights (Stärken, Risiken, Empfehlungen)
 - `chat_with_portfolio_assistant(request)` - KI-Chat über Portfolio-Daten
 - `get_ai_models(provider, api_key)` - Verfügbare Modelle von Provider-API laden
@@ -138,6 +182,18 @@ GROUP BY security_id, owner_id
 - `ai_remove_from_watchlist(watchlist, security)` - Security von Watchlist entfernen
 - `ai_list_watchlists()` - Alle Watchlists mit Securities auflisten
 - `ai_query_transactions(security?, year?, type?, limit?)` - Transaktionen filtern
+
+### Chart Drawings
+- `save_chart_drawing(drawing)` - Zeichnung speichern (Trendlinie, Horizontal, Fibonacci)
+- `get_chart_drawings(security_id)` - Alle Zeichnungen für Security laden
+- `delete_chart_drawing(drawing_id)` - Einzelne Zeichnung löschen
+- `clear_chart_drawings(security_id)` - Alle Zeichnungen für Security löschen
+
+### Pattern Tracking
+- `save_pattern_detection(pattern)` - Erkanntes Pattern speichern
+- `evaluate_pattern_outcomes()` - Outcomes nach 5/10 Tagen evaluieren
+- `get_pattern_statistics()` - Erfolgsquoten pro Pattern-Typ
+- `get_pattern_history(security_id)` - Pattern-Historie für Security
 
 ---
 
@@ -243,6 +299,14 @@ pp_investment_plan (id, uuid, name, security_id, portfolio_id, account_id, amoun
 pp_dashboard (id, import_id, dashboard_id, name, columns_json, configuration_json)
 pp_settings (id, import_id, settings_json)
 pp_client_properties (id, import_id, key, value)
+
+-- Chart Drawings (Zeichenwerkzeuge)
+pp_chart_drawing (id, uuid, security_id, drawing_type, points_json, color, line_width,
+                  fib_levels_json, is_visible, created_at)
+
+-- Pattern History (Pattern-Tracking)
+pp_pattern_history (id, security_id, pattern_type, detected_at, price_at_detection,
+                    predicted_direction, actual_outcome, price_after_5d, price_after_10d, created_at)
 ```
 
 ---
@@ -307,7 +371,7 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 | Watchlist | ✅ | Multiple Listen, Mini-Charts, ChatBot-Integration |
 | Taxonomies | ✅ | Hierarchischer Baum |
 | Benchmark | ✅ | Performance-Vergleich |
-| Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse + Marker |
+| Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse, Zeichenwerkzeuge, Pattern-Erkennung |
 | Plans | ✅ | Sparpläne |
 | Reports | ✅ | Performance, Dividenden, Gewinne, Steuer mit Charts |
 | Rebalancing | ✅ | Zielgewichtung, Vorschau, Ausführung |
@@ -328,6 +392,47 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 9. **AI Portfolio-Kontext:** Währungsumrechnung in Basiswährung beachten
 10. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
 11. **DELIVERY_INBOUND/OUTBOUND:** Werden im ChatBot als "BUY (Einlieferung)" / "SELL (Auslieferung)" angezeigt
+12. **Cost Basis SSOT:** NIEMALS eigene Cost-Basis-Query schreiben! Immer `fifo::get_*_converted()` Funktionen verwenden - Securities können Lots in verschiedenen Währungen haben
+13. **Transaktionsänderungen:** Bei jeder Transaktions-Erstellung/-Löschung/-Änderung MÜSSEN zwei Dinge passieren:
+    - FIFO-Lots neu berechnen: `fifo::build_fifo_lots(conn, security_id)`
+    - Event emittieren: `emit_data_changed(&app, DataChangedPayload::transaction(...))`
+14. **PDF Import Duplikate:** Duplikat-Check muss mehrere Typ-Varianten prüfen! Ein "Buy" aus PDF kann als "DELIVERY_INBOUND" in DB stehen (wenn deliveryMode aktiv war). Nutze `get_duplicate_check_types()` in `commands/pdf_import.rs`.
+
+---
+
+## Tauri Events (Frontend-Refresh)
+
+Bei Datenänderungen sendet das Backend ein `data_changed` Event an das Frontend:
+
+```rust
+// Backend: Nach Transaktionsänderung
+use crate::events::{emit_data_changed, DataChangedPayload};
+
+emit_data_changed(&app, DataChangedPayload::transaction("created", security_id));
+emit_data_changed(&app, DataChangedPayload::import(affected_security_ids));
+emit_data_changed(&app, DataChangedPayload::rebalance(affected_security_ids));
+emit_data_changed(&app, DataChangedPayload::investment_plan_executed(security_id));
+```
+
+```typescript
+// Frontend: Listener in App.tsx
+listen('data_changed', (event) => {
+  invalidateAllQueries();  // TanStack Query Cache invalidieren
+  loadDbData();            // Lokale State-Daten neu laden
+});
+```
+
+### Commands mit Event-Emission
+
+| Command | Event |
+|---------|-------|
+| `create_transaction` | `transaction("created", ...)` |
+| `update_transaction` | `transaction("updated", ...)` |
+| `delete_transaction` | `transaction("deleted", ...)` |
+| `import_pdf_transactions` | `import([])` |
+| `import_transactions_csv` | `import(security_ids)` |
+| `execute_rebalance` | `rebalance(security_ids)` |
+| `execute_investment_plan` | `investment_plan_executed(security_id)` |
 
 ---
 
@@ -378,6 +483,24 @@ Siehe `apps/desktop/src-tauri/PP_IMPORT_EXPORT.md` für Details.
   - Transaktions-Abfragen: "Zeige alle Käufe 2024"
   - Historische Daten: Verkaufte Positionen, Jahresübersicht
 - **Chart Marker**: Support/Resistance-Linien werden direkt im Chart angezeigt
+- **Erweiterte Chart-Analyse** (⚡ Toggle):
+  - Indikator-Werte: RSI, MACD, SMA, EMA, Bollinger, ATR mit berechneten Werten und Signalen
+  - Volumen-Analyse: Aktuelles Volumen vs. 20-Tage-Durchschnitt, Trend
+  - OHLC-Daten: Letzte 50 Kerzen für Pattern-Erkennung
+  - Alert-Vorschläge: Preis-Alarme basierend auf Support/Resistance (Hoch/Mittel/Niedrig)
+  - Risk/Reward: Entry, Stop-Loss, Take-Profit mit R:R-Verhältnis Visualisierung
+- **Zeichenwerkzeuge** (✏️ Zeichnen Toggle):
+  - Trendlinien zwischen zwei Punkten
+  - Horizontale Linien (Support/Resistance)
+  - Fibonacci Retracements (0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%)
+  - Persistente Speicherung in SQLite
+- **Pattern-Erkennung** (SignalsPanel):
+  - 22 Candlestick-Patterns (Doji, Hammer, Engulfing, Morning Star, etc.)
+  - Automatische Trend-Kontext-Erkennung
+  - Pattern-Tracking mit Erfolgsquoten
+- **Web-Kontext** (📰 News Toggle, nur Perplexity):
+  - Aktuelle Nachrichten zur Security
+  - Earnings-Termine und Analysteneinschätzungen
 
 ### ChatBot Commands (intern)
 Der ChatBot kann folgende Aktionen ausführen:

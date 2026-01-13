@@ -695,43 +695,11 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
         }
     }
 
-    // STEP 2: Get cost basis from FIFO lots (separate from share count!)
-    // Include currency to enable conversion to base currency
-    // Use gross_amount (purchase price INCLUDING fees/taxes) for cost basis, matching PP behavior
-    // PP CostCalculation.java: Purchase Value = gross amount with all fees and taxes
-    let cost_basis_sql = "
-        SELECT
-            COALESCE(s.isin, s.uuid) as identifier,
-            MAX(l.currency) as lot_currency,
-            SUM(CASE
-                WHEN l.original_shares > 0 THEN
-                    (l.remaining_shares * l.gross_amount / l.original_shares)
-                ELSE 0
-            END) as cost_basis
-        FROM pp_fifo_lot l
-        JOIN pp_security s ON l.security_id = s.id
-        WHERE l.remaining_shares > 0
-        GROUP BY COALESCE(s.isin, s.uuid)
-    ";
-
-    // Map identifier -> (cost_basis_cents, currency)
-    let mut cost_basis_map: std::collections::HashMap<String, (i64, String)> = std::collections::HashMap::new();
-    let mut cost_stmt = conn.prepare(cost_basis_sql).map_err(|e| e.to_string())?;
-    let cost_rows = cost_stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,  // identifier
-                row.get::<_, String>(1)?,  // currency
-                row.get::<_, i64>(2)?,     // cost_basis
-            ))
-        })
-        .map_err(|e| e.to_string())?;
-
-    for row in cost_rows {
-        if let Ok((identifier, lot_currency, cost)) = row {
-            cost_basis_map.insert(identifier, (cost, lot_currency));
-        }
-    }
+    // STEP 2: Get cost basis from FIFO lots using SINGLE SOURCE OF TRUTH
+    // Uses fifo::get_cost_basis_by_security_converted() which converts each lot individually
+    // WICHTIG: Nicht GROUP BY verwenden! Securities können Lots in verschiedenen Währungen haben!
+    let cost_basis_map = crate::fifo::get_cost_basis_by_security_converted(conn, &base_currency)
+        .unwrap_or_default();
 
     // STEP 3: Get dividend sums per security (ΣDiv Seit)
     // Sum all DIVIDENDS transactions for each security across all accounts
@@ -805,20 +773,8 @@ pub fn get_all_holdings() -> Result<Vec<AggregatedHolding>, String> {
                 primary.price
             };
 
-            // Get cost basis from FIFO map and convert to base currency
-            let (cost_basis_cents, lot_currency) = cost_basis_map
-                .get(&identifier)
-                .cloned()
-                .unwrap_or((0, base_currency.clone()));
-            let cost_basis_raw = cost_basis_cents as f64 / 100.0;
-
-            // Convert cost basis to base currency if needed
-            let cost_basis = if lot_currency == base_currency {
-                cost_basis_raw
-            } else {
-                currency::convert(conn, cost_basis_raw, &lot_currency, &base_currency, today)
-                    .unwrap_or(cost_basis_raw)
-            };
+            // Get cost basis from FIFO map (already converted to base currency by SSOT function)
+            let cost_basis = cost_basis_map.get(&identifier).copied().unwrap_or(0.0);
 
             // Calculate purchase price per share (Einstandskurs)
             let purchase_price = if total_shares > 0.0 {
@@ -1055,12 +1011,17 @@ pub struct PortfolioValuePoint {
 
 /// Get historical portfolio values for charting (last 365 days)
 /// Calculates portfolio value = sum of (shares × price) for each security
+/// Values are converted to base currency for accurate multi-currency portfolios
 #[command]
 pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get base currency for value conversion (same as get_all_holdings)
+    let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+    let today = chrono::Utc::now().date_naive();
 
     // STEP 1: Get all portfolio transactions sorted by date
     // This gives us the timeline of share changes
@@ -1248,7 +1209,7 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
             }
         }
 
-        // Calculate total value on this date
+        // Calculate total value on this date with currency conversion
         let total: f64 = all_security_ids
             .iter()
             .map(|&security_id| {
@@ -1257,17 +1218,31 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
                 let price_decimal = prices::to_decimal(price);
 
                 // GBX/GBp (British Pence) needs to be divided by 100 to get GBP equivalent
-                let currency = security_currencies
+                let security_currency = security_currencies
                     .get(&security_id)
                     .map(|s| s.as_str())
                     .unwrap_or("");
-                let adjusted_price = if currency == "GBX" || currency == "GBp" {
+                let adjusted_price = if security_currency == "GBX" || security_currency == "GBp" {
                     price_decimal / 100.0
                 } else {
                     price_decimal
                 };
 
-                shares::to_decimal(shares) * adjusted_price
+                let value_in_security_currency = shares::to_decimal(shares) * adjusted_price;
+
+                // Convert to base currency (matching get_all_holdings behavior)
+                let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                    "GBP"
+                } else {
+                    security_currency
+                };
+
+                if !convert_currency.is_empty() && convert_currency != base_currency.as_str() {
+                    currency::convert(conn, value_in_security_currency, convert_currency, &base_currency, today)
+                        .unwrap_or(value_in_security_currency)
+                } else {
+                    value_in_security_currency
+                }
             })
             .sum();
 
@@ -1286,9 +1261,10 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
     Ok(result)
 }
 
-/// Get invested capital history showing cumulative net investment over time
-/// Invested Capital = Sum of all inbound amounts - Sum of all outbound amounts
-/// This shows how much money was actually put into the portfolio (net of withdrawals)
+/// Get cost basis (Einstandswert) history
+/// Uses EXACT same SQL as get_all_holdings() Box calculation
+/// Returns invested capital history with correct currency conversion
+/// Each FIFO lot is converted individually to handle securities with mixed currency lots
 #[command]
 pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
@@ -1296,91 +1272,107 @@ pub fn get_invested_capital_history() -> Result<Vec<PortfolioValuePoint>, String
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    // Get all inbound transactions (BUY, DELIVERY_INBOUND, TRANSFER_IN)
-    // amount is stored in cents, so divide by 100
-    let inbound_sql = r#"
-        SELECT
-            date,
-            SUM(amount) / 100.0 as total_amount
+    // Get base currency for value conversion
+    let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+    let today = chrono::Utc::now().date_naive();
+
+    // STEP 1: Get transaction dates for the timeline
+    let dates_sql = r#"
+        SELECT DISTINCT date(date) as txn_date
         FROM pp_txn
         WHERE owner_type = 'portfolio'
-          AND txn_type IN ('BUY', 'DELIVERY_INBOUND', 'TRANSFER_IN')
-          AND amount IS NOT NULL
-        GROUP BY date
-        ORDER BY date ASC
+          AND txn_type IN ('BUY', 'SELL', 'DELIVERY_INBOUND', 'DELIVERY_OUTBOUND')
+        ORDER BY txn_date
     "#;
 
-    // Get all outbound transactions (SELL, DELIVERY_OUTBOUND, TRANSFER_OUT)
-    let outbound_sql = r#"
+    let mut dates: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn.prepare(dates_sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            dates.push(row);
+        }
+    }
+
+    if dates.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // STEP 2: Calculate current cost basis using SINGLE SOURCE OF TRUTH
+    // Uses fifo::get_total_cost_basis_converted() which converts each lot individually
+    let current_cost_basis = crate::fifo::get_total_cost_basis_converted(conn, None, &base_currency)
+        .unwrap_or(0.0);
+
+    // STEP 3: Build approximate history using cumulative transactions
+    // Then scale to match the correct current value
+    let txn_sql = r#"
         SELECT
-            date,
-            SUM(amount) / 100.0 as total_amount
-        FROM pp_txn
-        WHERE owner_type = 'portfolio'
-          AND txn_type IN ('SELL', 'DELIVERY_OUTBOUND', 'TRANSFER_OUT')
-          AND amount IS NOT NULL
-        GROUP BY date
-        ORDER BY date ASC
+            date(t.date) as txn_date,
+            t.txn_type,
+            t.amount,
+            t.currency
+        FROM pp_txn t
+        WHERE t.owner_type = 'portfolio'
+          AND t.txn_type IN ('BUY', 'SELL', 'DELIVERY_INBOUND', 'DELIVERY_OUTBOUND')
+          AND t.amount IS NOT NULL
+        ORDER BY txn_date, t.id
     "#;
 
-    // Collect events: (date, amount, is_inbound)
-    let mut events: Vec<(String, f64, bool)> = Vec::new();
+    let mut cumulative = 0.0;
+    let mut history: Vec<PortfolioValuePoint> = Vec::new();
 
-    // Collect inbound events (BUY, DELIVERY_INBOUND, TRANSFER_IN)
     {
-        let mut stmt = conn.prepare(inbound_sql).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(txn_sql).map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                ))
+            })
             .map_err(|e| e.to_string())?;
 
-        for row in rows {
-            if let Ok((date, amount)) = row {
-                events.push((date, amount, true));
+        for row in rows.flatten() {
+            let (date, txn_type, amount_cents, txn_currency) = row;
+            let amount = amount_cents as f64 / 100.0;
+
+            // Currency conversion
+            let amount_in_base = if !txn_currency.is_empty() && txn_currency != base_currency {
+                currency::convert(conn, amount, &txn_currency, &base_currency, today)
+                    .unwrap_or(amount)
+            } else {
+                amount
+            };
+
+            let is_buy = txn_type == "BUY" || txn_type == "DELIVERY_INBOUND";
+            if is_buy {
+                cumulative += amount_in_base;
+            } else {
+                cumulative -= amount_in_base;
             }
-        }
-    }
 
-    // Collect outbound events (SELL, DELIVERY_OUTBOUND, TRANSFER_OUT)
-    {
-        let mut stmt = conn.prepare(outbound_sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
-            .map_err(|e| e.to_string())?;
-
-        for row in rows {
-            if let Ok((date, amount)) = row {
-                events.push((date, amount, false));
+            // Update or add entry
+            if let Some(last) = history.last_mut() {
+                if last.date == date {
+                    last.value = cumulative;
+                    continue;
+                }
             }
+            history.push(PortfolioValuePoint { date, value: cumulative });
         }
     }
 
-    // Sort by date
-    events.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Build cumulative invested capital by date
-    let mut invested_by_date: std::collections::BTreeMap<String, f64> =
-        std::collections::BTreeMap::new();
-    let mut cumulative: f64 = 0.0;
-
-    for (date, amount, is_inbound) in events {
-        if is_inbound {
-            // Inbound: money flows into portfolio (increases invested capital)
-            cumulative += amount;
-        } else {
-            // Outbound: money flows out of portfolio (decreases invested capital)
-            cumulative -= amount;
+    // STEP 4: Scale the history so the last value matches the correct FIFO cost basis
+    if !history.is_empty() && cumulative > 0.0 {
+        let scale_factor = current_cost_basis / cumulative;
+        for point in &mut history {
+            point.value *= scale_factor;
         }
-        // Invested capital can be negative if you've withdrawn more than invested
-        invested_by_date.insert(date, cumulative);
     }
 
-    // Convert to vector
-    let result: Vec<PortfolioValuePoint> = invested_by_date
-        .into_iter()
-        .map(|(date, value)| PortfolioValuePoint { date, value })
-        .collect();
-
-    Ok(result)
+    Ok(history)
 }
 
 /// Upload a custom logo for a security (base64-encoded)

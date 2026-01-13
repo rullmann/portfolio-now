@@ -1251,6 +1251,115 @@ export interface AnnotationAnalysisResponse {
   tokensUsed?: number;
 }
 
+// ============================================================================
+// Enhanced Chart Analysis Types
+// ============================================================================
+
+/** A single indicator reading with current value and signal */
+export interface IndicatorValue {
+  /** Indicator name (e.g., "RSI") */
+  name: string;
+  /** Indicator parameters (e.g., "14") */
+  params: string;
+  /** Current calculated value (e.g., 72.5) */
+  currentValue: number;
+  /** Previous value for trend detection */
+  previousValue?: number;
+  /** Signal interpretation (e.g., "overbought", "bullish_crossover") */
+  signal?: string;
+}
+
+/** OHLC candlestick data for a single period */
+export interface CandleData {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+/** Volume analysis context */
+export interface VolumeAnalysis {
+  currentVolume: number;
+  avgVolume20d: number;
+  /** Ratio of current volume to average (e.g., 1.5 = 50% above average) */
+  volumeRatio: number;
+  /** Volume trend direction ("increasing", "decreasing", "stable") */
+  volumeTrend: string;
+}
+
+/** Enhanced chart context with indicator values, OHLC data, and volume analysis */
+export interface EnhancedChartContext {
+  securityName: string;
+  ticker?: string;
+  currency: string;
+  currentPrice: number;
+  timeframe: string;
+  /** Indicator values with actual readings */
+  indicatorValues: IndicatorValue[];
+  /** Last N candles OHLC data */
+  candles?: CandleData[];
+  /** Volume analysis */
+  volumeAnalysis?: VolumeAnalysis;
+  /** Price change percentage for the period */
+  priceChangePercent?: number;
+  /** 52-week high */
+  high52Week?: number;
+  /** 52-week low */
+  low52Week?: number;
+  /** Distance from 52-week high as percentage */
+  distanceFromHighPercent?: number;
+  /** Include web context (news, earnings, analyst ratings) - only for web-capable models */
+  includeWebContext?: boolean;
+}
+
+/** AI-suggested price alert */
+export interface AlertSuggestion {
+  /** Price level for alert */
+  price: number;
+  /** Alert condition ("above", "below", "crosses_up", "crosses_down") */
+  condition: string;
+  /** Reason for the alert */
+  reason: string;
+  /** Alert priority ("high", "medium", "low") */
+  priority: string;
+}
+
+/** Risk/Reward analysis from AI */
+export interface RiskRewardAnalysis {
+  /** Suggested entry price */
+  entryPrice?: number;
+  /** Stop-loss price */
+  stopLoss?: number;
+  /** Take-profit target */
+  takeProfit?: number;
+  /** Risk/Reward ratio (e.g., 2.5 = 2.5:1) */
+  riskRewardRatio?: number;
+  /** Explanation of the setup */
+  rationale?: string;
+}
+
+/** Enhanced response from AI analysis with alerts and risk/reward */
+export interface EnhancedAnnotationAnalysisResponse {
+  /** Overall analysis text */
+  analysis: string;
+  /** Trend information */
+  trend: TrendInfo;
+  /** Array of chart annotations */
+  annotations: ChartAnnotation[];
+  /** Suggested price alerts */
+  alerts: AlertSuggestion[];
+  /** Risk/Reward analysis (optional if no clear setup) */
+  riskReward?: RiskRewardAnalysis;
+  /** AI provider used */
+  provider: string;
+  /** Model used */
+  model: string;
+  /** Tokens used (if available) */
+  tokensUsed?: number;
+}
+
 /** Annotation with generated ID for React rendering */
 export interface ChartAnnotationWithId extends ChartAnnotation {
   id: string;
@@ -1301,4 +1410,60 @@ export interface SaveAnnotationRequest {
   source?: 'ai' | 'user';
   provider?: string | null;
   model?: string | null;
+}
+
+// ============================================================================
+// Price Alerts
+// ============================================================================
+
+export type AlertType =
+  | 'price_above'
+  | 'price_below'
+  | 'price_crosses'
+  | 'rsi_above'
+  | 'rsi_below'
+  | 'volume_spike'
+  | 'divergence'
+  | 'pattern_detected'
+  | 'support_break'
+  | 'resistance_break';
+
+export interface PriceAlert {
+  id: number;
+  uuid: string;
+  securityId: number;
+  securityName?: string;
+  securityTicker?: string;
+  alertType: AlertType;
+  targetValue: number;
+  targetValue2?: number;
+  isActive: boolean;
+  isTriggered: boolean;
+  triggerCount: number;
+  lastTriggeredAt?: string;
+  lastTriggeredPrice?: number;
+  note?: string;
+  createdAt: string;
+}
+
+export interface CreateAlertRequest {
+  securityId: number;
+  alertType: AlertType;
+  targetValue: number;
+  targetValue2?: number;
+  note?: string;
+}
+
+export interface UpdateAlertRequest {
+  id: number;
+  targetValue?: number;
+  targetValue2?: number;
+  isActive?: boolean;
+  note?: string;
+}
+
+export interface TriggeredAlert {
+  alert: PriceAlert;
+  currentPrice: number;
+  triggerReason: string;
 }
