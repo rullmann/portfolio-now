@@ -221,6 +221,8 @@ pub struct SecurityQuoteRequest {
     pub feed_url: Option<String>,
     /// Optional API key for providers that require authentication
     pub api_key: Option<String>,
+    /// Security's currency (for crypto providers)
+    pub currency: Option<String>,
 }
 
 /// Kurs für eine einzelne Security abrufen
@@ -244,21 +246,39 @@ async fn fetch_quote_for_security(sec: &SecurityQuoteRequest) -> QuoteResult {
             }
         }
         ProviderType::CoinGecko => {
-            // Try to convert symbol to CoinGecko ID
-            let coin_id = coingecko::symbol_to_coin_id(&sec.symbol)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| sec.symbol.to_lowercase());
+            // Extract base symbol from formats like "BTC-EUR", "BTC/EUR", "BTCEUR"
+            let base_symbol = extract_crypto_base_symbol(&sec.symbol);
 
-            match coingecko::fetch_quote(&coin_id, "EUR", sec.api_key.as_deref()).await {
+            // Try to convert symbol to CoinGecko ID
+            let coin_id = coingecko::symbol_to_coin_id(&base_symbol)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| base_symbol.to_lowercase());
+
+            // Use security currency, feed_url, or default to EUR
+            let currency = sec.currency.as_deref()
+                .or(sec.feed_url.as_deref())
+                .unwrap_or("EUR");
+
+            log::debug!("CoinGecko: symbol={} -> base={} -> coin_id={}, currency={}",
+                sec.symbol, base_symbol, coin_id, currency);
+
+            match coingecko::fetch_quote(&coin_id, currency, sec.api_key.as_deref()).await {
                 Ok(quote) => QuoteResult::success(sec.id, sec.symbol.clone(), sec.provider.as_str(), quote),
                 Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
             }
         }
         ProviderType::Kraken => {
-            // Use feed_url as target currency or default to EUR
-            let currency = sec.feed_url.as_deref().unwrap_or("EUR");
+            // Extract base symbol from formats like "BTC-EUR", "BTC/EUR", "BTCEUR"
+            let base_symbol = extract_crypto_base_symbol(&sec.symbol);
 
-            match kraken::fetch_quote(&sec.symbol, currency).await {
+            // Use security currency, feed_url, or default to EUR
+            let currency = sec.currency.as_deref()
+                .or(sec.feed_url.as_deref())
+                .unwrap_or("EUR");
+
+            log::debug!("Kraken: symbol={} -> base={}, currency={}", sec.symbol, base_symbol, currency);
+
+            match kraken::fetch_quote(&base_symbol, currency).await {
                 Ok(quote) => QuoteResult::success(sec.id, sec.symbol.clone(), sec.provider.as_str(), quote),
                 Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
             }
@@ -446,4 +466,32 @@ pub async fn fetch_historical_quotes_with_options(
             anyhow::bail!("Historical quotes not supported for provider {:?}", provider)
         }
     }
+}
+
+/// Extract base crypto symbol from various formats
+///
+/// Examples:
+/// - "BTC-EUR" -> "BTC"
+/// - "BTC/EUR" -> "BTC"
+/// - "BTCEUR" -> "BTC"
+/// - "BTC" -> "BTC"
+/// - "bitcoin" -> "bitcoin"
+fn extract_crypto_base_symbol(symbol: &str) -> String {
+    let symbol = symbol.trim().to_uppercase();
+
+    // Handle separator formats: "BTC-EUR", "BTC/EUR", "BTC_EUR"
+    if let Some(pos) = symbol.find(|c| c == '-' || c == '/' || c == '_') {
+        return symbol[..pos].to_string();
+    }
+
+    // Handle suffix formats: "BTCEUR", "BTCUSD", "BTCCHF"
+    let fiat_currencies = ["EUR", "USD", "CHF", "GBP", "JPY", "CAD", "AUD"];
+    for fiat in fiat_currencies {
+        if symbol.ends_with(fiat) && symbol.len() > fiat.len() {
+            return symbol[..symbol.len() - fiat.len()].to_string();
+        }
+    }
+
+    // Return as-is (might be "BTC", "ETH", "bitcoin", etc.)
+    symbol
 }

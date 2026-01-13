@@ -17,6 +17,7 @@ const BASE_URL: &str = "https://api.twelvedata.com";
 
 /// Quote response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct QuoteResponse {
     symbol: Option<String>,
     name: Option<String>,
@@ -37,6 +38,7 @@ struct QuoteResponse {
 
 /// Time series response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TimeSeriesResponse {
     meta: Option<TimeSeriesMeta>,
     values: Option<Vec<TimeSeriesValue>>,

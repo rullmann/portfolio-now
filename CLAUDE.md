@@ -55,6 +55,34 @@ cd apps/desktop/src-tauri && cargo test --release
 
 ---
 
+## 🎯 Leitsatz: Single Source of Truth (SSOT)
+
+**Jede Datenberechnung hat genau EINE autoritative Quelle. Niemals Logik duplizieren!**
+
+| Daten | SSOT-Modul | Zentrale Funktion(en) | VERBOTEN |
+|-------|------------|----------------------|----------|
+| **Holdings (Stückzahlen)** | Transaktions-Summe | SQL: `SUM(CASE WHEN txn_type IN ('BUY',...))` | FIFO-Lots für Stückzahlen |
+| **Cost Basis (Einstandswert)** | `fifo/mod.rs` | `get_total_cost_basis_converted()`, `get_cost_basis_by_security_*()` | GROUP BY auf FIFO-Lots |
+| **Währungsumrechnung** | `currency/mod.rs` | `convert()`, `get_exchange_rate()` | Eigene Kurs-Lookups |
+| **AI-Modelle** | `ai/models.rs` | `get_model()`, `get_model_upgrade()`, `get_fallback()` | Hardcodierte Modell-IDs |
+| **Kurse abrufen** | `quotes/mod.rs` | `fetch_all_quotes()`, Provider-spezifische Funktionen | Direkte API-Calls |
+| **Performance (TTWROR/IRR)** | `performance/mod.rs` | `calculate_ttwror()`, `calculate_irr()` | Eigene Berechnungen |
+
+### Warum SSOT?
+
+1. **Konsistenz:** Gleiche Daten = gleiche Werte überall in der App
+2. **Wartbarkeit:** Bug-Fix an einer Stelle behebt Problem überall
+3. **Währungen:** Securities können Lots in verschiedenen Währungen haben (z.B. NESTLE mit CHF + EUR Lots)
+4. **Testbarkeit:** Eine Funktion = ein Test-Ort
+
+### Neue Funktion hinzufügen?
+
+1. Prüfen ob SSOT-Funktion bereits existiert
+2. Falls ja: Diese verwenden, nicht neu implementieren
+3. Falls nein: Im passenden Modul hinzufügen und in allen Consumers verwenden
+
+---
+
 ## Skalierungsfaktoren (KRITISCH!)
 
 | Wert | Faktor | Beispiel |
@@ -205,8 +233,19 @@ GROUP BY security_id
 | **Portfolio Report** | Nein | ISIN/WKN-Lookup, Kurse (wie PP) |
 | **Finnhub** | Ja | US-Aktien, Premium für Historie |
 | **AlphaVantage** | Ja | 25 Calls/Tag free |
-| **CoinGecko** | Nein | Kryptowährungen |
+| **CoinGecko** | Optional | Kryptowährungen, alle Währungen |
+| **Kraken** | Nein | Krypto-Börsenpreise |
 | **EZB** | Nein | Wechselkurse |
+
+### Crypto Provider (CoinGecko/Kraken)
+
+Symbol-Formate werden automatisch erkannt und extrahiert:
+- `BTC-EUR`, `BTC/EUR`, `BTCEUR` → `BTC`
+- `bitcoin`, `ethereum` → direkt als CoinGecko coin_id
+
+**CoinGecko Mapping** (automatisch): BTC→bitcoin, ETH→ethereum, SOL→solana, etc.
+
+**Kraken Format**: Intern XXBTZEUR, automatische Konvertierung von BTC→XBT
 
 ---
 
@@ -390,13 +429,12 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 7. **AI Raw Strings:** In Rust `r#"..."#` nicht mit `"#` im Inhalt verwenden (benutze `r##"..."##`)
 8. **GBX/GBp Währung:** British Pence durch 100 teilen für GBP-Wert
 9. **AI Portfolio-Kontext:** Währungsumrechnung in Basiswährung beachten
-10. **TwelveData Warnings:** Ungenutzte Felder in `quotes/twelvedata.rs` (harmlos, für API-Kompatibilität)
-11. **DELIVERY_INBOUND/OUTBOUND:** Werden im ChatBot als "BUY (Einlieferung)" / "SELL (Auslieferung)" angezeigt
-12. **Cost Basis SSOT:** NIEMALS eigene Cost-Basis-Query schreiben! Immer `fifo::get_*_converted()` Funktionen verwenden - Securities können Lots in verschiedenen Währungen haben
-13. **Transaktionsänderungen:** Bei jeder Transaktions-Erstellung/-Löschung/-Änderung MÜSSEN zwei Dinge passieren:
+10. **DELIVERY_INBOUND/OUTBOUND:** Werden im ChatBot als "BUY (Einlieferung)" / "SELL (Auslieferung)" angezeigt
+11. **SSOT beachten:** Siehe "🎯 Leitsatz: Single Source of Truth" oben - insbesondere für Cost Basis, Holdings, Währungsumrechnung
+12. **Transaktionsänderungen:** Bei jeder Transaktions-Erstellung/-Löschung/-Änderung MÜSSEN zwei Dinge passieren:
     - FIFO-Lots neu berechnen: `fifo::build_fifo_lots(conn, security_id)`
     - Event emittieren: `emit_data_changed(&app, DataChangedPayload::transaction(...))`
-14. **PDF Import Duplikate:** Duplikat-Check muss mehrere Typ-Varianten prüfen! Ein "Buy" aus PDF kann als "DELIVERY_INBOUND" in DB stehen (wenn deliveryMode aktiv war). Nutze `get_duplicate_check_types()` in `commands/pdf_import.rs`.
+13. **PDF Import Duplikate:** Duplikat-Check muss mehrere Typ-Varianten prüfen! Ein "Buy" aus PDF kann als "DELIVERY_INBOUND" in DB stehen (wenn deliveryMode aktiv war). Nutze `get_duplicate_check_types()` in `commands/pdf_import.rs`.
 
 ---
 

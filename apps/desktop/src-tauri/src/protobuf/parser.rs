@@ -9,6 +9,11 @@ use prost::Message;
 use zip::ZipArchive;
 
 use super::schema::{self, PClient};
+
+/// Maximum uncompressed size for portfolio files (500 MB)
+/// This protects against ZIP bomb attacks where a small compressed file
+/// expands to consume all available memory
+const MAX_UNCOMPRESSED_SIZE: u64 = 500 * 1024 * 1024;
 use crate::pp::{
     common::{ForexInfo, Money},
     security::{DividendEvent, SecurityEvent, SecurityEventKind, SecurityEventType},
@@ -26,12 +31,24 @@ pub fn parse_portfolio_file(path: &Path) -> Result<Client> {
     let file = std::fs::File::open(path).context("Failed to open file")?;
     let mut archive = ZipArchive::new(file).context("Failed to read ZIP archive")?;
 
-    let mut data_file = archive
+    let data_file = archive
         .by_name("data.portfolio")
         .context("data.portfolio not found in archive")?;
 
-    let mut data = Vec::new();
-    data_file
+    // ZIP bomb protection: Check uncompressed size BEFORE reading
+    let uncompressed_size = data_file.size();
+    if uncompressed_size > MAX_UNCOMPRESSED_SIZE {
+        bail!(
+            "Portfolio file too large: {} MB (max {} MB). This may indicate a corrupted or malicious file.",
+            uncompressed_size / (1024 * 1024),
+            MAX_UNCOMPRESSED_SIZE / (1024 * 1024)
+        );
+    }
+
+    // Additional protection: Use take() to limit actual bytes read
+    let mut limited_reader = data_file.take(MAX_UNCOMPRESSED_SIZE);
+    let mut data = Vec::with_capacity(uncompressed_size as usize);
+    limited_reader
         .read_to_end(&mut data)
         .context("Failed to read data.portfolio")?;
 

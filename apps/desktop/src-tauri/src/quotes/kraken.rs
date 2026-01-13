@@ -265,21 +265,25 @@ fn normalize_pair(pair: &str, currency: &str) -> String {
 fn extract_base_asset(pair: &str) -> String {
     let pair = pair.to_uppercase().replace('/', "");
 
-    // Common quote currencies to strip
+    // First, handle Kraken's prefixed format (XXBTZEUR, XETHZUSD)
+    // These have format: X + base + Z + quote (e.g., X + XBT + Z + EUR)
+    if pair.starts_with('X') && pair.len() > 4 {
+        // Check for ZEUR, ZUSD, ZGBP patterns
+        for suffix in ["ZEUR", "ZUSD", "ZGBP", "ZCHF", "ZJPY", "ZCAD", "ZAUD"] {
+            if pair.ends_with(suffix) {
+                // XXBTZEUR -> XBT (strip X prefix and Z suffix)
+                let base = &pair[1..pair.len() - suffix.len()];
+                return base.to_string();
+            }
+        }
+    }
+
+    // Common quote currencies to strip (for regular format like BTCEUR, BTC/EUR)
     let quotes = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD"];
 
     for quote in quotes {
         if pair.ends_with(quote) {
             return pair[..pair.len() - quote.len()].to_string();
-        }
-    }
-
-    // Handle Kraken's prefixed format
-    if pair.starts_with('X') && pair.len() > 4 {
-        // XXBTZEUR -> XBT, XETHZEUR -> ETH
-        if pair.contains("ZEUR") || pair.contains("ZUSD") {
-            let z_pos = pair.find('Z').unwrap_or(pair.len());
-            return pair[1..z_pos].to_string();
         }
     }
 

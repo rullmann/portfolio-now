@@ -60,17 +60,23 @@ pub fn export_transactions_csv(
         "#,
     );
 
+    // Build parameterized query to prevent SQL injection
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
     if let Some(ref ot) = owner_type {
-        query.push_str(&format!(" AND t.owner_type = '{}'", ot));
+        query.push_str(" AND t.owner_type = ?");
+        params.push(Box::new(ot.clone()));
     }
     if let Some(oid) = owner_id {
-        query.push_str(&format!(" AND t.owner_id = {}", oid));
+        query.push_str(" AND t.owner_id = ?");
+        params.push(Box::new(oid));
     }
     query.push_str(" ORDER BY t.date DESC");
 
     let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
-        .query_map([], |row| {
+        .query_map(params_refs.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

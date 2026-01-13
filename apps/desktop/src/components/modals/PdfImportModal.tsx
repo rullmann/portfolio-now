@@ -16,7 +16,6 @@ import {
 } from '../../lib/api';
 import { useEscapeKey } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
-import { AIProviderLogo } from '../common/AIProviderLogo';
 import type {
   SupportedBank,
   PdfImportPreview,

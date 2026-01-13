@@ -38,24 +38,11 @@ struct SimplePriceResponse {
     prices: HashMap<String, CoinPrice>,
 }
 
+/// CoinPrice uses flattened HashMap to handle any currency dynamically
 #[derive(Debug, Deserialize)]
 struct CoinPrice {
-    #[serde(default)]
-    eur: Option<f64>,
-    #[serde(default)]
-    usd: Option<f64>,
-    #[serde(default)]
-    eur_24h_high: Option<f64>,
-    #[serde(default)]
-    eur_24h_low: Option<f64>,
-    #[serde(default)]
-    usd_24h_high: Option<f64>,
-    #[serde(default)]
-    usd_24h_low: Option<f64>,
-    #[serde(default)]
-    eur_24h_vol: Option<f64>,
-    #[serde(default)]
-    usd_24h_vol: Option<f64>,
+    #[serde(flatten)]
+    values: HashMap<String, f64>,
 }
 
 /// CoinGecko market chart response for historical data
@@ -124,21 +111,14 @@ pub async fn fetch_quote(coin_id: &str, currency: &str, api_key: Option<&str>) -
         .get(coin_id)
         .ok_or_else(|| anyhow!("Coin {} not found in response", coin_id))?;
 
-    let (price, high, low, volume) = if currency_lower == "eur" {
-        (
-            coin_data.eur.ok_or_else(|| anyhow!("No EUR price"))?,
-            coin_data.eur_24h_high,
-            coin_data.eur_24h_low,
-            coin_data.eur_24h_vol.map(|v| v as i64),
-        )
-    } else {
-        (
-            coin_data.usd.ok_or_else(|| anyhow!("No USD price"))?,
-            coin_data.usd_24h_high,
-            coin_data.usd_24h_low,
-            coin_data.usd_24h_vol.map(|v| v as i64),
-        )
-    };
+    // Extract price, high, low, volume dynamically based on currency
+    let price = coin_data.values.get(&currency_lower)
+        .copied()
+        .ok_or_else(|| anyhow!("No {} price for {}", currency.to_uppercase(), coin_id))?;
+
+    let high = coin_data.values.get(&format!("{}_24h_high", currency_lower)).copied();
+    let low = coin_data.values.get(&format!("{}_24h_low", currency_lower)).copied();
+    let volume = coin_data.values.get(&format!("{}_24h_vol", currency_lower)).map(|v| *v as i64);
 
     let today = Utc::now().date_naive();
 

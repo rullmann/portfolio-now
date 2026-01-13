@@ -93,10 +93,11 @@ pub async fn sync_security_prices(
             };
             Some(quotes::SecurityQuoteRequest {
                 id: s.id,
-                symbol: s.ticker.or(s.isin).or(Some(s.name))?,
+                symbol: s.ticker.or(s.isin).or(Some(s.name.clone()))?,
                 provider,
                 feed_url: feed_url_to_use,
                 api_key,
+                currency: s.currency,
             })
         })
         .collect();
@@ -209,6 +210,7 @@ pub async fn sync_all_prices(
                 provider,
                 feed_url: feed_url_to_use,
                 api_key,
+                currency: s.currency,
             })
         })
         .collect();
@@ -574,6 +576,7 @@ struct SecurityInfo {
     latest_feed_url: Option<String>,    // URL/suffix for current quotes
     ticker: Option<String>,
     isin: Option<String>,
+    currency: Option<String>,           // Security's currency (for crypto providers)
 }
 
 // ============== Datenbank-Funktionen ==============
@@ -584,7 +587,7 @@ fn get_securities_for_sync(ids: Vec<i64>) -> anyhow::Result<Vec<SecurityInfo>> {
 
     let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
     let sql = format!(
-        "SELECT id, name, COALESCE(feed, 'YAHOO') as feed, feed_url, latest_feed, latest_feed_url, ticker, isin
+        "SELECT id, name, COALESCE(feed, 'YAHOO') as feed, feed_url, latest_feed, latest_feed_url, ticker, isin, currency
          FROM pp_security WHERE id IN ({})",
         placeholders.join(",")
     );
@@ -603,6 +606,7 @@ fn get_securities_for_sync(ids: Vec<i64>) -> anyhow::Result<Vec<SecurityInfo>> {
                 latest_feed_url: row.get(5)?,
                 ticker: row.get(6)?,
                 isin: row.get(7)?,
+                currency: row.get(8)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -621,7 +625,7 @@ fn get_all_securities_for_sync(only_held: bool) -> anyhow::Result<Vec<SecurityIn
     let sql = if only_held {
         "SELECT s.id, s.name,
                 COALESCE(NULLIF(s.feed, ''), 'YAHOO') as feed,
-                s.feed_url, s.latest_feed, s.latest_feed_url, s.ticker, s.isin
+                s.feed_url, s.latest_feed, s.latest_feed_url, s.ticker, s.isin, s.currency
          FROM pp_security s
          WHERE s.is_retired = 0
            AND (s.ticker IS NOT NULL AND s.ticker != ''
@@ -638,7 +642,7 @@ fn get_all_securities_for_sync(only_held: bool) -> anyhow::Result<Vec<SecurityIn
     } else {
         "SELECT id, name,
                 COALESCE(NULLIF(feed, ''), 'YAHOO') as feed,
-                feed_url, latest_feed, latest_feed_url, ticker, isin
+                feed_url, latest_feed, latest_feed_url, ticker, isin, currency
          FROM pp_security
          WHERE is_retired = 0
            AND (ticker IS NOT NULL AND ticker != ''
@@ -658,6 +662,7 @@ fn get_all_securities_for_sync(only_held: bool) -> anyhow::Result<Vec<SecurityIn
                 latest_feed_url: row.get(5)?,
                 ticker: row.get(6)?,
                 isin: row.get(7)?,
+                currency: row.get(8)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -672,7 +677,7 @@ fn get_security_by_id(id: i64) -> anyhow::Result<SecurityInfo> {
     let conn = conn_guard.as_ref().ok_or(anyhow::anyhow!("DB not initialized"))?;
 
     conn.query_row(
-        "SELECT id, name, COALESCE(feed, 'YAHOO') as feed, feed_url, latest_feed, latest_feed_url, ticker, isin
+        "SELECT id, name, COALESCE(feed, 'YAHOO') as feed, feed_url, latest_feed, latest_feed_url, ticker, isin, currency
          FROM pp_security WHERE id = ?",
         params![id],
         |row| {
@@ -685,6 +690,7 @@ fn get_security_by_id(id: i64) -> anyhow::Result<SecurityInfo> {
                 latest_feed_url: row.get(5)?,
                 ticker: row.get(6)?,
                 isin: row.get(7)?,
+                currency: row.get(8)?,
             })
         },
     )

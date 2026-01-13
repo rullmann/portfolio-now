@@ -680,7 +680,6 @@ pub async fn suggest_rebalance_with_ai(
 
         // Calculate values and weights
         let mut holdings_data: Vec<(i64, String, f64, f64, Option<f64>)> = Vec::new();
-        let mut total_value = 0.0;
 
         // First pass: calculate values
         let values: Vec<(i64, String, f64)> = rows
@@ -693,7 +692,7 @@ pub async fn suggest_rebalance_with_ai(
             })
             .collect();
 
-        total_value = values.iter().map(|(_, _, v)| v).sum();
+        let total_value: f64 = values.iter().map(|(_, _, v)| v).sum();
 
         if total_value <= 0.0 {
             return Err("Portfolio hat keinen Wert. Bitte aktualisiere die Kurse.".to_string());

@@ -135,7 +135,7 @@ pub struct IrrResult {
 /// Calculate TTWROR for a portfolio using Simple Return based on Cost Basis
 ///
 /// Simplified formula that matches the Dashboard box values:
-/// ```
+/// ```text
 /// TTWROR = (Current Value - Cost Basis) / Cost Basis
 /// ```
 ///
@@ -316,6 +316,7 @@ fn get_total_cost_basis_with_currency(
 }
 
 /// Get price at or near a specific date (with fallback to future prices and latest price)
+#[allow(dead_code)]
 fn get_price_at_or_near_date(
     conn: &Connection,
     security_id: i64,
@@ -351,6 +352,7 @@ fn get_price_at_or_near_date(
 }
 
 /// Calculate portfolio value at a specific date
+#[allow(dead_code)]
 fn calculate_portfolio_value_at_date(
     conn: &Connection,
     portfolio_id: Option<i64>,
@@ -422,6 +424,7 @@ fn calculate_portfolio_value_at_date(
 
 /// Get initial investment amount (sum of BUY amounts) up to a date
 /// Used as fallback when no price data is available
+#[allow(dead_code)]
 fn get_initial_investment_amount(
     conn: &Connection,
     portfolio_id: Option<i64>,
@@ -544,6 +547,7 @@ fn calculate_npv_and_derivative(cash_flows: &[(f64, f64)], rate: f64) -> (f64, f
 }
 
 /// Get portfolio values for each date in the range
+#[allow(dead_code)]
 fn get_portfolio_values(
     conn: &Connection,
     portfolio_id: Option<i64>,
