@@ -5,6 +5,58 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.1.1] - 2026-01-14
+
+### Sicherheit
+
+#### Secure Storage für API-Keys
+- **Tauri Plugin Store**: API-Keys werden jetzt sicher im App-Datenverzeichnis gespeichert statt im localStorage
+- **Automatische Migration**: Bestehende Keys werden beim ersten Start migriert
+- **useSecureApiKeys Hook**: React Hook für sichere Key-Verwaltung im Frontend
+- Shield-Icon in Einstellungen zeigt sichere Speicherung an
+
+#### Security-Modul (Backend)
+- **Pfadvalidierung**: `validate_file_path()` verhindert Directory Traversal Angriffe
+- **Rate Limiting**: `check_rate_limit()` für API-Aufrufe (vorbereitet)
+- **Input Sanitization**: `sanitize_string()`, `sanitize_filename()` für sichere Eingaben
+- Neues Modul: `src-tauri/src/security/mod.rs`
+
+#### AI Command Security
+- **Suggestions statt Auto-Execution**: Watchlist-Aktionen vom ChatBot erfordern jetzt User-Bestätigung
+- Gelber Hinweisbereich zeigt ausstehende Aktionen
+- Einzelne Bestätigung/Ablehnung pro Aktion
+- `parse_response_with_suggestions()` ersetzt `execute_watchlist_commands()`
+
+#### PDF-Import Consent
+- **OCR Consent Dialog**: Explizite Zustimmung vor Upload an KI-Provider
+- Informiert über Datenübertragung und Ziel-Service
+- `ocrConsentGiven` Flag muss gesetzt sein
+
+#### Capabilities & Permissions
+- `store:default` Permission für Secure Storage hinzugefügt
+- Dokumentierte Security-Hinweise in `capabilities/default.json`
+
+### Hinzugefügt
+
+#### Bulk Delete für Transaktionen
+- Mehrfachauswahl mit Checkboxen
+- `BulkDeleteConfirmModal` mit Bestätigungsdialog
+- Anzeige der zu löschenden Transaktionen vor Ausführung
+
+### Geändert
+
+- **CLAUDE.md**: Security-First Regeln und Code-Hygiene Pflichten hinzugefügt
+- **Store**: API-Keys werden nicht mehr in localStorage persistiert
+- **ChatPanel**: Suggestions-UI für Watchlist-Aktionen
+
+### Entfernt
+
+- `execute_watchlist_commands()` - ersetzt durch Suggestions-System
+- Ungenutzte Imports und Variablen (Code-Hygiene)
+- Module-Level `#![allow(dead_code)]` - ersetzt durch gezielte Annotationen
+
+---
+
 ## [0.1.0] - 2026-01-13
 
 ### Hinzugefügt
