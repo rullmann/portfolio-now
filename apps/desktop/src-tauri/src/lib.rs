@@ -10,6 +10,7 @@ pub mod performance;
 pub mod pp;
 pub mod protobuf;
 pub mod quotes;
+pub mod security;
 
 use tauri::Manager;
 
@@ -19,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             // Initialize database
             let app_data_dir = app.path().app_data_dir()?;
@@ -104,6 +106,7 @@ pub fn run() {
             commands::crud::create_transaction,
             commands::crud::update_transaction,
             commands::crud::delete_transaction,
+            commands::crud::delete_transactions_bulk,
             commands::crud::get_transaction,
             // Database Reset
             commands::crud::delete_all_data,
@@ -226,6 +229,7 @@ pub fn run() {
             // AI Portfolio Insights & Chat
             commands::ai::analyze_portfolio_with_ai,
             commands::ai::chat_with_portfolio_assistant,
+            commands::ai::execute_confirmed_ai_action,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,

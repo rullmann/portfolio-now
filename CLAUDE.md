@@ -418,6 +418,78 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 
 ---
 
+## 🔒 Security (WICHTIG!)
+
+Die App implementiert mehrere Sicherheitsmaßnahmen. Bei Code-Änderungen MÜSSEN diese beachtet werden:
+
+### Implementierte Sicherheitsmaßnahmen
+
+| Maßnahme | Modul | Beschreibung |
+|----------|-------|--------------|
+| **CSP aktiviert** | `tauri.conf.json` | Content Security Policy verhindert XSS |
+| **Permissions eingeschränkt** | `capabilities/default.json` | Keine direkten FS/Shell-Permissions mehr |
+| **Pfadvalidierung** | `security/mod.rs` | `validate_file_path()` verhindert Directory Traversal |
+| **AI-Commands als Suggestions** | `ai/command_parser.rs` | Watchlist-Aktionen erfordern User-Bestätigung |
+| **PDF-OCR Consent Dialog** | `PdfImportModal.tsx` | Explizite Zustimmung für KI-Upload erforderlich |
+| **AI Suggestions Bestätigung** | `ChatPanel.tsx` | Watchlist-Änderungen erfordern manuelle Bestätigung |
+| **ZIP-Bomb-Schutz** | `protobuf/parser.rs` | `MAX_UNCOMPRESSED_SIZE` Limit (500 MB) |
+| **Rate Limiting** | `security/mod.rs` | `check_rate_limit()` für häufige Operationen |
+| **Sichere API-Key Speicherung** | `secureStorage.ts` | Tauri Plugin Store statt localStorage |
+
+### API-Keys (Secure Storage)
+
+API-Keys werden sicher mit `tauri-plugin-store` gespeichert:
+- Speicherort: `app_data_dir/secure-keys.json`
+- Migration von localStorage erfolgt automatisch beim ersten Start
+- Hook: `useSecureApiKeys()` für Frontend-Zugriff
+- Shield-Icon zeigt sichere Speicherung in Settings an
+
+```typescript
+// Frontend: Sichere API-Keys verwenden
+import { useSecureApiKeys } from '../hooks/useSecureApiKeys';
+
+const { keys, setApiKey, isSecureStorageAvailable } = useSecureApiKeys();
+
+// Key setzen (speichert in Secure Storage + Zustand)
+await setApiKey('anthropic', 'sk-ant-...');
+```
+
+### Security-Modul (`src-tauri/src/security/mod.rs`)
+
+```rust
+// Pfadvalidierung für alle Dateizugriffe
+use crate::security;
+let path = security::validate_file_path_with_extension(&user_path, Some(&["portfolio"]))?;
+
+// Rate Limiting
+use crate::security::{check_rate_limit, limits};
+check_rate_limit("sync_prices", &limits::price_sync())?;
+```
+
+### Consent-Dialoge im Frontend
+
+**PDF-OCR Consent** (`PdfImportModal.tsx`):
+- Erscheint wenn User OCR aktiviert
+- Informiert über Datenübertragung an KI-Provider
+- `ocrConsentGiven` Flag muss `true` sein für OCR
+
+**AI Suggestions Bestätigung** (`ChatPanel.tsx`):
+- Watchlist-Aktionen (add/remove) werden als Suggestions zurückgegeben
+- Gelber Hinweisbereich zeigt pending Suggestions
+- Benutzer muss jede Aktion einzeln bestätigen oder ablehnen
+- `execute_confirmed_ai_action` Command für bestätigte Aktionen
+
+### Bei neuen Tauri Commands IMMER prüfen
+
+1. **Pfade validieren**: `security::validate_file_path()` verwenden
+2. **User-Input sanitizen**: `security::sanitize_string()` für Dateinamen
+3. **AI-Outputs nicht automatisch ausführen**: Suggestions zurückgeben
+4. **Externe Uploads**: Explizites Consent-Flag erfordern
+5. **Keine `.unwrap()` bei User-Input**: `?` oder `.map_err()` verwenden
+6. **API-Keys**: Niemals loggen oder in Fehlermeldungen anzeigen
+
+---
+
 ## Bekannte Fallen
 
 1. **Holdings vs FIFO:** Niemals FIFO-Lots für Stückzahlen verwenden

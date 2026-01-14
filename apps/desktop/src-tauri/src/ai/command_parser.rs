@@ -2,17 +2,21 @@
 //!
 //! This module handles parsing and executing commands embedded in AI responses,
 //! such as watchlist modifications and transaction queries.
+//!
+//! SECURITY: Commands are parsed and returned as suggestions. Execution requires
+//! explicit user confirmation via separate Tauri commands. This prevents prompt
+//! injection attacks where malicious data could trigger unwanted actions.
 
 use crate::commands::ai_helpers;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Watchlist Commands
 // ============================================================================
 
 /// Watchlist command parsed from AI response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchlistCommand {
     pub action: String, // "add" or "remove"
@@ -79,42 +83,6 @@ pub fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, Strin
     cleaned_response = cleaned_response.trim_start().to_string();
 
     (commands, cleaned_response)
-}
-
-/// Execute watchlist commands
-pub async fn execute_watchlist_commands(
-    commands: &[WatchlistCommand],
-    alpha_vantage_api_key: Option<String>,
-) -> Vec<String> {
-    let mut results = Vec::new();
-
-    for cmd in commands {
-        let result = match cmd.action.as_str() {
-            "add" => {
-                match ai_helpers::ai_add_to_watchlist(
-                    cmd.watchlist.clone(),
-                    cmd.security.clone(),
-                    alpha_vantage_api_key.clone(),
-                ).await {
-                    Ok(r) => r.message,
-                    Err(e) => format!("Fehler: {}", e),
-                }
-            }
-            "remove" => {
-                match ai_helpers::ai_remove_from_watchlist(
-                    cmd.watchlist.clone(),
-                    cmd.security.clone(),
-                ) {
-                    Ok(r) => r.message,
-                    Err(e) => format!("Fehler: {}", e),
-                }
-            }
-            _ => continue,
-        };
-        results.push(result);
-    }
-
-    results
 }
 
 // ============================================================================
@@ -285,47 +253,120 @@ pub fn execute_portfolio_value_queries(queries: &[PortfolioValueQuery]) -> Vec<S
 // Combined Response Processing
 // ============================================================================
 
-/// Process all embedded commands in AI response
-///
-/// Parses and executes watchlist, transaction, and portfolio value commands.
-/// Returns the cleaned response text with command results appended.
-pub async fn process_response_commands(
-    response: String,
-    alpha_vantage_api_key: Option<String>,
-    emit_watchlist_update: impl Fn(),
-) -> (String, Vec<String>) {
-    let mut current_response = response;
-    let mut additional_results: Vec<String> = Vec::new();
+/// Suggested action from AI response that requires user confirmation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedAction {
+    /// Type of action: "watchlist_add", "watchlist_remove", "query_transactions", "query_portfolio_value"
+    pub action_type: String,
+    /// Human-readable description of the action
+    pub description: String,
+    /// JSON payload for the action
+    pub payload: String,
+}
 
-    // Parse and execute watchlist commands
+/// Result of parsing AI response for commands
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedResponseWithSuggestions {
+    /// Cleaned response text without command tags
+    pub cleaned_response: String,
+    /// Suggested actions that require user confirmation
+    pub suggestions: Vec<SuggestedAction>,
+    /// Results from read-only queries (transactions, portfolio value)
+    pub query_results: Vec<String>,
+}
+
+/// Parse AI response and extract suggestions without executing anything dangerous
+///
+/// SECURITY: This is the secure parsing function that:
+/// - Parses all command types from AI response
+/// - Returns watchlist commands as SUGGESTIONS (not executed)
+/// - Executes ONLY read-only queries (transaction queries, portfolio value queries)
+/// - Returns structured result for frontend to handle
+pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
+    let mut current_response = response;
+    let mut suggestions: Vec<SuggestedAction> = Vec::new();
+    let mut query_results: Vec<String> = Vec::new();
+
+    // Parse watchlist commands - DO NOT EXECUTE, return as suggestions
     let (wl_commands, cleaned) = parse_watchlist_commands(&current_response);
     current_response = cleaned;
 
-    if !wl_commands.is_empty() {
-        let results = execute_watchlist_commands(&wl_commands, alpha_vantage_api_key).await;
-        emit_watchlist_update();
-        additional_results.extend(results);
+    for cmd in wl_commands {
+        let (action_type, description) = match cmd.action.as_str() {
+            "add" => (
+                "watchlist_add".to_string(),
+                format!("\"{}\" zur Watchlist \"{}\" hinzufügen", cmd.security, cmd.watchlist),
+            ),
+            "remove" => (
+                "watchlist_remove".to_string(),
+                format!("\"{}\" von Watchlist \"{}\" entfernen", cmd.security, cmd.watchlist),
+            ),
+            _ => continue,
+        };
+
+        suggestions.push(SuggestedAction {
+            action_type,
+            description,
+            payload: serde_json::to_string(&cmd).unwrap_or_default(),
+        });
     }
 
-    // Parse and execute transaction queries
+    // Parse and execute transaction queries (READ-ONLY, safe to execute)
     let (txn_queries, cleaned) = parse_transaction_queries(&current_response);
     current_response = cleaned;
 
     if !txn_queries.is_empty() {
         let results = execute_transaction_queries(&txn_queries);
-        additional_results.extend(results);
+        query_results.extend(results);
     }
 
-    // Parse and execute portfolio value queries
+    // Parse and execute portfolio value queries (READ-ONLY, safe to execute)
     let (pv_queries, cleaned) = parse_portfolio_value_queries(&current_response);
     current_response = cleaned;
 
     if !pv_queries.is_empty() {
         let results = execute_portfolio_value_queries(&pv_queries);
-        additional_results.extend(results);
+        query_results.extend(results);
     }
 
-    (current_response, additional_results)
+    ParsedResponseWithSuggestions {
+        cleaned_response: current_response,
+        suggestions,
+        query_results,
+    }
+}
+
+/// Execute a confirmed watchlist action
+///
+/// SECURITY: This should only be called after explicit user confirmation
+pub async fn execute_confirmed_watchlist_action(
+    action_type: &str,
+    payload: &str,
+    alpha_vantage_api_key: Option<String>,
+) -> Result<String, String> {
+    let cmd: WatchlistCommand = serde_json::from_str(payload)
+        .map_err(|e| format!("Invalid payload: {}", e))?;
+
+    match action_type {
+        "watchlist_add" => {
+            ai_helpers::ai_add_to_watchlist(
+                cmd.watchlist,
+                cmd.security,
+                alpha_vantage_api_key,
+            )
+            .await
+            .map(|r| r.message)
+            .map_err(|e| e.to_string())
+        }
+        "watchlist_remove" => {
+            ai_helpers::ai_remove_from_watchlist(cmd.watchlist, cmd.security)
+                .map(|r| r.message)
+                .map_err(|e| e.to_string())
+        }
+        _ => Err(format!("Unknown action type: {}", action_type)),
+    }
 }
 
 // ============================================================================

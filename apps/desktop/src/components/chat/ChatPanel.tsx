@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare, GripVertical } from 'lucide-react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
@@ -23,11 +23,18 @@ interface ChatPanelProps {
   onClose: () => void;
 }
 
+interface SuggestedAction {
+  actionType: string;
+  description: string;
+  payload: string;
+}
+
 interface PortfolioChatResponse {
   response: string;
   provider: string;
   model: string;
   tokensUsed: number | null;
+  suggestions?: SuggestedAction[];
 }
 
 const EXAMPLE_QUESTIONS = [
@@ -58,6 +65,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingSuggestions, setPendingSuggestions] = useState<SuggestedAction[]>([]);
+  const [executingSuggestion, setExecutingSuggestion] = useState<string | null>(null);
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY_WIDTH);
     return saved ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, parseInt(saved, 10))) : DEFAULT_WIDTH;
@@ -179,7 +188,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           model: aiModel,
           apiKey: getApiKey(),
           baseCurrency: baseCurrency || 'EUR',
-          alphaVantageApiKey: alphaVantageApiKey || null,
           userName: userName || null,
         },
       });
@@ -192,6 +200,11 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+
+      // Store any suggestions that need user confirmation
+      if (response.suggestions && response.suggestions.length > 0) {
+        setPendingSuggestions(response.suggestions);
+      }
     } catch (err) {
       const errorMessage = typeof err === 'string' ? err : String(err);
 
@@ -221,6 +234,44 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   const deleteMessage = (id: string) => {
     setMessages((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  // Execute a confirmed suggestion
+  const executeSuggestion = async (suggestion: SuggestedAction) => {
+    setExecutingSuggestion(suggestion.payload);
+    try {
+      const result = await invoke<string>('execute_confirmed_ai_action', {
+        actionType: suggestion.actionType,
+        payload: suggestion.payload,
+        alphaVantageApiKey: alphaVantageApiKey || null,
+      });
+
+      // Add success message
+      const successMessage: ChatMessageData = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `✓ ${result}`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, successMessage]);
+
+      // Remove executed suggestion
+      setPendingSuggestions((prev) => prev.filter((s) => s.payload !== suggestion.payload));
+    } catch (err) {
+      setError(typeof err === 'string' ? err : String(err));
+    } finally {
+      setExecutingSuggestion(null);
+    }
+  };
+
+  // Decline a suggestion
+  const declineSuggestion = (suggestion: SuggestedAction) => {
+    setPendingSuggestions((prev) => prev.filter((s) => s.payload !== suggestion.payload));
+  };
+
+  // Decline all suggestions
+  const declineAllSuggestions = () => {
+    setPendingSuggestions([]);
   };
 
   if (!isOpen) return null;
@@ -320,6 +371,51 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           {error && (
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
               {error}
+            </div>
+          )}
+
+          {/* Pending Suggestions - Require user confirmation */}
+          {pendingSuggestions.length > 0 && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-3">
+              <div className="flex items-center gap-2 text-amber-600">
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-sm font-medium">
+                  {pendingSuggestions.length === 1 ? 'Aktion erfordert Bestätigung' : `${pendingSuggestions.length} Aktionen erfordern Bestätigung`}
+                </span>
+                {pendingSuggestions.length > 1 && (
+                  <button
+                    onClick={declineAllSuggestions}
+                    className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Alle ablehnen
+                  </button>
+                )}
+              </div>
+              {pendingSuggestions.map((suggestion, idx) => (
+                <div key={idx} className="flex items-center gap-2 bg-background/50 rounded-md p-2">
+                  <span className="flex-1 text-sm">{suggestion.description}</span>
+                  <button
+                    onClick={() => executeSuggestion(suggestion)}
+                    disabled={executingSuggestion !== null}
+                    className="p-1.5 rounded bg-green-500/20 text-green-600 hover:bg-green-500/30 disabled:opacity-50"
+                    title="Bestätigen"
+                  >
+                    {executingSuggestion === suggestion.payload ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => declineSuggestion(suggestion)}
+                    disabled={executingSuggestion !== null}
+                    className="p-1.5 rounded bg-red-500/20 text-red-600 hover:bg-red-500/30 disabled:opacity-50"
+                    title="Ablehnen"
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 

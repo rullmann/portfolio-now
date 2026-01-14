@@ -816,6 +816,7 @@ pub async fn chat(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            suggestions: Vec::new(),
         });
     }
 

@@ -1168,6 +1168,221 @@ pub fn delete_transaction(app: AppHandle, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Result of bulk transaction deletion
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkDeleteResult {
+    /// Number of directly selected transactions that were deleted
+    pub deleted_count: usize,
+    /// Number of linked transactions that were also deleted (via cross-entries)
+    pub linked_deleted_count: usize,
+    /// Security IDs that had their FIFO lots rebuilt
+    pub affected_securities: Vec<i64>,
+}
+
+/// Delete multiple transactions at once
+/// Automatically deletes linked cross-entry transactions (e.g., account side of BUY/SELL)
+/// Rebuilds FIFO cost basis once per affected security
+#[command]
+pub fn delete_transactions_bulk(app: AppHandle, ids: Vec<i64>) -> Result<BulkDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BulkDeleteResult {
+            deleted_count: 0,
+            linked_deleted_count: 0,
+            affected_securities: vec![],
+        });
+    }
+
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // 1. Gather info for all selected transactions
+    let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let query = format!(
+        "SELECT owner_type, security_id, cross_entry_id FROM pp_txn WHERE id IN ({})",
+        placeholders
+    );
+
+    let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+    let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+    struct TxnInfo {
+        owner_type: String,
+        security_id: Option<i64>,
+        cross_entry_id: Option<i64>,
+    }
+
+    let txn_infos: Vec<TxnInfo> = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok(TxnInfo {
+                owner_type: row.get(0)?,
+                security_id: row.get(1)?,
+                cross_entry_id: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let selected_count = txn_infos.len();
+
+    // 2. Collect all cross-entry IDs and find linked transactions
+    let cross_entry_ids: Vec<i64> = txn_infos
+        .iter()
+        .filter_map(|t| t.cross_entry_id)
+        .collect();
+
+    let mut all_ids: std::collections::HashSet<i64> = ids.iter().copied().collect();
+    let mut linked_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+    if !cross_entry_ids.is_empty() {
+        // Find all linked transactions via cross-entries
+        let ce_placeholders: String = cross_entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let ce_query = format!(
+            r#"SELECT
+                portfolio_txn_id, account_txn_id, from_txn_id, to_txn_id
+            FROM pp_cross_entry
+            WHERE id IN ({})"#,
+            ce_placeholders
+        );
+
+        let mut ce_stmt = conn.prepare(&ce_query).map_err(|e| e.to_string())?;
+        let ce_params: Vec<&dyn rusqlite::ToSql> = cross_entry_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+
+        let ce_rows = ce_stmt
+            .query_map(ce_params.as_slice(), |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for row in ce_rows.filter_map(|r| r.ok()) {
+            if let Some(id) = row.0 {
+                if !all_ids.contains(&id) {
+                    linked_ids.insert(id);
+                    all_ids.insert(id);
+                }
+            }
+            if let Some(id) = row.1 {
+                if !all_ids.contains(&id) {
+                    linked_ids.insert(id);
+                    all_ids.insert(id);
+                }
+            }
+            if let Some(id) = row.2 {
+                if !all_ids.contains(&id) {
+                    linked_ids.insert(id);
+                    all_ids.insert(id);
+                }
+            }
+            if let Some(id) = row.3 {
+                if !all_ids.contains(&id) {
+                    linked_ids.insert(id);
+                    all_ids.insert(id);
+                }
+            }
+        }
+    }
+
+    // 3. Collect affected securities for FIFO rebuild (portfolio transactions with security_id)
+    let mut affected_securities: std::collections::HashSet<i64> = txn_infos
+        .iter()
+        .filter(|t| t.owner_type == "portfolio")
+        .filter_map(|t| t.security_id)
+        .collect();
+
+    // Also get security_ids from linked transactions
+    if !linked_ids.is_empty() {
+        let linked_placeholders: String = linked_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let linked_query = format!(
+            "SELECT security_id FROM pp_txn WHERE id IN ({}) AND owner_type = 'portfolio' AND security_id IS NOT NULL",
+            linked_placeholders
+        );
+        let mut linked_stmt = conn.prepare(&linked_query).map_err(|e| e.to_string())?;
+        let linked_params: Vec<&dyn rusqlite::ToSql> = linked_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+
+        let linked_sec_ids = linked_stmt
+            .query_map(linked_params.as_slice(), |row| row.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?;
+
+        for sec_id in linked_sec_ids.filter_map(|r| r.ok()) {
+            affected_securities.insert(sec_id);
+        }
+    }
+
+    // 4. Delete in correct order
+    let all_ids_vec: Vec<i64> = all_ids.iter().copied().collect();
+    let all_placeholders: String = all_ids_vec.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let all_params: Vec<&dyn rusqlite::ToSql> = all_ids_vec
+        .iter()
+        .map(|id| id as &dyn rusqlite::ToSql)
+        .collect();
+
+    // 4a. Delete transaction units
+    let delete_units_query = format!("DELETE FROM pp_txn_unit WHERE txn_id IN ({})", all_placeholders);
+    conn.execute(&delete_units_query, all_params.as_slice())
+        .map_err(|e| e.to_string())?;
+
+    // 4b. Delete cross-entries
+    if !cross_entry_ids.is_empty() {
+        let ce_del_placeholders: String = cross_entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let delete_ce_query = format!("DELETE FROM pp_cross_entry WHERE id IN ({})", ce_del_placeholders);
+        let ce_del_params: Vec<&dyn rusqlite::ToSql> = cross_entry_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        conn.execute(&delete_ce_query, ce_del_params.as_slice())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 4c. Delete transactions
+    let delete_txn_query = format!("DELETE FROM pp_txn WHERE id IN ({})", all_placeholders);
+    conn.execute(&delete_txn_query, all_params.as_slice())
+        .map_err(|e| e.to_string())?;
+
+    // 5. Rebuild FIFO lots once per affected security
+    let affected_securities_vec: Vec<i64> = affected_securities.iter().copied().collect();
+    for sec_id in &affected_securities_vec {
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, *sec_id) {
+            log::warn!("Failed to rebuild FIFO lots for security {}: {}", sec_id, e);
+        }
+    }
+
+    // 6. Emit single event
+    let security_ids_option = if affected_securities_vec.is_empty() {
+        None
+    } else {
+        Some(affected_securities_vec.clone())
+    };
+    emit_data_changed(
+        &app,
+        DataChangedPayload {
+            entity: "transaction".to_string(),
+            action: "bulk_deleted".to_string(),
+            security_ids: security_ids_option,
+            portfolio_ids: None,
+        },
+    );
+
+    Ok(BulkDeleteResult {
+        deleted_count: selected_count,
+        linked_deleted_count: linked_ids.len(),
+        affected_securities: affected_securities_vec,
+    })
+}
+
 /// Update transaction request
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

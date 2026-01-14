@@ -8,9 +8,9 @@ use crate::pp::{
     Account, Client, LatestPrice, Portfolio, PriceEntry, Security,
 };
 use crate::protobuf;
+use crate::security;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tauri::command;
 
 /// Information about a recently opened file
@@ -36,24 +36,35 @@ pub fn create_new_portfolio(base_currency: Option<String>) -> Client {
 }
 
 /// Open a portfolio file from a given path
+///
+/// # Security
+/// Path is validated to prevent directory traversal and access to unauthorized locations.
 #[command]
 pub async fn open_portfolio_file(path: String) -> Result<OpenResult, String> {
-    let path_buf = PathBuf::from(&path);
+    // SECURITY: Validate the file path
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["portfolio"]))?;
 
-    if !path_buf.exists() {
+    if !validated_path.exists() {
         return Err("File does not exist".to_string());
     }
 
-    let portfolio = protobuf::parse_portfolio_file(&path_buf).map_err(|e| e.to_string())?;
+    let portfolio = protobuf::parse_portfolio_file(&validated_path).map_err(|e| e.to_string())?;
 
-    Ok(OpenResult { path, portfolio })
+    Ok(OpenResult {
+        path: validated_path.to_string_lossy().to_string(),
+        portfolio,
+    })
 }
 
 /// Save a portfolio file to a given path
+///
+/// # Security
+/// Path is validated to prevent directory traversal and access to unauthorized locations.
 #[command]
 pub async fn save_portfolio_file(path: String, client: Client) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    protobuf::write_portfolio_file(&path_buf, &client).map_err(|e| e.to_string())
+    // SECURITY: Validate the file path
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["portfolio"]))?;
+    protobuf::write_portfolio_file(&validated_path, &client).map_err(|e| e.to_string())
 }
 
 /// Get the file extension for Portfolio Performance files
@@ -63,15 +74,19 @@ pub fn get_file_extension() -> String {
 }
 
 /// Validate a portfolio file without fully loading it
+///
+/// # Security
+/// Path is validated to prevent directory traversal and access to unauthorized locations.
 #[command]
 pub async fn validate_portfolio_file(path: String) -> Result<bool, String> {
-    let path_buf = PathBuf::from(&path);
+    // SECURITY: Validate the file path
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["portfolio"]))?;
 
-    if !path_buf.exists() {
+    if !validated_path.exists() {
         return Err("File does not exist".to_string());
     }
 
-    match protobuf::parse_portfolio_file(&path_buf) {
+    match protobuf::parse_portfolio_file(&validated_path) {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("Invalid portfolio file: {}", e)),
     }
@@ -103,9 +118,13 @@ pub struct PortfolioStats {
 }
 
 /// Export database to a .portfolio file
+///
+/// # Security
+/// Path is validated to prevent directory traversal and access to unauthorized locations.
 #[command]
 pub async fn export_database_to_portfolio(path: String) -> Result<ExportResult, String> {
-    let path_buf = PathBuf::from(&path);
+    // SECURITY: Validate the file path
+    let path_buf = security::validate_file_path_with_extension(&path, Some(&["portfolio"]))?;
 
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
@@ -142,7 +161,7 @@ pub async fn export_database_to_portfolio(path: String) -> Result<ExportResult, 
     protobuf::write_portfolio_file(&path_buf, &client).map_err(|e| e.to_string())?;
 
     Ok(ExportResult {
-        path,
+        path: path_buf.to_string_lossy().to_string(),
         securities_count,
         accounts_count,
         portfolios_count,

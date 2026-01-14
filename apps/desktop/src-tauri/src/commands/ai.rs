@@ -11,11 +11,11 @@ use crate::ai::{
     get_model_upgrade, get_models_for_provider, ModelInfo,
     AiModelInfo, AiError, ChartAnalysisRequest, ChartAnalysisResponse, AnnotationAnalysisResponse,
     EnhancedChartAnalysisRequest, EnhancedAnnotationAnalysisResponse,
-    PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
+    PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
     // Context loading from ai/context.rs
     load_portfolio_context,
     // Command parsing from ai/command_parser.rs
-    process_response_commands,
+    parse_response_with_suggestions,
 };
 use serde::Deserialize;
 use tauri::{command, AppHandle, Emitter};
@@ -211,7 +211,6 @@ pub struct PortfolioChatRequest {
     pub model: String,
     pub api_key: String,
     pub base_currency: String,
-    pub alpha_vantage_api_key: Option<String>,
     pub user_name: Option<String>,
 }
 
@@ -221,7 +220,7 @@ pub struct PortfolioChatRequest {
 /// The AI can execute embedded commands for watchlist management and data queries.
 #[command]
 pub async fn chat_with_portfolio_assistant(
-    app: AppHandle,
+    _app: AppHandle,
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
     // Load portfolio context from database with user name
@@ -244,32 +243,74 @@ pub async fn chat_with_portfolio_assistant(
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
-    // Process the result using the command parser module
+    // Process the result using the secure suggestion-based command parser
+    // SECURITY: This uses parse_response_with_suggestions which:
+    // - Returns watchlist modifications as SUGGESTIONS (not executed)
+    // - Only executes read-only queries (transactions, portfolio value)
     match result {
         Ok(mut response) => {
-            // Process all embedded commands (watchlist, transactions, portfolio value queries)
-            // The emit callback is called when watchlist commands are executed
-            let app_handle = app.clone();
-            let (cleaned_response, additional_results) = process_response_commands(
-                response.response.clone(),
-                request.alpha_vantage_api_key,
-                move || { let _ = app_handle.emit("watchlist-updated", ()); },
-            ).await;
+            // Parse response and extract suggestions (watchlist commands NOT executed)
+            let parsed = parse_response_with_suggestions(response.response.clone());
 
             // Update response with cleaned text
-            response.response = cleaned_response;
+            response.response = parsed.cleaned_response;
 
-            // If there are command results, append or replace
-            if !additional_results.is_empty() {
+            // Append query results if any (read-only queries are safe to execute)
+            if !parsed.query_results.is_empty() {
                 if response.response.trim().is_empty() || response.response.len() < 10 {
-                    response.response = additional_results.join("\n\n");
+                    response.response = parsed.query_results.join("\n\n");
                 } else {
-                    response.response = format!("{}\n\n{}", response.response, additional_results.join("\n\n"));
+                    response.response = format!("{}\n\n{}", response.response, parsed.query_results.join("\n\n"));
                 }
             }
+
+            // Convert suggestions to response format
+            // Frontend must display these and get user confirmation before executing
+            response.suggestions = parsed.suggestions
+                .into_iter()
+                .map(|s| ChatSuggestedAction {
+                    action_type: s.action_type,
+                    description: s.description,
+                    payload: s.payload,
+                })
+                .collect();
 
             Ok(response)
         }
         Err(e) => Err(serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())),
     }
+}
+
+// ============================================================================
+// Confirmed Action Execution (Security)
+// ============================================================================
+
+/// Execute a confirmed AI-suggested watchlist action
+///
+/// SECURITY: This command should only be called after explicit user confirmation.
+/// The frontend must display the suggested action and get user approval before
+/// calling this command. This prevents prompt injection attacks.
+#[command]
+pub async fn execute_confirmed_ai_action(
+    app: AppHandle,
+    action_type: String,
+    payload: String,
+    alpha_vantage_api_key: Option<String>,
+) -> Result<String, String> {
+    use crate::ai::execute_confirmed_watchlist_action;
+
+    log::info!("Executing confirmed AI action: {} with payload: {}", action_type, payload);
+
+    let result = execute_confirmed_watchlist_action(
+        &action_type,
+        &payload,
+        alpha_vantage_api_key,
+    ).await?;
+
+    // Emit watchlist update event if successful
+    if action_type.starts_with("watchlist") {
+        let _ = app.emit("watchlist-updated", ());
+    }
+
+    Ok(result)
 }

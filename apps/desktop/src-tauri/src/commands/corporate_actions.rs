@@ -197,7 +197,7 @@ pub fn preview_stock_split(
     // Count FIFO lots
     let fifo_lots_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM pp_fifo_lot WHERE security_id = ? AND shares > 0",
+            "SELECT COUNT(*) FROM pp_fifo_lot WHERE security_id = ? AND remaining_shares > 0",
             [security_id],
             |row| row.get(0),
         )
@@ -253,15 +253,15 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
     }
 
     // 2. Adjust FIFO lots
-    // Adjust remaining shares
+    // Adjust shares (both original and remaining) - cost basis stays the same
     let result = conn.execute(
         r#"
         UPDATE pp_fifo_lot
-        SET shares = CAST(shares * ? AS INTEGER),
-            cost_per_share = CAST(cost_per_share * ? AS INTEGER)
-        WHERE security_id = ? AND date < ?
+        SET original_shares = CAST(original_shares * ? AS INTEGER),
+            remaining_shares = CAST(remaining_shares * ? AS INTEGER)
+        WHERE security_id = ? AND purchase_date < ?
         "#,
-        rusqlite::params![ratio, inverse_ratio, request.security_id, request.effective_date],
+        rusqlite::params![ratio, ratio, request.security_id, request.effective_date],
     );
     if let Ok(count) = result {
         fifo_lots_adjusted = count as i64;
@@ -418,47 +418,54 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
                 // Get original cost basis from source security FIFO lots
                 let source_cost: i64 = conn
                     .query_row(
-                        "SELECT COALESCE(SUM(total_cost), 0) FROM pp_fifo_lot WHERE security_id = ? AND portfolio_id = ?",
+                        "SELECT COALESCE(SUM(gross_amount), 0) FROM pp_fifo_lot WHERE security_id = ? AND portfolio_id = ?",
                         rusqlite::params![request.source_security_id, portfolio_id],
                         |row| row.get(0),
                     )
                     .unwrap_or(0);
 
                 let allocated_cost = (source_cost as f64 * request.cost_allocation) as i64;
-                let cost_per_share = if new_shares > 0 {
-                    ((allocated_cost as f64 / shares::to_decimal(new_shares)) * 100_000_000.0) as i64
-                } else {
-                    0
-                };
+                // net_amount is same as gross for spin-offs (no fees)
+                let net_cost = allocated_cost;
 
-                let lot_uuid = uuid::Uuid::new_v4().to_string();
+                // Get the transaction ID we just created
+                let txn_id: i64 = conn
+                    .query_row(
+                        "SELECT id FROM pp_txn WHERE uuid = ?",
+                        rusqlite::params![uuid],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+
                 let _ = conn.execute(
                     r#"
-                    INSERT INTO pp_fifo_lot (security_id, portfolio_id, txn_id, date, shares, cost_per_share, total_cost)
-                    VALUES (?, ?, (SELECT id FROM pp_txn WHERE uuid = ?), ?, ?, ?, ?)
+                    INSERT INTO pp_fifo_lot (security_id, portfolio_id, purchase_txn_id, purchase_date, original_shares, remaining_shares, gross_amount, net_amount, currency)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR')
                     "#,
                     rusqlite::params![
                         request.target_security_id,
                         portfolio_id,
-                        lot_uuid,
+                        txn_id,
                         request.effective_date,
                         new_shares,
-                        cost_per_share,
-                        allocated_cost
+                        new_shares,
+                        allocated_cost,
+                        net_cost
                     ],
                 );
 
                 // Reduce cost basis in source security FIFO lots proportionally
+                let reduction_factor = 1.0 - request.cost_allocation;
                 let _ = conn.execute(
                     r#"
                     UPDATE pp_fifo_lot
-                    SET total_cost = CAST(total_cost * ? AS INTEGER),
-                        cost_per_share = CAST(cost_per_share * ? AS INTEGER)
+                    SET gross_amount = CAST(gross_amount * ? AS INTEGER),
+                        net_amount = CAST(net_amount * ? AS INTEGER)
                     WHERE security_id = ? AND portfolio_id = ?
                     "#,
                     rusqlite::params![
-                        1.0 - request.cost_allocation,
-                        1.0 - request.cost_allocation,
+                        reduction_factor,
+                        reduction_factor,
                         request.source_security_id,
                         portfolio_id
                     ],

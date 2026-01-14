@@ -481,10 +481,46 @@ export const useSettingsStore = create<SettingsState>()(
 
         return merged;
       },
-      // Exclude transient state from persistence
+      // Exclude transient state and API keys from persistence
+      // API keys are stored securely via tauri-plugin-store (see useSecureApiKeys hook)
       partialize: (state) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { pendingModelMigration, clearPendingModelMigration, ...persisted } = state;
+        const {
+          // Transient state
+          pendingModelMigration,
+          clearPendingModelMigration,
+          // API keys (stored in Secure Storage, not localStorage)
+          brandfetchApiKey,
+          setBrandfetchApiKey,
+          finnhubApiKey,
+          setFinnhubApiKey,
+          coingeckoApiKey,
+          setCoingeckoApiKey,
+          alphaVantageApiKey,
+          setAlphaVantageApiKey,
+          twelveDataApiKey,
+          setTwelveDataApiKey,
+          anthropicApiKey,
+          setAnthropicApiKey,
+          openaiApiKey,
+          setOpenaiApiKey,
+          geminiApiKey,
+          setGeminiApiKey,
+          perplexityApiKey,
+          setPerplexityApiKey,
+          // Keep the rest
+          ...persisted
+        } = state;
+        // Suppress unused variable warnings
+        void brandfetchApiKey; void setBrandfetchApiKey;
+        void finnhubApiKey; void setFinnhubApiKey;
+        void coingeckoApiKey; void setCoingeckoApiKey;
+        void alphaVantageApiKey; void setAlphaVantageApiKey;
+        void twelveDataApiKey; void setTwelveDataApiKey;
+        void anthropicApiKey; void setAnthropicApiKey;
+        void openaiApiKey; void setOpenaiApiKey;
+        void geminiApiKey; void setGeminiApiKey;
+        void perplexityApiKey; void setPerplexityApiKey;
+        void pendingModelMigration; void clearPendingModelMigration;
         return persisted as SettingsState;
       },
     }

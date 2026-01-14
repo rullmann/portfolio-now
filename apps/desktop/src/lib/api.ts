@@ -573,6 +573,27 @@ export async function deleteTransaction(id: number): Promise<void> {
 }
 
 /**
+ * Result of bulk transaction deletion.
+ */
+export interface BulkDeleteResult {
+  /** Number of directly selected transactions that were deleted */
+  deletedCount: number;
+  /** Number of linked transactions that were also deleted (via cross-entries) */
+  linkedDeletedCount: number;
+  /** Security IDs that had their FIFO lots rebuilt */
+  affectedSecurities: number[];
+}
+
+/**
+ * Delete multiple transactions at once.
+ * Automatically deletes linked cross-entry transactions (e.g., account side of BUY/SELL).
+ * Rebuilds FIFO cost basis for affected securities.
+ */
+export async function deleteTransactionsBulk(ids: number[]): Promise<BulkDeleteResult> {
+  return invoke<BulkDeleteResult>('delete_transactions_bulk', { ids });
+}
+
+/**
  * Update a transaction - supports all fields.
  */
 export async function updateTransaction(id: number, data: {

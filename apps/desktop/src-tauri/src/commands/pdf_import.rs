@@ -754,6 +754,16 @@ pub async fn extract_pdf_with_ocr(request: OcrExtractRequest) -> Result<OcrExtra
 ///
 /// If use_ocr is true and regular text extraction yields too little content,
 /// OCR will be used as a fallback.
+///
+/// # Security
+/// When `use_ocr` is true, the PDF content will be uploaded to an external AI service.
+/// The `ocr_consent_given` flag MUST be set to true to confirm the user has consented
+/// to this external data transfer. Without explicit consent, OCR will be refused.
+///
+/// The frontend MUST show a consent dialog informing the user:
+/// - Which AI provider will receive the data (Claude, OpenAI, Gemini, Perplexity)
+/// - That the PDF may contain sensitive financial information
+/// - That the data will be processed by a third-party service
 #[command]
 pub async fn preview_pdf_import_with_ocr(
     pdf_path: String,
@@ -761,6 +771,7 @@ pub async fn preview_pdf_import_with_ocr(
     ocr_provider: Option<String>,
     ocr_model: Option<String>,
     ocr_api_key: Option<String>,
+    ocr_consent_given: Option<bool>,
 ) -> Result<PdfImportPreview, String> {
     use crate::pdf_import::ocr::{ocr_pdf, should_use_ocr_fallback, OcrOptions};
 
@@ -773,10 +784,25 @@ pub async fn preview_pdf_import_with_ocr(
     let content = if use_ocr && should_use_ocr_fallback(&extracted_text, 100) {
         log::info!("PDF Import: Text extraction yielded too little content, using OCR fallback");
 
+        // SECURITY: Require explicit consent for external data upload
+        if ocr_consent_given != Some(true) {
+            return Err(
+                "OCR erfordert explizite Zustimmung zum Upload an externe KI-Services. \
+                 Das PDF enthält möglicherweise sensible Finanzdaten. \
+                 Bitte bestätige im Dialog, dass du dem Upload zustimmst."
+                    .to_string(),
+            );
+        }
+
         // Require OCR options
         let provider = ocr_provider.ok_or("OCR Provider ist erforderlich")?;
         let model = ocr_model.ok_or("OCR Modell ist erforderlich")?;
         let api_key = ocr_api_key.ok_or("OCR API-Key ist erforderlich")?;
+
+        log::info!(
+            "PDF Import: User consented to OCR upload to provider: {}",
+            provider
+        );
 
         let options = OcrOptions {
             provider,

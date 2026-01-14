@@ -54,7 +54,7 @@ pub use types::{
     QuoteProviderStatusSummary, QuoteSyncInfo,
     PortfolioInsightsResponse,
     // Chat types
-    ChatMessage, PortfolioChatResponse,
+    ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
     // Model listing
     AiModelInfo,
 };
@@ -104,11 +104,15 @@ pub use context::load_portfolio_context;
 // ============================================================================
 
 pub use command_parser::{
-    parse_watchlist_commands, execute_watchlist_commands,
+    // Parsing functions (read-only)
+    parse_watchlist_commands,
     parse_transaction_queries, execute_transaction_queries,
     parse_portfolio_value_queries, execute_portfolio_value_queries,
-    process_response_commands,
+    // Security: Suggestion-based execution (replaces auto-execution)
+    parse_response_with_suggestions, execute_confirmed_watchlist_action,
+    // Types
     WatchlistCommand, TransactionQuery, PortfolioValueQuery,
+    SuggestedAction, ParsedResponseWithSuggestions,
 };
 
 // ============================================================================

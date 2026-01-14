@@ -1,15 +1,20 @@
 /**
  * Settings view for application configuration.
+ *
+ * SECURITY: API keys are stored in Tauri's secure store (not localStorage).
+ * The useSecureApiKeys hook handles loading and saving keys securely.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2, User, AlertTriangle } from 'lucide-react';
+import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2, User, AlertTriangle, Shield } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore, useUIStore, toast, AI_MODELS, getVisionModels } from '../../store';
 import type { VisionModel } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
 import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIProviderLogo';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import type { ApiKeyType } from '../../lib/secureStorage';
 
 // Use VisionModel from store for model type
 
@@ -50,6 +55,41 @@ export function SettingsView() {
     perplexityApiKey,
     setPerplexityApiKey,
   } = useSettingsStore();
+
+  // SECURITY: Use secure storage for API keys
+  const {
+    keys: secureKeys,
+    isSecureStorageAvailable: secureStorageAvailable,
+    setApiKey,
+  } = useSecureApiKeys();
+
+  // Use secure keys if available, fall back to store
+  const effectiveBrandfetchApiKey = secureStorageAvailable ? secureKeys.brandfetchApiKey : brandfetchApiKey;
+  const effectiveFinnhubApiKey = secureStorageAvailable ? secureKeys.finnhubApiKey : finnhubApiKey;
+  const effectiveCoingeckoApiKey = secureStorageAvailable ? secureKeys.coingeckoApiKey : coingeckoApiKey;
+  const effectiveAlphaVantageApiKey = secureStorageAvailable ? secureKeys.alphaVantageApiKey : alphaVantageApiKey;
+  const effectiveTwelveDataApiKey = secureStorageAvailable ? secureKeys.twelveDataApiKey : twelveDataApiKey;
+  const effectiveAnthropicApiKey = secureStorageAvailable ? secureKeys.anthropicApiKey : anthropicApiKey;
+  const effectiveOpenaiApiKey = secureStorageAvailable ? secureKeys.openaiApiKey : openaiApiKey;
+  const effectiveGeminiApiKey = secureStorageAvailable ? secureKeys.geminiApiKey : geminiApiKey;
+  const effectivePerplexityApiKey = secureStorageAvailable ? secureKeys.perplexityApiKey : perplexityApiKey;
+
+  // Secure key setters that store in both secure storage and Zustand
+  const handleSetApiKey = useCallback(async (keyType: ApiKeyType, value: string) => {
+    await setApiKey(keyType, value);
+    // Also update Zustand for immediate UI access
+    switch (keyType) {
+      case 'brandfetch': setBrandfetchApiKey(value); break;
+      case 'finnhub': setFinnhubApiKey(value); break;
+      case 'coingecko': setCoingeckoApiKey(value); break;
+      case 'alphaVantage': setAlphaVantageApiKey(value); break;
+      case 'twelveData': setTwelveDataApiKey(value); break;
+      case 'anthropic': setAnthropicApiKey(value); break;
+      case 'openai': setOpenaiApiKey(value); break;
+      case 'gemini': setGeminiApiKey(value); break;
+      case 'perplexity': setPerplexityApiKey(value); break;
+    }
+  }, [setApiKey, setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey, setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey, setPerplexityApiKey]);
 
   const [showBrandfetchKey, setShowBrandfetchKey] = useState(false);
   const [showFinnhubKey, setShowFinnhubKey] = useState(false);
@@ -138,11 +178,11 @@ export function SettingsView() {
     }
   };
 
-  // Get current API key for selected provider
-  const currentApiKey = aiProvider === 'claude' ? anthropicApiKey
-    : aiProvider === 'openai' ? openaiApiKey
-    : aiProvider === 'gemini' ? geminiApiKey
-    : perplexityApiKey;
+  // Get current API key for selected provider (use effective keys from secure storage)
+  const currentApiKey = aiProvider === 'claude' ? effectiveAnthropicApiKey
+    : aiProvider === 'openai' ? effectiveOpenaiApiKey
+    : aiProvider === 'gemini' ? effectiveGeminiApiKey
+    : effectivePerplexityApiKey;
 
   // Fetch available vision models from backend registry
   const fetchAiModels = useCallback(async () => {
@@ -336,8 +376,8 @@ export function SettingsView() {
             <div className="relative max-w-md">
               <input
                 type={showFinnhubKey ? 'text' : 'password'}
-                value={finnhubApiKey}
-                onChange={(e) => setFinnhubApiKey(e.target.value)}
+                value={effectiveFinnhubApiKey}
+                onChange={(e) => handleSetApiKey('finnhub', e.target.value)}
                 placeholder="Ihr Finnhub API Key"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -349,9 +389,10 @@ export function SettingsView() {
                 {showFinnhubKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {finnhubApiKey && (
-              <p className="text-xs text-green-600 mt-1">
-                API Key gespeichert. Finnhub ist jetzt als Kursquelle verfügbar.
+            {effectiveFinnhubApiKey && (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Finnhub ist jetzt als Kursquelle verfügbar.
               </p>
             )}
           </div>
@@ -373,8 +414,8 @@ export function SettingsView() {
             <div className="relative max-w-md">
               <input
                 type={showCoingeckoKey ? 'text' : 'password'}
-                value={coingeckoApiKey}
-                onChange={(e) => setCoingeckoApiKey(e.target.value)}
+                value={effectiveCoingeckoApiKey}
+                onChange={(e) => handleSetApiKey('coingecko', e.target.value)}
                 placeholder="CG-... (optional)"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -386,9 +427,10 @@ export function SettingsView() {
                 {showCoingeckoKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {coingeckoApiKey ? (
-              <p className="text-xs text-green-600 mt-1">
-                API Key gespeichert. Höhere Rate-Limits für Krypto-Kurse aktiv.
+            {effectiveCoingeckoApiKey ? (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Höhere Rate-Limits für Krypto-Kurse aktiv.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1">
@@ -414,8 +456,8 @@ export function SettingsView() {
             <div className="relative max-w-md">
               <input
                 type={showAlphaVantageKey ? 'text' : 'password'}
-                value={alphaVantageApiKey}
-                onChange={(e) => setAlphaVantageApiKey(e.target.value)}
+                value={effectiveAlphaVantageApiKey}
+                onChange={(e) => handleSetApiKey('alphaVantage', e.target.value)}
                 placeholder="Ihr Alpha Vantage API Key"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -427,9 +469,10 @@ export function SettingsView() {
                 {showAlphaVantageKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {alphaVantageApiKey && (
-              <p className="text-xs text-green-600 mt-1">
-                API Key gespeichert. Alpha Vantage ist jetzt als Kursquelle verfügbar.
+            {effectiveAlphaVantageApiKey && (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Alpha Vantage ist jetzt als Kursquelle verfügbar.
               </p>
             )}
           </div>
@@ -451,8 +494,8 @@ export function SettingsView() {
             <div className="relative max-w-md">
               <input
                 type={showTwelveDataKey ? 'text' : 'password'}
-                value={twelveDataApiKey}
-                onChange={(e) => setTwelveDataApiKey(e.target.value)}
+                value={effectiveTwelveDataApiKey}
+                onChange={(e) => handleSetApiKey('twelveData', e.target.value)}
                 placeholder="Ihr Twelve Data API Key"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -464,9 +507,10 @@ export function SettingsView() {
                 {showTwelveDataKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {twelveDataApiKey ? (
-              <p className="text-xs text-green-600 mt-1">
-                API Key gespeichert. Ideal für Schweizer Aktien (z.B. NESN, NOVN, ROG).
+            {effectiveTwelveDataApiKey ? (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Ideal für Schweizer Aktien (z.B. NESN, NOVN, ROG).
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1">
@@ -517,10 +561,10 @@ export function SettingsView() {
             <div className="flex flex-wrap gap-2">
               {(['claude', 'openai', 'gemini', 'perplexity'] as const).map((provider) => {
                 const isActive = aiProvider === provider;
-                const hasKey = provider === 'claude' ? !!anthropicApiKey
-                  : provider === 'openai' ? !!openaiApiKey
-                  : provider === 'gemini' ? !!geminiApiKey
-                  : !!perplexityApiKey;
+                const hasKey = provider === 'claude' ? !!effectiveAnthropicApiKey
+                  : provider === 'openai' ? !!effectiveOpenaiApiKey
+                  : provider === 'gemini' ? !!effectiveGeminiApiKey
+                  : !!effectivePerplexityApiKey;
                 return (
                   <button
                     key={provider}
@@ -649,18 +693,18 @@ export function SettingsView() {
                 type={showAiKey ? 'text' : 'password'}
                 value={
                   aiProvider === 'claude'
-                    ? anthropicApiKey
+                    ? effectiveAnthropicApiKey
                     : aiProvider === 'openai'
-                      ? openaiApiKey
+                      ? effectiveOpenaiApiKey
                       : aiProvider === 'gemini'
-                        ? geminiApiKey
-                        : perplexityApiKey
+                        ? effectiveGeminiApiKey
+                        : effectivePerplexityApiKey
                 }
                 onChange={(e) => {
-                  if (aiProvider === 'claude') setAnthropicApiKey(e.target.value);
-                  else if (aiProvider === 'openai') setOpenaiApiKey(e.target.value);
-                  else if (aiProvider === 'gemini') setGeminiApiKey(e.target.value);
-                  else setPerplexityApiKey(e.target.value);
+                  if (aiProvider === 'claude') handleSetApiKey('anthropic', e.target.value);
+                  else if (aiProvider === 'openai') handleSetApiKey('openai', e.target.value);
+                  else if (aiProvider === 'gemini') handleSetApiKey('gemini', e.target.value);
+                  else handleSetApiKey('perplexity', e.target.value);
                 }}
                 placeholder={
                   aiProvider === 'claude'
@@ -681,12 +725,13 @@ export function SettingsView() {
                 {showAiKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {((aiProvider === 'claude' && anthropicApiKey) ||
-              (aiProvider === 'openai' && openaiApiKey) ||
-              (aiProvider === 'gemini' && geminiApiKey) ||
-              (aiProvider === 'perplexity' && perplexityApiKey)) && (
-              <p className="text-xs text-green-600 mt-1">
-                API Key gespeichert.{' '}
+            {((aiProvider === 'claude' && effectiveAnthropicApiKey) ||
+              (aiProvider === 'openai' && effectiveOpenaiApiKey) ||
+              (aiProvider === 'gemini' && effectiveGeminiApiKey) ||
+              (aiProvider === 'perplexity' && effectivePerplexityApiKey)) && (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.{' '}
                 {aiProvider === 'claude' && 'Claude'}
                 {aiProvider === 'openai' && 'GPT-4'}
                 {aiProvider === 'gemini' && 'Gemini'}
@@ -718,8 +763,8 @@ export function SettingsView() {
             <div className="relative max-w-md">
               <input
                 type={showBrandfetchKey ? 'text' : 'password'}
-                value={brandfetchApiKey}
-                onChange={(e) => setBrandfetchApiKey(e.target.value)}
+                value={effectiveBrandfetchApiKey}
+                onChange={(e) => handleSetApiKey('brandfetch', e.target.value)}
                 placeholder="Ihre Brandfetch Client ID"
                 className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
               />
@@ -731,9 +776,10 @@ export function SettingsView() {
                 {showBrandfetchKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {brandfetchApiKey && (
-              <p className="text-xs text-green-600 mt-1">
-                Client ID gespeichert. Logos werden für ETFs und bekannte Aktien geladen.
+            {effectiveBrandfetchApiKey && (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                {secureStorageAvailable && <Shield size={12} />}
+                Client ID {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Logos werden für ETFs und bekannte Aktien geladen.
               </p>
             )}
           </div>

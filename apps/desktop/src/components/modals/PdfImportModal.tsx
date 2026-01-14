@@ -91,6 +91,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   const [useOcrFallback, setUseOcrFallback] = useState(false);
   const [isOcrAvailable, setIsOcrAvailable] = useState(false);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
+  const [showOcrConsentDialog, setShowOcrConsentDialog] = useState(false);
+  const [ocrConsentGiven, setOcrConsentGiven] = useState(false);
 
   // Get the current AI API key based on provider
   const getOcrApiKey = () => {
@@ -155,6 +157,31 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     setFeeOverrides({});
     setUseOcrFallback(false);
     setOcrStatus(null);
+    setShowOcrConsentDialog(false);
+    setOcrConsentGiven(false);
+  };
+
+  // Handle OCR checkbox change - show consent dialog if enabling
+  const handleOcrToggle = (enabled: boolean) => {
+    if (enabled && !ocrConsentGiven) {
+      setShowOcrConsentDialog(true);
+    } else if (!enabled) {
+      setUseOcrFallback(false);
+      setOcrConsentGiven(false);
+    }
+  };
+
+  // Handle OCR consent confirmation
+  const handleOcrConsentConfirm = () => {
+    setOcrConsentGiven(true);
+    setUseOcrFallback(true);
+    setShowOcrConsentDialog(false);
+  };
+
+  // Handle OCR consent cancel
+  const handleOcrConsentCancel = () => {
+    setShowOcrConsentDialog(false);
+    setUseOcrFallback(false);
   };
 
   // Get effective transaction type (with override)
@@ -229,8 +256,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
           try {
             let previewData: PdfImportPreview;
 
-            // Use OCR-enabled preview if option is selected
-            if (useOcrFallback && hasOcrApiKey()) {
+            // Use OCR-enabled preview if option is selected and consent given
+            if (useOcrFallback && hasOcrApiKey() && ocrConsentGiven) {
               console.log(`[PDF Import] Using OCR for ${fileName}`);
               previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
                 pdfPath: filePath,
@@ -238,6 +265,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                 ocrProvider: aiProvider,
                 ocrModel: aiModel,
                 ocrApiKey: getOcrApiKey(),
+                ocrConsentGiven: true,
               });
             } else {
               // Regular preview
@@ -538,11 +566,16 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                         <span className="text-xs text-muted-foreground ml-2">
                           (KI-Texterkennung)
                         </span>
+                        {ocrConsentGiven && (
+                          <span className="text-xs text-green-600 ml-2">
+                            ✓ Zustimmung erteilt
+                          </span>
+                        )}
                       </div>
                       <input
                         type="checkbox"
                         checked={useOcrFallback}
-                        onChange={(e) => setUseOcrFallback(e.target.checked)}
+                        onChange={(e) => handleOcrToggle(e.target.checked)}
                         disabled={!isOcrAvailable || !hasOcrApiKey()}
                         className="rounded border-border"
                       />
@@ -858,6 +891,53 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
           )}
         </div>
       </div>
+
+      {/* OCR Consent Dialog */}
+      {showOcrConsentDialog && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
+          <div className="bg-background rounded-lg shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-full bg-amber-500/10">
+                <AlertTriangle className="w-6 h-6 text-amber-600" />
+              </div>
+              <h3 className="text-lg font-semibold">Datenschutz-Hinweis</h3>
+            </div>
+
+            <div className="space-y-3 text-sm text-muted-foreground mb-6">
+              <p>
+                Bei Aktivierung der OCR-Funktion werden Ihre PDF-Dokumente an einen
+                <strong className="text-foreground"> externen KI-Dienst ({aiProvider === 'claude' ? 'Anthropic' : aiProvider === 'openai' ? 'OpenAI' : aiProvider === 'gemini' ? 'Google' : 'Perplexity'})</strong> übermittelt.
+              </p>
+              <p>
+                Ihre PDFs können <strong className="text-foreground">sensible Finanzdaten</strong> enthalten wie:
+              </p>
+              <ul className="list-disc list-inside pl-2 space-y-1">
+                <li>Kontonummern und Depotnummern</li>
+                <li>Transaktionsdetails und Beträge</li>
+                <li>Persönliche Angaben (Name, Adresse)</li>
+              </ul>
+              <p className="text-amber-600 font-medium">
+                Diese Daten werden zur Texterkennung an den KI-Anbieter übertragen.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={handleOcrConsentCancel}
+                className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={handleOcrConsentConfirm}
+                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+              >
+                Zustimmen & OCR aktivieren
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

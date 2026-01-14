@@ -865,6 +865,7 @@ pub async fn chat(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            suggestions: Vec::new(),
         });
     }
 

@@ -44,6 +44,9 @@ import { ChatButton, ChatPanel } from './components/chat';
 // Modals
 import { WelcomeModal } from './components/modals';
 
+// Secure Storage
+import { useSecureApiKeys } from './hooks/useSecureApiKeys';
+
 // Views
 import {
   DashboardView,
@@ -76,6 +79,10 @@ function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
   const { theme, userName } = useSettingsStore();
+
+  // Load API keys from secure storage on app start
+  // This syncs secure storage with the Zustand store for component access
+  useSecureApiKeys();
 
   // Welcome modal state - show only on first launch when no userName is set
   const [showWelcome, setShowWelcome] = useState<boolean | null>(null);

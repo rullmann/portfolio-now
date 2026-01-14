@@ -663,14 +663,29 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// Suggested action from AI that requires user confirmation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSuggestedAction {
+    /// Type of action: "watchlist_add", "watchlist_remove"
+    pub action_type: String,
+    /// Human-readable description of the action
+    pub description: String,
+    /// Serialized payload for execution
+    pub payload: String,
+}
+
 /// Response from portfolio chat
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioChatResponse {
     pub response: String,
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    /// Suggested actions that require user confirmation (watchlist modifications)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub suggestions: Vec<ChatSuggestedAction>,
 }
 
 // ============================================================================

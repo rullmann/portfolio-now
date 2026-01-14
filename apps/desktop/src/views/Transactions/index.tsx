@@ -4,10 +4,10 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText, Pencil } from 'lucide-react';
+import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText, Pencil, CheckSquare, X } from 'lucide-react';
 import { getTransactionTypeLabel, formatDateTime } from '../../lib/types';
-import { deleteTransaction, getSecurities } from '../../lib/api';
-import { TransactionFormModal, PdfImportModal } from '../../components/modals';
+import { deleteTransaction, deleteTransactionsBulk, getSecurities } from '../../lib/api';
+import { TransactionFormModal, PdfImportModal, BulkDeleteConfirmModal } from '../../components/modals';
 import { TableSkeleton, SecurityLogo } from '../../components/common';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
@@ -56,6 +56,12 @@ export function TransactionsView() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<TransactionData | null>(null);
   const { brandfetchApiKey } = useSettingsStore();
+
+  // Selection mode state
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Map UUID to security ID for logo lookup
   const securityUuidToId = useMemo(() => {
@@ -147,24 +153,121 @@ export function TransactionsView() {
     loadTransactions();
   };
 
+  // Selection mode handlers
+  const toggleSelectionMode = () => {
+    setIsSelectionMode(!isSelectionMode);
+    setSelectedIds(new Set());
+  };
+
+  const handleToggleSelection = (id: number) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    const visibleIds = filteredTransactions.slice(0, displayLimit).map((tx) => tx.id);
+    setSelectedIds(new Set(visibleIds));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds(new Set());
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+
+    setIsBulkDeleting(true);
+    setError(null);
+
+    try {
+      const result = await deleteTransactionsBulk(Array.from(selectedIds));
+      console.log('Bulk delete result:', result);
+      setShowBulkDeleteModal(false);
+      setSelectedIds(new Set());
+      setIsSelectionMode(false);
+      await loadTransactions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   // Filter transactions by type
-  const filteredTransactions = dbTransactions.filter(tx => {
+  const filteredTransactions = useMemo(() => {
+    return dbTransactions.filter(tx => {
       if (filterOwnerType !== 'all' && tx.ownerType !== filterOwnerType) return false;
       if (filterTxnType !== 'all' && tx.txnType !== filterTxnType) return false;
       return true;
     });
+  }, [dbTransactions, filterOwnerType, filterTxnType]);
 
-    // Get unique transaction types for filter
-    const uniqueTxnTypes = [...new Set(dbTransactions.map(tx => tx.txnType))].sort();
+  // Get unique transaction types for filter
+  const uniqueTxnTypes = useMemo(() => {
+    return [...new Set(dbTransactions.map(tx => tx.txnType))].sort();
+  }, [dbTransactions]);
+
+  // Get selected transactions for the modal
+  const selectedTransactions = useMemo(() => {
+    return filteredTransactions.filter((tx) => selectedIds.has(tx.id));
+  }, [filteredTransactions, selectedIds]);
+
+  // Check if all visible transactions are selected
+  const allVisibleSelected = useMemo(() => {
+    const visibleIds = filteredTransactions.slice(0, displayLimit).map((tx) => tx.id);
+    return visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  }, [filteredTransactions, displayLimit, selectedIds]);
 
     return (
       <div className="space-y-4">
         {/* Header with actions */}
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">
-            Buchungen ({filteredTransactions.length})
-          </h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-lg font-semibold">
+              Buchungen ({filteredTransactions.length})
+            </h2>
+            {/* Selection mode controls */}
+            {isSelectionMode && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={allVisibleSelected ? handleDeselectAll : handleSelectAll}
+                  className="text-sm text-primary hover:underline"
+                >
+                  {allVisibleSelected ? 'Auswahl aufheben' : 'Alle auswählen'}
+                </button>
+                <span className="text-sm text-muted-foreground">
+                  {selectedIds.size} ausgewählt
+                </span>
+                {selectedIds.size > 0 && (
+                  <button
+                    onClick={() => setShowBulkDeleteModal(true)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                    Löschen ({selectedIds.size})
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <div className="flex gap-2">
+            {/* Selection mode toggle */}
+            <button
+              onClick={toggleSelectionMode}
+              className={`flex items-center gap-2 px-3 py-1.5 text-sm border rounded-md transition-colors ${
+                isSelectionMode
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border hover:bg-muted'
+              }`}
+            >
+              {isSelectionMode ? <X size={16} /> : <CheckSquare size={16} />}
+              {isSelectionMode ? 'Abbrechen' : 'Auswählen'}
+            </button>
             <button
               onClick={loadTransactions}
               disabled={isLoading}
@@ -244,6 +347,16 @@ export function TransactionsView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
+                      {isSelectionMode && (
+                        <th className="w-10 py-2">
+                          <input
+                            type="checkbox"
+                            checked={allVisibleSelected}
+                            onChange={allVisibleSelected ? handleDeselectAll : handleSelectAll}
+                            className="w-4 h-4 rounded border-border"
+                          />
+                        </th>
+                      )}
                       <th className="text-left py-2 font-medium">Datum</th>
                       <th className="text-left py-2 font-medium">Typ</th>
                       <th className="text-left py-2 font-medium">Konto/Depot</th>
@@ -259,9 +372,25 @@ export function TransactionsView() {
                     {filteredTransactions.slice(0, displayLimit).map((tx) => {
                       const isPositive = POSITIVE_TYPES.includes(tx.txnType);
                       const isNegative = NEGATIVE_TYPES.includes(tx.txnType);
+                      const isSelected = selectedIds.has(tx.id);
 
                       return (
-                        <tr key={tx.uuid} className="border-b border-border last:border-0 hover:bg-accent/30 group">
+                        <tr
+                          key={tx.uuid}
+                          className={`border-b border-border last:border-0 hover:bg-accent/30 group ${
+                            isSelected ? 'bg-primary/5' : ''
+                          }`}
+                        >
+                          {isSelectionMode && (
+                            <td className="py-2">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleSelection(tx.id)}
+                                className="w-4 h-4 rounded border-border"
+                              />
+                            </td>
+                          )}
                           <td className="py-2 whitespace-nowrap">{formatDateTime(tx.date)}</td>
                           <td className="py-2">
                             <span className={`inline-block px-2 py-0.5 rounded text-xs ${
@@ -359,6 +488,15 @@ export function TransactionsView() {
             setIsPdfImportOpen(false);
             loadTransactions();
           }}
+        />
+
+        {/* Bulk Delete Confirmation Modal */}
+        <BulkDeleteConfirmModal
+          isOpen={showBulkDeleteModal}
+          onClose={() => setShowBulkDeleteModal(false)}
+          onConfirm={handleBulkDelete}
+          transactions={selectedTransactions}
+          isDeleting={isBulkDeleting}
         />
       </div>
     );

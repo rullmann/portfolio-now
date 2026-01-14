@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "enables the default permissions with security restrictions",
   "windows": [
     "main"
   ],
@@ -12,12 +12,10 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
-    "shell:allow-execute",
-    "shell:allow-spawn",
-    "shell:allow-stdin-write",
-    "shell:allow-open"
-  ]
+    "shell:allow-open",
+    "store:default"
+  ],
+  "context": {
+    "security_note": "SECURITY: fs and shell permissions removed. File operations are handled through Tauri commands with path validation. Shell execution is disabled except for shell:allow-open (opening URLs/files with default app). store:default is for secure API key storage."
+  }
 }

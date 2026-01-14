@@ -1,26 +1,20 @@
 # Code Review Summary: portfolio-modern
 
-## Datum der Überprüfung: 12. Januar 2026
+## Code Review: 14. Januar 2026 (aktueller Stand)
 
-## Zusammenfassung der Ergebnisse:
+### Findings (nach Schweregrad)
 
-Ihr Projekt ist in einem gut organisierten Monorepo (`pnpm/Turborepo`) aufgebaut. Die Trennung in eine `desktop`-Anwendung und wiederverwendbare Bibliotheken (`core`, `ui`, `i18n`, `xml`) ist logisch und fördert die Wiederverwendbarkeit von Code.
+1. **Theme-Fehler in Charts (Medium):** `theme === 'system'` wird in `Charts` immer auf `dark` gesetzt, wodurch System-Theme-Light ignoriert wird. Das kann Kontrast- und Lesbarkeitsprobleme verursachen.  
+   Datei: `apps/desktop/src/views/Charts/index.tsx:490`
 
-## Größte Schwachstelle: Fehlende Tests
+2. **UI-Status inkonsistent beim Logo-Upload (Medium):** `setUploadingLogoId(null)` wird im `finally` ausgeführt, bevor `FileReader`/Upload abgeschlossen sind. Das UI signalisiert "fertig", obwohl der Upload noch läuft; Fehler nach `reader.onload` sind schwer nachvollziehbar.  
+   Datei: `apps/desktop/src/views/Securities/index.tsx:339-377`
 
-Die mit Abstand größte und kritischste Schwachstelle ist das fast vollständige Fehlen von automatisierten Tests in entscheidenden Teilen des Projekts.
+3. **Welcome-Modal Race bei Persist-Hydration (Low):** Die Entscheidung, ob das Welcome-Modal gezeigt wird, passiert nur einmal. Wenn `userName` später rehydriert wird, kann das Modal fälschlich erscheinen.  
+   Datei: `apps/desktop/src/App.tsx:83-97`
 
--   Die Pakete **`@portfolio/ui`** (UI-Komponenten), **`@portfolio/i18n`** (Übersetzungen) und **`@portfolio/xml`** (XML-Verarbeitung) haben keinerlei Test-Skripte.
--   Besonders bei einer UI-Bibliothek (`@portfolio/ui`) ist das Fehlen von Tests sehr riskant, da es zu unbemerkten Fehlern im visuellen Erscheinungsbild und in der Funktionalität führen kann.
--   Interessanterweise ist im `@portfolio/core`-Paket mit `vitest` bereits eine Testumgebung eingerichtet, was zeigt, dass die Infrastruktur zwar vorhanden, aber nicht konsequent genutzt wird.
+4. **Stale Data bei Watchlist-Price-Histories (Low):** Preisverläufe werden mit Snapshot von `securities` geladen; bei schnellem Watchlist-Wechsel können veraltete Histories gesetzt werden.  
+   Datei: `apps/desktop/src/views/Watchlist/index.tsx:63-85`
 
-Diese Inkonsistenz stellt ein erhebliches Risiko für die Wartbarkeit und Stabilität Ihrer Anwendung dar.
-
-## Weitere Beobachtungen:
-
--   **Frontend:** Im Frontend werden mit `Zustand` und `Jotai` potenziell zwei verschiedene Bibliotheken für das State Management eingesetzt. Dies könnte zu Inkonsistenzen führen und sollte genauer untersucht werden.
--   **Backend:** Das Rust-Backend ist solide aufgesetzt und nutzt etablierte Bibliotheken wie `sqlx` und `tokio`. Eine tiefere Analyse des Backends wäre der nächste Schritt.
-
-## Empfehlung:
-
-Die dringendste Handlungsempfehlung ist die Einführung einer durchgehenden Teststrategie. Der wichtigste erste Schritt zur nachhaltigen Verbesserung der Code-Qualität wäre, die Testinfrastruktur für das `@portfolio/ui`-Paket einzurichten und einen ersten einfachen Test für eine Komponente zu schreiben.
+5. **Retry-Timer ohne Unmount-Cleanup (Low):** Der AI-Panel Retry-Timer wird nicht beim Unmount gecleart; kann zu State-Updates nach Unmount führen.  
+   Datei: `apps/desktop/src/components/charts/AIAnalysisPanel.tsx:153-177`
