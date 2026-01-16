@@ -5,6 +5,38 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.1.2] - 2026-01-16
+
+### Hinzugefügt
+
+#### CSV-Import mit Broker-Templates
+- **Broker-Erkennung**: Automatische Erkennung des CSV-Formats anhand der Header
+- **8 Broker-Templates**: Trade Republic, Scalable Capital, ING-DiBa, DKB, Comdirect, Consorsbank, DEGIRO, Interactive Brokers
+- **AI-Fallback**: KI-Analyse für unbekannte CSV-Formate (Code-first, AI-fallback Prinzip)
+- **Import-Wizard**: Mehrstufiger Dialog mit Vorschau und Spalten-Mapping
+- Neues Modul: `src-tauri/src/csv_import/`
+
+#### AI-Assistent im Header
+- **Klickbares AI-Badge**: Provider-Logo und Modell im Header sind jetzt klickbar
+- **Dropdown-Menü** mit:
+  - Portfolio Insights (startet Analyse direkt)
+  - Nachkauf-Chancen (startet Opportunity-Analyse direkt)
+  - Chat öffnen
+  - View-spezifische Aktionen (z.B. "Diversifikation prüfen" bei Holdings)
+- `initialMode` Prop für PortfolioInsightsModal zum direkten Start
+
+### Behoben
+
+- **GPT-5 Responses API**: `content_type` Filter korrigiert ("text" statt "output_text")
+- Portfolio Insights mit GPT-5 zeigen jetzt korrekt Ergebnisse an
+
+### Geändert
+
+- Header zeigt Chevron-Icon am AI-Badge für bessere Affordance
+- PortfolioInsightsModal unterstützt jetzt `initialMode` Prop
+
+---
+
 ## [0.1.1] - 2026-01-14
 
 ### Sicherheit

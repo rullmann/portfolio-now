@@ -11,12 +11,14 @@ Modern cross-platform desktop application for tracking and analyzing investment 
 - **FIFO cost basis tracking** with realized gains calculation
 - **Performance metrics** (TTWROR, IRR, benchmark comparison with Alpha/Beta/Sharpe)
 - **Technical analysis** charts (Candlestick, RSI, MACD, Bollinger Bands, SMA/EMA)
-- **AI-powered chart analysis** with Claude, GPT-4, or Gemini for technical insights
+- **AI-powered analysis** with Claude, GPT-5, GPT-4, or Gemini for chart and portfolio insights
+- **AI Assistant** accessible via clickable header badge with Portfolio Insights, Buy Opportunities, and Chat
 - **Dividend tracking** with detailed payment history and logos
 - **Taxonomies & classifications** for asset allocation analysis
 - **Investment plans** with interval scheduling
 - **Rebalancing** preview and execution
-- **PDF/CSV import & export**
+- **CSV import** with broker template detection (Trade Republic, Scalable, ING, DKB, DEGIRO, and more)
+- **PDF import** with AI-powered OCR for bank statements
 - **Multi-currency support** with ECB exchange rates
 
 ## Screenshots
@@ -108,13 +110,14 @@ portfolio-now/
 | CoinGecko | No | Cryptocurrencies |
 | ECB | No | Exchange rates |
 
-## AI Providers (Chart Analysis)
+## AI Providers
 
-| Provider | Model | Features |
-|----------|-------|----------|
-| Claude (Anthropic) | claude-sonnet-4-5-20250514 | Excellent chart analysis |
-| GPT-4 (OpenAI) | gpt-4o | Strong visual analysis |
-| Gemini (Google) | gemini-2.0-flash | Free tier available |
+| Provider | Models | Features |
+|----------|--------|----------|
+| Claude (Anthropic) | claude-sonnet-4-5, claude-haiku-4-5 | Vision, direct PDF upload |
+| OpenAI | gpt-5, gpt-4.1, o3, o4-mini | Vision, Web Search (o3/o4) |
+| Gemini (Google) | gemini-3-flash, gemini-3-pro | Vision, direct PDF upload |
+| Perplexity | sonar-pro, sonar | Vision, Web Search |
 
 ## Acknowledgments
 
