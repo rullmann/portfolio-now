@@ -366,6 +366,7 @@ function App() {
           <Header
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
+            onOpenChat={() => setIsChatOpen(true)}
           />
 
           {/* Error Banner */}

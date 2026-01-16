@@ -10,6 +10,42 @@ use std::io::{BufRead, BufReader, Write};
 use tauri::{command, AppHandle};
 
 // ============================================================================
+// AI CSV Analysis Types
+// ============================================================================
+
+/// Request for AI-assisted CSV analysis
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCsvAnalysisRequest {
+    pub csv_content: String,
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+/// AI suggestion for column mapping
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiMappingSuggestion {
+    pub field: String,
+    pub column_index: Option<usize>,
+    pub column_name: Option<String>,
+    pub confidence: f32,
+    pub reason: String,
+}
+
+/// AI CSV analysis response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCsvAnalysisResponse {
+    pub detected_broker: Option<String>,
+    pub broker_confidence: f32,
+    pub mapping_suggestions: Vec<AiMappingSuggestion>,
+    pub analysis_notes: String,
+    pub raw_response: String,
+}
+
+// ============================================================================
 // Export Types
 // ============================================================================
 
@@ -868,4 +904,270 @@ fn find_or_create_security(
     )?;
 
     Ok(Some(conn.last_insert_rowid()))
+}
+
+// ============================================================================
+// Broker Template Commands
+// ============================================================================
+
+/// Detect broker format from CSV file headers
+#[command]
+pub fn detect_csv_broker(path: String) -> Result<crate::csv_import::BrokerDetectionResult, String> {
+    let file = File::open(&path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(file);
+
+    let first_line = reader
+        .lines()
+        .next()
+        .ok_or_else(|| "Empty file".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let delimiter = detect_delimiter(&first_line);
+    let headers: Vec<String> = first_line
+        .split(delimiter)
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    Ok(crate::csv_import::detect_broker(&headers))
+}
+
+/// Get list of available broker templates
+#[command]
+pub fn get_broker_templates() -> Vec<crate::csv_import::BrokerTemplateSummary> {
+    crate::csv_import::get_all_templates()
+        .into_iter()
+        .map(|t| crate::csv_import::BrokerTemplateSummary {
+            id: t.id.to_string(),
+            name: t.name.to_string(),
+            description: Some(t.description.to_string()),
+        })
+        .collect()
+}
+
+/// Import transactions using a broker template
+#[command]
+pub fn import_csv_with_template(
+    app: AppHandle,
+    path: String,
+    template_id: String,
+    portfolio_id: i64,
+) -> Result<CsvImportResult, String> {
+    let template = crate::csv_import::get_template(&template_id)
+        .ok_or_else(|| format!("Template '{}' not found", template_id))?;
+
+    // Use the template's mapping
+    import_transactions_csv(
+        app,
+        path,
+        template.mapping.clone(),
+        portfolio_id,
+        Some(template.delimiter),
+    )
+}
+
+// ============================================================================
+// AI-Assisted CSV Analysis (Code-first, AI fallback)
+// ============================================================================
+
+/// AI prompt for CSV analysis
+const CSV_ANALYSIS_PROMPT: &str = r#"Du bist ein Experte für Broker-CSV-Formate. Analysiere den folgenden CSV-Inhalt und identifiziere:
+
+1. **Broker-Erkennung**: Welcher Broker (Trade Republic, Scalable Capital, ING-DiBa, DKB, DEGIRO, Comdirect, Consorsbank, Interactive Brokers) könnte diese CSV exportiert haben?
+
+2. **Spalten-Mapping**: Ordne die Spalten den folgenden Feldern zu:
+   - date: Transaktionsdatum
+   - txnType: Transaktionstyp (Kauf, Verkauf, Dividende, etc.)
+   - isin: ISIN-Nummer (12-stellig)
+   - securityName: Wertpapiername
+   - shares: Anzahl Stück
+   - amount: Betrag
+   - currency: Währung
+   - fees: Gebühren
+   - taxes: Steuern
+   - note: Notiz/Beschreibung
+
+Antworte AUSSCHLIESSLICH im folgenden JSON-Format:
+{
+  "broker": "Name des erkannten Brokers oder null",
+  "brokerConfidence": 0.0-1.0,
+  "mappings": [
+    {"field": "date", "columnIndex": 0, "columnName": "Datum", "confidence": 0.95, "reason": "Header enthält 'Datum'"},
+    {"field": "amount", "columnIndex": 3, "columnName": "Betrag", "confidence": 0.9, "reason": "Numerische Werte mit Komma"}
+  ],
+  "notes": "Zusätzliche Hinweise zur Analyse"
+}
+
+CSV-INHALT:
+"#;
+
+/// Analyze CSV with AI assistance
+///
+/// This is the AI fallback when automatic detection fails or has low confidence.
+/// The AI analyzes the CSV structure and suggests column mappings.
+#[command]
+pub async fn analyze_csv_with_ai(
+    request: AiCsvAnalysisRequest,
+) -> Result<AiCsvAnalysisResponse, String> {
+    use crate::ai::{claude, openai, gemini, perplexity, get_model_upgrade, ChatMessage,
+        PortfolioInsightsContext, FeesAndTaxesSummary, InvestmentSummary};
+
+    // Auto-upgrade deprecated models
+    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
+        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
+        upgraded.to_string()
+    } else {
+        request.model.clone()
+    };
+
+    // Build the prompt with CSV content
+    let prompt = format!("{}\n{}", CSV_ANALYSIS_PROMPT, request.csv_content);
+
+    // Create a simple chat message
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    }];
+
+    // Use a minimal context for text-only analysis (no portfolio data needed)
+    let empty_context = PortfolioInsightsContext {
+        holdings: vec![],
+        total_value: 0.0,
+        total_cost_basis: 0.0,
+        total_gain_loss_percent: 0.0,
+        ttwror: None,
+        ttwror_annualized: None,
+        irr: None,
+        currency_allocation: vec![],
+        top_positions: vec![],
+        dividend_yield: None,
+        annual_dividends: 0.0,
+        recent_dividends: vec![],
+        recent_transactions: vec![],
+        watchlist: vec![],
+        sold_positions: vec![],
+        yearly_overview: vec![],
+        portfolio_age_days: 0,
+        analysis_date: "".to_string(),
+        base_currency: "EUR".to_string(),
+        user_name: None,
+        provider_status: None,
+        fees_and_taxes: FeesAndTaxesSummary {
+            total_fees: 0.0,
+            total_taxes: 0.0,
+            fees_this_year: 0.0,
+            taxes_this_year: 0.0,
+            by_year: vec![],
+        },
+        investment_summary: InvestmentSummary {
+            total_invested: 0.0,
+            total_withdrawn: 0.0,
+            net_invested: 0.0,
+            total_deposits: 0.0,
+            total_removals: 0.0,
+            first_investment_date: None,
+        },
+        sector_allocation: vec![],
+        portfolio_extremes: None,
+    };
+
+    // Call the appropriate AI provider
+    let result = match request.provider.as_str() {
+        "claude" => claude::chat(&model, &request.api_key, &messages, &empty_context).await,
+        "openai" => openai::chat(&model, &request.api_key, &messages, &empty_context).await,
+        "gemini" => gemini::chat(&model, &request.api_key, &messages, &empty_context).await,
+        "perplexity" => perplexity::chat(&model, &request.api_key, &messages, &empty_context).await,
+        _ => return Err(format!("Unbekannter Anbieter: {}", request.provider)),
+    };
+
+    match result {
+        Ok(chat_response) => {
+            // Try to parse the JSON response
+            let raw_response = chat_response.response.clone();
+
+            // Extract JSON from response (might be wrapped in markdown code blocks)
+            let json_str = extract_json_from_response(&raw_response);
+
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(json) => {
+                    let broker = json.get("broker").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let broker_confidence = json.get("brokerConfidence")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0) as f32;
+
+                    let mappings = json.get("mappings")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter().filter_map(|m| {
+                                Some(AiMappingSuggestion {
+                                    field: m.get("field")?.as_str()?.to_string(),
+                                    column_index: m.get("columnIndex").and_then(|v| v.as_u64()).map(|n| n as usize),
+                                    column_name: m.get("columnName").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    confidence: m.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
+                                    reason: m.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                })
+                            }).collect()
+                        })
+                        .unwrap_or_default();
+
+                    let notes = json.get("notes")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    Ok(AiCsvAnalysisResponse {
+                        detected_broker: broker,
+                        broker_confidence,
+                        mapping_suggestions: mappings,
+                        analysis_notes: notes,
+                        raw_response,
+                    })
+                }
+                Err(_) => {
+                    // If JSON parsing fails, return raw response with empty suggestions
+                    Ok(AiCsvAnalysisResponse {
+                        detected_broker: None,
+                        broker_confidence: 0.0,
+                        mapping_suggestions: vec![],
+                        analysis_notes: "KI-Antwort konnte nicht als JSON geparst werden.".to_string(),
+                        raw_response,
+                    })
+                }
+            }
+        }
+        Err(e) => Err(format!("KI-Analyse fehlgeschlagen: {}", e.message)),
+    }
+}
+
+/// Extract JSON from AI response (handles markdown code blocks)
+fn extract_json_from_response(response: &str) -> String {
+    // Try to find JSON in code block
+    if let Some(start) = response.find("```json") {
+        if let Some(end) = response[start..].find("```\n").or_else(|| response[start..].rfind("```")) {
+            let json_start = start + 7; // Skip "```json"
+            let json_end = start + end;
+            if json_end > json_start {
+                return response[json_start..json_end].trim().to_string();
+            }
+        }
+    }
+
+    // Try to find JSON in generic code block
+    if let Some(start) = response.find("```\n") {
+        if let Some(end) = response[start + 4..].find("```") {
+            let json_start = start + 4;
+            let json_end = start + 4 + end;
+            return response[json_start..json_end].trim().to_string();
+        }
+    }
+
+    // Try to find JSON object directly
+    if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            if end > start {
+                return response[start..=end].to_string();
+            }
+        }
+    }
+
+    response.to_string()
 }

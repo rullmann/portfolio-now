@@ -11,7 +11,14 @@ import {
   FileDown,
   FileUp,
   FileText,
+  FileSpreadsheet,
   Globe,
+  Sparkles,
+  MessageSquare,
+  ShoppingCart,
+  PieChart,
+  TrendingUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   useUIStore,
@@ -23,13 +30,16 @@ import { DropdownMenu, DropdownItem } from '../common';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import { TransactionFormModal } from '../modals/TransactionFormModal';
 import { PdfImportModal } from '../modals/PdfImportModal';
+import { CsvImportModal } from '../modals/CsvImportModal';
 import { PdfExportModal } from '../modals/PdfExportModal';
 import { DivvyDiaryExportModal } from '../modals/DivvyDiaryExportModal';
 import { DivvyDiaryLogo } from '../common/DivvyDiaryLogo';
+import { PortfolioInsightsModal } from '../modals/PortfolioInsightsModal';
 
 interface HeaderProps {
   onImportPP: () => void;
   onRefresh: () => void;
+  onOpenChat?: () => void;
 }
 
 // Provider display names
@@ -49,9 +59,26 @@ const supportsWebSearch = (provider: string, model: string): boolean => {
   return false;
 };
 
+// Get context-specific AI actions based on current view
+const getContextActions = (view: string): { label: string; icon: React.ReactNode; action: string }[] => {
+  switch (view) {
+    case 'holdings':
+      return [
+        { label: 'Diversifikation prüfen', icon: <PieChart className="w-4 h-4" />, action: 'diversification' },
+      ];
+    case 'charts':
+      return [
+        { label: 'Chart analysieren', icon: <TrendingUp className="w-4 h-4" />, action: 'chart' },
+      ];
+    default:
+      return [];
+  }
+};
+
 export function Header({
   onImportPP,
   onRefresh,
+  onOpenChat,
 }: HeaderProps) {
   const { currentView } = useUIStore();
   const { isLoading } = useAppStore();
@@ -66,8 +93,12 @@ export function Header({
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
   const [showPdfImportModal, setShowPdfImportModal] = useState(false);
+  const [showCsvImportModal, setShowCsvImportModal] = useState(false);
   const [showPdfExportModal, setShowPdfExportModal] = useState(false);
   const [showDivvyDiaryModal, setShowDivvyDiaryModal] = useState(false);
+  const [showInsightsModal, setShowInsightsModal] = useState(false);
+  const [insightsMode, setInsightsMode] = useState<'insights' | 'opportunities'>('insights');
+  const [showAiMenu, setShowAiMenu] = useState(false);
 
   // Check if AI is configured (has API key for selected provider)
   const hasAiApiKey = () => {
@@ -91,18 +122,101 @@ export function Header({
             {getViewLabel(currentView)}
           </h1>
 
-          {/* AI Provider Indicator */}
+          {/* AI Provider Indicator - Clickable */}
           {aiConfigured && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-muted/50 rounded-full border border-border/50">
-              <AIProviderLogo provider={aiProvider} size={16} />
-              <span className="text-xs text-muted-foreground">
-                {PROVIDER_NAMES[aiProvider] || aiProvider}
-              </span>
-              <span className="text-xs text-muted-foreground/60">
-                {aiModel.split('-').slice(0, 2).join('-')}
-              </span>
-              {supportsWebSearch(aiProvider, aiModel) && (
-                <span title="Live Web-Suche"><Globe className="w-3.5 h-3.5 text-blue-500" /></span>
+            <div className="relative">
+              <button
+                onClick={() => setShowAiMenu(!showAiMenu)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded-full border border-border/50 hover:bg-muted hover:border-border transition-colors"
+              >
+                <AIProviderLogo provider={aiProvider} size={16} />
+                <span className="text-xs text-muted-foreground">
+                  {PROVIDER_NAMES[aiProvider] || aiProvider}
+                </span>
+                <span className="text-xs text-muted-foreground/60">
+                  {aiModel.split('-').slice(0, 2).join('-')}
+                </span>
+                {supportsWebSearch(aiProvider, aiModel) && (
+                  <span title="Live Web-Suche"><Globe className="w-3.5 h-3.5 text-blue-500" /></span>
+                )}
+                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showAiMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* AI Dropdown Menu */}
+              {showAiMenu && (
+                <>
+                  {/* Backdrop */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowAiMenu(false)}
+                  />
+
+                  {/* Menu */}
+                  <div className="absolute top-full left-0 mt-1 w-56 bg-popover border border-border rounded-lg shadow-lg z-50 py-1">
+                    {/* Portfolio Insights */}
+                    <button
+                      onClick={() => {
+                        setInsightsMode('insights');
+                        setShowInsightsModal(true);
+                        setShowAiMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    >
+                      <Sparkles className="w-4 h-4 text-primary" />
+                      <span>Portfolio Insights</span>
+                    </button>
+
+                    {/* Buy Opportunities */}
+                    <button
+                      onClick={() => {
+                        setInsightsMode('opportunities');
+                        setShowInsightsModal(true);
+                        setShowAiMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    >
+                      <ShoppingCart className="w-4 h-4 text-green-600" />
+                      <span>Nachkauf-Chancen</span>
+                    </button>
+
+                    {/* Chat */}
+                    {onOpenChat && (
+                      <button
+                        onClick={() => {
+                          onOpenChat();
+                          setShowAiMenu(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                      >
+                        <MessageSquare className="w-4 h-4 text-blue-600" />
+                        <span>Chat öffnen</span>
+                      </button>
+                    )}
+
+                    {/* Context-specific actions */}
+                    {getContextActions(currentView).length > 0 && (
+                      <>
+                        <div className="border-t border-border my-1" />
+                        <div className="px-3 py-1 text-xs text-muted-foreground font-medium">
+                          {getViewLabel(currentView)}
+                        </div>
+                        {getContextActions(currentView).map((action) => (
+                          <button
+                            key={action.action}
+                            onClick={() => {
+                              // TODO: Handle context action
+                              setShowAiMenu(false);
+                            }}
+                            className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                          >
+                            {action.icon}
+                            <span>{action.label}</span>
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -133,6 +247,13 @@ export function Header({
               icon={<FileText className="w-4 h-4" />}
             >
               PDF Kontoauszug...
+            </DropdownItem>
+            <DropdownItem
+              onClick={() => setShowCsvImportModal(true)}
+              disabled={isLoading}
+              icon={<FileSpreadsheet className="w-4 h-4" />}
+            >
+              CSV Transaktionen...
             </DropdownItem>
           </DropdownMenu>
 
@@ -206,6 +327,13 @@ export function Header({
         onSuccess={onRefresh}
       />
 
+      {/* CSV Import Modal */}
+      <CsvImportModal
+        isOpen={showCsvImportModal}
+        onClose={() => setShowCsvImportModal(false)}
+        onSuccess={onRefresh}
+      />
+
       {/* PDF Export Modal */}
       <PdfExportModal
         isOpen={showPdfExportModal}
@@ -216,6 +344,13 @@ export function Header({
       <DivvyDiaryExportModal
         isOpen={showDivvyDiaryModal}
         onClose={() => setShowDivvyDiaryModal(false)}
+      />
+
+      {/* Portfolio Insights Modal */}
+      <PortfolioInsightsModal
+        isOpen={showInsightsModal}
+        onClose={() => setShowInsightsModal(false)}
+        initialMode={insightsMode}
       />
     </>
   );

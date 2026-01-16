@@ -1,5 +1,6 @@
 pub mod ai;
 mod commands;
+pub mod csv_import;
 pub mod currency;
 pub mod db;
 pub mod events;
@@ -138,6 +139,10 @@ pub fn run() {
             commands::csv::preview_csv,
             commands::csv::import_transactions_csv,
             commands::csv::import_prices_csv,
+            commands::csv::detect_csv_broker,
+            commands::csv::get_broker_templates,
+            commands::csv::import_csv_with_template,
+            commands::csv::analyze_csv_with_ai,
             // Reports
             commands::reports::generate_dividend_report,
             commands::reports::generate_realized_gains_report,

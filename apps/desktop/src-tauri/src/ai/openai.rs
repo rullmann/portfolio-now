@@ -30,7 +30,8 @@ fn extract_responses_text(response: &ResponsesApiResponse) -> String {
         .iter()
         .filter(|item| item.output_type == "message")
         .flat_map(|item| item.content.iter())
-        .filter(|c| c.content_type == "output_text")
+        // OpenAI Responses API uses "text" as content_type, not "output_text"
+        .filter(|c| c.content_type == "text" || c.content_type == "output_text")
         .map(|c| c.text.clone())
         .collect::<Vec<_>>()
         .join("")

@@ -22,6 +22,8 @@ type AnalysisMode = 'select' | 'insights' | 'opportunities';
 interface PortfolioInsightsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** If set, skip selection and start analysis immediately */
+  initialMode?: 'insights' | 'opportunities';
 }
 
 interface PortfolioInsightsResponse {
@@ -160,10 +162,11 @@ function InsightCard({ section }: { section: ParsedSection }) {
   );
 }
 
-export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsModalProps) {
+export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: PortfolioInsightsModalProps) {
   useEscapeKey(isOpen, onClose);
 
-  const [mode, setMode] = useState<AnalysisMode>('select');
+  const [mode, setMode] = useState<AnalysisMode>(initialMode || 'select');
+  const [hasAutoStarted, setHasAutoStarted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PortfolioInsightsResponse | null>(null);
@@ -284,12 +287,21 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
-      setMode('select');
+      setMode(initialMode || 'select');
       setResult(null);
       setError(null);
       resetSteps();
+      setHasAutoStarted(false);
     }
-  }, [isOpen]);
+  }, [isOpen, initialMode]);
+
+  // Auto-start analysis when initialMode is set
+  useEffect(() => {
+    if (isOpen && initialMode && !hasAutoStarted && !isLoading && !result) {
+      setHasAutoStarted(true);
+      runAnalysis(initialMode);
+    }
+  }, [isOpen, initialMode, hasAutoStarted, isLoading, result]);
 
   if (!isOpen) return null;
 

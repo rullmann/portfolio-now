@@ -603,6 +603,35 @@ export interface CsvImportResult {
   errors: string[];
 }
 
+export interface BrokerDetectionResult {
+  templateId: string | null;
+  brokerName: string;
+  confidence: number;
+  detectedHeaders: string[];
+}
+
+export interface BrokerTemplateSummary {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface AiMappingSuggestion {
+  field: string;
+  columnIndex?: number;
+  columnName?: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface AiCsvAnalysisResponse {
+  detectedBroker?: string;
+  brokerConfidence: number;
+  mappingSuggestions: AiMappingSuggestion[];
+  analysisNotes: string;
+  rawResponse: string;
+}
+
 // ============================================================================
 // Taxonomy Types
 // ============================================================================

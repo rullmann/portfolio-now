@@ -36,6 +36,9 @@ import type {
   CsvPreview,
   CsvColumnMapping,
   CsvImportResult,
+  BrokerDetectionResult,
+  BrokerTemplateSummary,
+  AiCsvAnalysisResponse,
   TaxonomyData,
   ClassificationData,
   ClassificationAssignmentData,
@@ -1150,6 +1153,61 @@ export async function importPricesCsv(
     dateColumn,
     priceColumn,
     delimiter,
+  });
+}
+
+/**
+ * Detect broker format from CSV file headers.
+ * @param path CSV file path
+ */
+export async function detectCsvBroker(path: string): Promise<BrokerDetectionResult> {
+  return invoke<BrokerDetectionResult>('detect_csv_broker', { path });
+}
+
+/**
+ * Get list of available broker templates.
+ */
+export async function getBrokerTemplates(): Promise<BrokerTemplateSummary[]> {
+  return invoke<BrokerTemplateSummary[]>('get_broker_templates');
+}
+
+/**
+ * Import transactions using a broker template.
+ * @param path CSV file path
+ * @param templateId Broker template ID
+ * @param portfolioId Target portfolio ID
+ */
+export async function importCsvWithTemplate(
+  path: string,
+  templateId: string,
+  portfolioId: number
+): Promise<CsvImportResult> {
+  return invoke<CsvImportResult>('import_csv_with_template', {
+    path,
+    templateId,
+    portfolioId,
+  });
+}
+
+/**
+ * Analyze CSV with AI assistance (Code-first, AI fallback).
+ * Use this when automatic detection fails or has low confidence.
+ * @param csvContent First ~20 lines of CSV for analysis
+ * @param provider AI provider (claude, openai, gemini, perplexity)
+ * @param model AI model ID
+ * @param apiKey API key for the provider
+ */
+export async function analyzeCsvWithAi(
+  csvContent: string,
+  provider: string,
+  model: string,
+  apiKey: string
+): Promise<AiCsvAnalysisResponse> {
+  return invoke<AiCsvAnalysisResponse>('analyze_csv_with_ai', {
+    csvContent,
+    provider,
+    model,
+    apiKey,
   });
 }
 
