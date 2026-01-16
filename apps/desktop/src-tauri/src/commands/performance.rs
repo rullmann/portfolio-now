@@ -89,36 +89,27 @@ pub fn calculate_performance(
     let ttwror_result = performance::calculate_ttwror(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
-    log::info!(
-        "Performance TTWROR: {} periods, total_return={:.2}%, days={}",
-        ttwror_result.periods.len(),
-        ttwror_result.total_return * 100.0,
-        ttwror_result.days
-    );
-
     // Get cash flows for IRR calculation
-    let cash_flows = get_cash_flows_for_irr(conn, portfolio_id, start, end)
+    let mut cash_flows = get_cash_flows_for_irr(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
-    log::info!("Performance IRR: {} cash flows found", cash_flows.len());
-    for cf in &cash_flows {
-        log::debug!("  Cash flow: {} on {}", cf.amount, cf.date);
+    // Get portfolio value at START date (initial investment)
+    // IRR requires the initial portfolio value as a cash flow (like Portfolio Performance)
+    let start_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, start)
+        .map_err(|e| e.to_string())?;
+
+    // Add initial value as cash flow at start - represents existing investment at period start
+    if start_value > 0.0 {
+        cash_flows.insert(0, performance::CashFlow { date: start, amount: start_value });
     }
 
-    // Get current portfolio value
-    let current_value = get_current_value(conn, portfolio_id).map_err(|e| e.to_string())?;
-
-    log::info!("Performance: current_value={:.2}", current_value);
+    // Get portfolio value at end_date using SSOT
+    let current_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, end)
+        .map_err(|e| e.to_string())?;
 
     // Calculate IRR
     let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
         .map_err(|e| e.to_string())?;
-
-    log::info!(
-        "Performance IRR result: irr={:.2}%, converged={}",
-        irr_result.irr * 100.0,
-        irr_result.converged
-    );
 
     // Calculate total invested (positive cash flows = money invested)
     let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
@@ -206,165 +197,52 @@ fn get_first_transaction_date(
 }
 
 /// Helper: Get cash flows for IRR
-/// Considers both account-level (DEPOSIT/REMOVAL) and portfolio-level (BUY/SELL/DELIVERY) transactions
+///
+/// Uses the central SSOT function from performance module which:
+/// - Only includes EXTERNAL cash flows (DEPOSIT/REMOVAL)
+/// - Converts all amounts to base currency
+/// - Falls back to BUY/SELL only when no DEPOSIT/REMOVAL exist
+///
+/// IMPORTANT: This does NOT mix BUY/SELL with DEPOSIT/REMOVAL to avoid double-counting!
+/// BUY/SELL are internal transactions (cash ↔ securities), not external cash flows.
 fn get_cash_flows_for_irr(
     conn: &rusqlite::Connection,
     portfolio_id: Option<i64>,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> Result<Vec<performance::CashFlow>, anyhow::Error> {
-    use rusqlite::params;
-
-    let mut cash_flows = Vec::new();
-
-    let portfolio_filter = portfolio_id
-        .map(|id| format!("AND owner_id = {}", id))
-        .unwrap_or_default();
-
-    // Get cash flows from portfolio transactions (BUY/SELL/DELIVERY)
-    // These represent actual money in/out of the portfolio
-    let portfolio_sql = format!(
-        r#"
-        SELECT date, txn_type, amount
-        FROM pp_txn
-        WHERE owner_type = 'portfolio'
-          AND txn_type IN ('BUY', 'SELL', 'DELIVERY_INBOUND', 'DELIVERY_OUTBOUND')
-          AND amount IS NOT NULL
-          AND date(date) >= ?1 AND date(date) <= ?2
-          {}
-        ORDER BY date
-        "#,
-        portfolio_filter
-    );
-
-    let mut stmt = conn.prepare(&portfolio_sql)?;
-    let rows = stmt.query_map(
-        params![start_date.to_string(), end_date.to_string()],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        },
-    )?;
-
-    for row in rows.flatten() {
-        let (date_str, txn_type, amount) = row;
-        if let Some(date) = parse_date_flexible(&date_str) {
-            let amount_f = amount as f64 / 100.0;
-            // For IRR convention: positive = money invested, negative = money withdrawn
-            // calculate_irr() will invert these internally for NPV calculation
-            let cf_amount = match txn_type.as_str() {
-                "BUY" | "DELIVERY_INBOUND" => amount_f,   // Money invested (positive)
-                "SELL" | "DELIVERY_OUTBOUND" => -amount_f, // Money withdrawn (negative)
-                _ => 0.0,
-            };
-            if cf_amount != 0.0 {
-                cash_flows.push(performance::CashFlow { date, amount: cf_amount });
-            }
-        }
-    }
-
-    // Also check for account-level DEPOSIT/REMOVAL (for portfolios with linked accounts)
-    if let Some(pid) = portfolio_id {
-        let account_sql = r#"
-            SELECT t.date, t.txn_type, t.amount
-            FROM pp_txn t
-            JOIN pp_portfolio p ON p.reference_account_id = t.owner_id
-            WHERE t.owner_type = 'account'
-              AND t.txn_type IN ('DEPOSIT', 'REMOVAL')
-              AND p.id = ?1
-              AND date(t.date) >= ?2 AND date(t.date) <= ?3
-            ORDER BY t.date
-        "#;
-
-        let mut stmt = conn.prepare(account_sql)?;
-        let rows = stmt.query_map(
-            params![pid, start_date.to_string(), end_date.to_string()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )?;
-
-        for row in rows.flatten() {
-            let (date_str, txn_type, amount) = row;
-            if let Some(date) = parse_date_flexible(&date_str) {
-                let amount_f = amount as f64 / 100.0;
-                // Same convention: positive = invested, negative = withdrawn
-                let cf_amount = match txn_type.as_str() {
-                    "DEPOSIT" => amount_f,   // Money invested (positive)
-                    "REMOVAL" => -amount_f,  // Money withdrawn (negative)
-                    _ => 0.0,
-                };
-                if cf_amount != 0.0 {
-                    cash_flows.push(performance::CashFlow { date, amount: cf_amount });
-                }
-            }
-        }
-    }
-
-    // Sort by date
-    cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
-
-    Ok(cash_flows)
+    // Use central SSOT function with fallback (for IRR only)
+    performance::get_cash_flows_with_fallback(conn, portfolio_id, start_date, end_date)
 }
 
-/// Helper: Get current portfolio value
-fn get_current_value(
-    conn: &rusqlite::Connection,
+/// Calculate risk metrics for a portfolio
+///
+/// Returns Sharpe, Sortino, Max Drawdown, Volatility, Beta/Alpha
+#[command]
+pub fn calculate_risk_metrics(
     portfolio_id: Option<i64>,
-) -> Result<f64, anyhow::Error> {
-    
+    start_date: Option<String>,
+    end_date: Option<String>,
+    benchmark_id: Option<i64>,
+    risk_free_rate: Option<f64>,
+) -> Result<performance::RiskMetrics, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
 
-    let portfolio_filter = portfolio_id
-        .map(|id| format!("AND t.owner_id = {}", id))
-        .unwrap_or_default();
+    // Parse dates or use defaults (1 year back)
+    let end = end_date
+        .and_then(|s| parse_date_flexible(&s))
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
 
-    let holdings_sql = format!(
-        r#"
-        SELECT
-            t.security_id,
-            SUM(CASE
-                WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
-                WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
-                ELSE 0
-            END) as net_shares
-        FROM pp_txn t
-        WHERE t.owner_type = 'portfolio'
-          AND t.shares IS NOT NULL
-          {}
-        GROUP BY t.security_id
-        HAVING net_shares > 0
-        "#,
-        portfolio_filter
-    );
+    let start = start_date
+        .and_then(|s| parse_date_flexible(&s))
+        .unwrap_or_else(|| {
+            // Default: 1 year back from end date
+            end - chrono::Duration::days(365)
+        });
 
-    let mut total_value = 0.0;
-
-    {
-        let mut stmt = conn.prepare(&holdings_sql)?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
-
-        for row in rows {
-            if let Ok((security_id, share_count)) = row {
-                let price_sql = "SELECT value FROM pp_latest_price WHERE security_id = ?";
-                let price: Option<i64> = conn.query_row(price_sql, [security_id], |row| row.get(0)).ok();
-
-                if let Some(p) = price {
-                    let shares_f = share_count as f64 / 100_000_000.0;
-                    let price_f = p as f64 / 100_000_000.0;
-                    total_value += shares_f * price_f;
-                }
-            }
-        }
-    }
-
-    Ok(total_value)
+    performance::calculate_risk_metrics(conn, portfolio_id, start, end, benchmark_id, risk_free_rate)
+        .map_err(|e| e.to_string())
 }

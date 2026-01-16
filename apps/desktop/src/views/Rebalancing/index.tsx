@@ -1,15 +1,18 @@
 /**
  * Simplified Rebalancing view - AI suggestions only, no execution.
  * Shows all holdings aggregated across all portfolios.
+ * Includes allocation target management for alerts.
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Building2 } from 'lucide-react';
+import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Building2, Target, Bell } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { getAllHoldings, suggestRebalanceWithAi } from '../../lib/api';
 import type { AggregatedHolding, AiRebalanceSuggestion } from '../../lib/types';
 import { toast, useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../../components/common';
+import { AllocationTargetModal } from '../../components/modals';
+import { AlertsPanel } from '../../components/alerts';
 
 interface HoldingWithTarget {
   securityId: number;
@@ -31,6 +34,13 @@ export function RebalancingView() {
   const [aiSuggestion, setAiSuggestion] = useState<AiRebalanceSuggestion | null>(null);
   const [showAiReasoning, setShowAiReasoning] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+  const [targetModalOpen, setTargetModalOpen] = useState(false);
+  const [selectedForTarget, setSelectedForTarget] = useState<{
+    securityId: number;
+    securityName: string;
+    weight: number;
+  } | null>(null);
 
   const {
     aiProvider,
@@ -177,6 +187,19 @@ export function RebalancingView() {
     })} ${baseCurrency}`;
   };
 
+  const openTargetModal = (holding?: HoldingWithTarget) => {
+    if (holding) {
+      setSelectedForTarget({
+        securityId: holding.securityId,
+        securityName: holding.securityName,
+        weight: holding.targetWeight,
+      });
+    } else {
+      setSelectedForTarget(null);
+    }
+    setTargetModalOpen(true);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -186,6 +209,24 @@ export function RebalancingView() {
           <h1 className="text-2xl font-bold">Rebalancing</h1>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAlertsPanel(!showAlertsPanel)}
+            className={`flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors ${
+              showAlertsPanel ? 'bg-muted' : ''
+            }`}
+            title="Allokationswarnungen anzeigen"
+          >
+            <Bell size={16} />
+            Warnungen
+          </button>
+          <button
+            onClick={() => openTargetModal()}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+            title="Zielgewichtung hinzufügen"
+          >
+            <Target size={16} />
+            Ziel
+          </button>
           {hasAiConfigured && (
             <button
               onClick={handleAiSuggest}
@@ -277,6 +318,7 @@ export function RebalancingView() {
                   <th className="text-right py-2 font-medium">Aktuell %</th>
                   <th className="text-right py-2 font-medium w-28">Ziel %</th>
                   <th className="text-right py-2 font-medium">Diff</th>
+                  <th className="text-right py-2 font-medium w-10"></th>
                 </tr>
               </thead>
               <tbody>
@@ -340,6 +382,15 @@ export function RebalancingView() {
                       >
                         {diff > 0 ? '+' : ''}
                         {diff.toFixed(1)}%
+                      </td>
+                      <td className="py-2 text-right">
+                        <button
+                          onClick={() => openTargetModal(h)}
+                          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-primary transition-colors"
+                          title="Als Zielgewichtung speichern"
+                        >
+                          <Target size={14} />
+                        </button>
                       </td>
                     </tr>
                   );
@@ -443,17 +494,47 @@ export function RebalancingView() {
       )}
 
       {/* Info Box */}
-      {!aiSuggestion && holdings.length > 0 && (
+      {!aiSuggestion && holdings.length > 0 && !showAlertsPanel && (
         <div className="bg-muted/50 rounded-lg border border-border p-4 text-sm text-muted-foreground">
           <p className="font-medium text-foreground mb-1">So funktioniert es:</p>
           <ol className="list-decimal list-inside space-y-1">
             <li>Klicken Sie auf "KI-Vorschlag" für eine automatische Analyse</li>
             <li>Die KI schlägt optimale Zielgewichtungen vor</li>
             <li>Passen Sie die Zielwerte manuell an, falls gewünscht</li>
+            <li>Klicken Sie auf "Ziel", um Warnungen bei Abweichungen zu erhalten</li>
             <li>Führen Sie die Käufe/Verkäufe manuell in Ihrem Depot aus</li>
           </ol>
         </div>
       )}
+
+      {/* Alerts Panel */}
+      {showAlertsPanel && (
+        <div className="bg-card rounded-lg border border-border p-4">
+          <AlertsPanel
+            onAddTarget={() => openTargetModal()}
+            className="min-h-[300px]"
+          />
+        </div>
+      )}
+
+      {/* Allocation Target Modal */}
+      <AllocationTargetModal
+        isOpen={targetModalOpen}
+        onClose={() => {
+          setTargetModalOpen(false);
+          setSelectedForTarget(null);
+        }}
+        onSuccess={() => {
+          // Refresh alerts panel if visible
+          if (showAlertsPanel) {
+            setShowAlertsPanel(false);
+            setTimeout(() => setShowAlertsPanel(true), 100);
+          }
+        }}
+        preSelectedSecurityId={selectedForTarget?.securityId}
+        preSelectedSecurityName={selectedForTarget?.securityName}
+        preSelectedWeight={selectedForTarget?.weight}
+      />
     </div>
   );
 }

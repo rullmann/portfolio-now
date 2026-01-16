@@ -1,14 +1,18 @@
 /**
  * Secure Storage for sensitive data like API keys
  *
- * Uses Tauri's plugin-store which stores data in the app data directory
- * in an encrypted format. This is more secure than browser localStorage
- * which can be accessed by any JavaScript code in the WebView.
+ * Uses Tauri's plugin-store which stores data in the app data directory.
+ * This is more secure than browser localStorage because:
+ * - Data is stored outside the WebView's accessible storage
+ * - Not accessible by arbitrary JavaScript code injected into the page
+ * - Isolated to the Tauri application context
  *
  * SECURITY NOTES:
- * - Keys are stored in app_data_dir/secure-keys.json
+ * - Keys are stored in app_data_dir/secure-keys.json (NOT encrypted, but isolated)
  * - The store is only accessible from the Tauri app, not arbitrary JS
  * - Keys are never logged or exposed in error messages
+ * - For truly encrypted storage, consider using tauri-plugin-stronghold
+ *   or the OS keychain (tauri-plugin-keyring)
  */
 
 import { load, type Store } from '@tauri-apps/plugin-store';

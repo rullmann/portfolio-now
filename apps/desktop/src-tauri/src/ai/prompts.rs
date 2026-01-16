@@ -425,12 +425,11 @@ Antworte in Markdown mit diesen Abschnitten:
 [2-3 konkrete Risiken/Schwächen mit Zahlen, z.B. Klumpenrisiko, Währungsrisiko]
 
 ## Empfehlungen
-[2-3 konkrete, umsetzbare Vorschläge zur Optimierung]
+[2-3 konkrete, umsetzbare Vorschläge zur Portfolio-Optimierung]
 
 WICHTIG:
 - Sei direkt und konkret. Keine allgemeinen Floskeln.
 - Beziehe dich auf die konkreten Zahlen im Portfolio.
-- Gib KEINE Kaufempfehlungen für einzelne Aktien.
 - Beginne direkt mit ## Zusammenfassung"#,
         ctx.analysis_date,
         ctx.total_value,
@@ -450,6 +449,94 @@ WICHTIG:
             .map(|y| format!("- Dividendenrendite: {:.2}%", y))
             .unwrap_or_default(),
         ctx.portfolio_age_days,
+    )
+}
+
+/// Build the prompt for AI-based buy opportunity analysis
+pub fn build_opportunities_prompt(ctx: &PortfolioInsightsContext) -> String {
+    // Format all holdings with gain/loss for opportunity analysis
+    let holdings_str = ctx
+        .holdings
+        .iter()
+        .map(|h| {
+            let gl_str = h
+                .gain_loss_percent
+                .map(|g| format!("{:+.1}%", g))
+                .unwrap_or_else(|| "-".to_string());
+            let avg_cost_str = h
+                .avg_cost_per_share
+                .map(|a| format!(", Ø-Kurs: {:.2}", a))
+                .unwrap_or_default();
+            let price_str = h
+                .current_price
+                .map(|p| format!(", Aktuell: {:.2}", p))
+                .unwrap_or_default();
+            format!(
+                "- {} | Wert: {:.2} {} | Gewicht: {:.1}% | G/V: {}{}{} | Einstand: {:.2} {}",
+                h.name, h.current_value, ctx.base_currency, h.weight_percent, gl_str,
+                avg_cost_str, price_str, h.cost_basis, ctx.base_currency
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Format currency allocation
+    let currency_str = ctx
+        .currency_allocation
+        .iter()
+        .map(|(currency, weight)| format!("{}: {:.1}%", currency, weight))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"Du bist ein Finanzberater. Analysiere dieses Portfolio und identifiziere Nachkaufchancen.
+
+## Portfolio-Daten (Stand: {})
+- Gesamtwert: {:.2} {}
+- Gesamtrendite: {:+.1}%
+- Währungen: {}
+- Anzahl Positionen: {}
+
+## Alle Positionen:
+{}
+
+## Aufgabe
+Bewerte jede Position nach Nachkauf-Attraktivität basierend auf:
+1. **Aktueller Gewinn/Verlust** - Positionen im Minus bieten Chance zum Verbilligen
+2. **Gewichtung im Portfolio** - Untergewichtete Positionen könnten aufgestockt werden
+3. **Qualität der Position** - Diversifikation, langfristiges Potenzial
+
+## Antworte in Markdown:
+
+## Nachkauf-Empfehlungen
+
+### 🟢 Attraktiv
+[Positionen die sich besonders zum Nachkauf eignen. Für jede Position:
+- Name der Position
+- Begründung (G/V, Gewichtung, etc.)
+- Grobe Einschätzung der Attraktivität]
+
+### 🟡 Neutral
+[Positionen ohne klare Empfehlung für oder gegen Nachkauf]
+
+### 🔴 Nicht empfohlen
+[Positionen die man aktuell eher nicht nachkaufen sollte, mit Begründung]
+
+## Zusammenfassung
+[1-2 Sätze Fazit: Welche 1-2 Positionen wären am interessantesten zum Nachkauf und warum?]
+
+WICHTIG:
+- Beziehe dich auf die konkreten Zahlen (G/V, Gewichtung)
+- Positionen im Minus sind nicht automatisch schlecht - sie können Gelegenheiten sein
+- Stark übergewichtete Positionen sollten eher nicht nachgekauft werden
+- Beginne direkt mit ## Nachkauf-Empfehlungen"#,
+        ctx.analysis_date,
+        ctx.total_value,
+        ctx.base_currency,
+        ctx.total_gain_loss_percent,
+        currency_str,
+        ctx.holdings.len(),
+        holdings_str,
     )
 }
 
@@ -751,6 +838,7 @@ Du kannst:
 4. Rebalancing-Vorschläge machen
 5. Steuerliche Aspekte erläutern
 6. WATCHLIST VERWALTEN - Du kannst Aktien zur Watchlist hinzufügen oder entfernen!
+7. NACHKAUF-EMPFEHLUNGEN - Basierend auf Gewinn/Verlust und Gewichtung empfehlen, welche Positionen zum Nachkauf interessant sein könnten
 
 === WEB-SUCHE ===
 Bei Fragen zu AKTUELLEN Kursen, Indizes (DAX, S&P 500, etc.) oder News: Recherchiere SOFORT im Web!

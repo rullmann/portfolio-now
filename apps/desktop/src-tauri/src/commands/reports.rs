@@ -636,3 +636,199 @@ pub fn get_dividend_yield(security_id: i64) -> Result<f64, String> {
 
     Ok(dividend_yield)
 }
+
+// ============================================================================
+// Monthly & Yearly Returns (Heatmap / Year Returns Widget)
+// ============================================================================
+
+/// Monthly return data for heatmap
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyReturn {
+    pub year: i32,
+    pub month: u32,
+    pub return_percent: f64,
+    pub absolute_gain: f64,
+    pub start_value: f64,
+    pub end_value: f64,
+}
+
+/// Yearly return data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YearlyReturn {
+    pub year: i32,
+    pub ttwror: f64,
+    pub irr: f64,
+    pub absolute_gain: f64,
+    pub start_value: f64,
+    pub end_value: f64,
+}
+
+/// Get monthly returns for heatmap visualization
+#[command]
+pub fn get_monthly_returns(
+    portfolio_id: Option<i64>,
+    years: Option<Vec<i32>>,
+) -> Result<Vec<MonthlyReturn>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get the date range from portfolio history
+    let (min_date, max_date): (String, String) = conn
+        .query_row(
+            "SELECT MIN(date), MAX(date) FROM pp_portfolio_value_history",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or((String::new(), String::new()));
+
+    if min_date.is_empty() || max_date.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Parse dates
+    let start_year: i32 = min_date[..4].parse().unwrap_or(2020);
+    let end_year: i32 = max_date[..4].parse().unwrap_or(2024);
+
+    // Filter years if specified
+    let year_range: Vec<i32> = if let Some(y) = years {
+        y
+    } else {
+        (start_year..=end_year).collect()
+    };
+
+    let mut results = Vec::new();
+
+    for year in year_range {
+        for month in 1..=12 {
+            let month_start = format!("{:04}-{:02}-01", year, month);
+            let month_end = if month == 12 {
+                format!("{:04}-01-01", year + 1)
+            } else {
+                format!("{:04}-{:02}-01", year, month + 1)
+            };
+
+            // Get start value (last value before or at month start)
+            let start_value: Option<f64> = conn
+                .query_row(
+                    r#"
+                    SELECT value FROM pp_portfolio_value_history
+                    WHERE date <= ? ORDER BY date DESC LIMIT 1
+                    "#,
+                    [&month_start],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            // Get end value (last value before next month)
+            let end_value: Option<f64> = conn
+                .query_row(
+                    r#"
+                    SELECT value FROM pp_portfolio_value_history
+                    WHERE date < ? ORDER BY date DESC LIMIT 1
+                    "#,
+                    [&month_end],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let (Some(start), Some(end)) = (start_value, end_value) {
+                if start > 0.0 {
+                    let return_percent = ((end - start) / start) * 100.0;
+                    let absolute_gain = end - start;
+
+                    results.push(MonthlyReturn {
+                        year,
+                        month,
+                        return_percent,
+                        absolute_gain,
+                        start_value: start,
+                        end_value: end,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// Get yearly returns for year returns widget
+#[command]
+pub fn get_yearly_returns(portfolio_id: Option<i64>) -> Result<Vec<YearlyReturn>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get the date range from portfolio history
+    let years: Vec<i32> = conn
+        .prepare(
+            r#"
+            SELECT DISTINCT CAST(substr(date, 1, 4) AS INTEGER) as year
+            FROM pp_portfolio_value_history
+            ORDER BY year
+            "#,
+        )
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut results = Vec::new();
+
+    for year in years {
+        let year_start = format!("{:04}-01-01", year);
+        let year_end = format!("{:04}-01-01", year + 1);
+
+        // Get start value (first value of year or last value of previous year)
+        let start_value: Option<f64> = conn
+            .query_row(
+                r#"
+                SELECT value FROM pp_portfolio_value_history
+                WHERE date <= ? ORDER BY date DESC LIMIT 1
+                "#,
+                [&year_start],
+                |row| row.get(0),
+            )
+            .ok();
+
+        // Get end value (last value of year)
+        let end_value: Option<f64> = conn
+            .query_row(
+                r#"
+                SELECT value FROM pp_portfolio_value_history
+                WHERE date < ? ORDER BY date DESC LIMIT 1
+                "#,
+                [&year_end],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let (Some(start), Some(end)) = (start_value, end_value) {
+            if start > 0.0 {
+                let ttwror = ((end - start) / start) * 100.0;
+
+                // For IRR we would need cash flows, simplified here
+                let irr = ttwror; // Simplified
+
+                let absolute_gain = end - start;
+
+                results.push(YearlyReturn {
+                    year,
+                    ttwror,
+                    irr,
+                    absolute_gain,
+                    start_value: start,
+                    end_value: end,
+                });
+            }
+        }
+    }
+
+    Ok(results)
+}

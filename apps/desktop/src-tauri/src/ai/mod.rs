@@ -69,6 +69,7 @@ pub use prompts::{
     build_annotation_prompt,
     build_enhanced_annotation_prompt,
     build_portfolio_insights_prompt,
+    build_opportunities_prompt,
     build_chat_system_prompt,
 };
 

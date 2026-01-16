@@ -14,12 +14,15 @@ use crate::performance;
 use crate::pp::common::{prices, shares};
 use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::Connection;
+use tauri::AppHandle;
 
 /// Load portfolio context from database for AI analysis
 ///
 /// # Arguments
 /// * `base_currency` - Base currency for value conversion (e.g., "EUR")
 /// * `user_name` - Optional user name for personalized chat
+/// * `_include_technical` - Deprecated, ignored (kept for API compatibility)
+/// * `_app_handle` - Deprecated, ignored (kept for API compatibility)
 ///
 /// # Returns
 /// Complete portfolio context including holdings, transactions, dividends,
@@ -27,6 +30,8 @@ use rusqlite::Connection;
 pub fn load_portfolio_context(
     base_currency: &str,
     user_name: Option<String>,
+    _include_technical: bool,
+    _app_handle: Option<&AppHandle>,
 ) -> Result<PortfolioInsightsContext, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
@@ -134,7 +139,7 @@ pub fn load_portfolio_context(
         }
     }
 
-    for (security_id, name, isin, ticker, security_currency, shares_scaled, price_scaled) in holdings_data {
+    for (security_id, name, isin, ticker, security_currency, shares_scaled, price_scaled) in holdings_data.into_iter() {
         let shares_val = shares::to_decimal(shares_scaled);
 
         // Handle GBX/GBp (British Pence) - divide by 100 to get GBP

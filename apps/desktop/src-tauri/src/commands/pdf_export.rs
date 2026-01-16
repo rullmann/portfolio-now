@@ -3,6 +3,8 @@
 //! Generate PDF reports for portfolios, holdings, and performance.
 
 use crate::db;
+use crate::performance;
+use chrono::{NaiveDate, NaiveDateTime};
 use printpdf::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -50,6 +52,22 @@ fn add_text(
     text: &str,
 ) {
     layer.use_text(text, size, x, y, font);
+}
+
+/// Parse date string flexibly - handles both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
+fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
 }
 
 /// Export portfolio summary as PDF
@@ -228,15 +246,20 @@ pub fn export_holdings_pdf(
 /// Export performance report as PDF
 #[command]
 pub fn export_performance_pdf(
-    _portfolio_id: Option<i64>,
+    portfolio_id: Option<i64>,
     start_date: String,
     end_date: String,
     path: String,
 ) -> Result<PdfExportResult, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
-    let _conn = conn_guard
+    let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let start = parse_date_flexible(&start_date)
+        .ok_or_else(|| "Invalid start_date".to_string())?;
+    let end = parse_date_flexible(&end_date)
+        .ok_or_else(|| "Invalid end_date".to_string())?;
 
     let (doc, page1, layer1) = create_pdf("Performance Bericht");
     let font = get_font(&doc);
@@ -257,25 +280,49 @@ pub fn export_performance_pdf(
         &format!("Zeitraum: {} bis {}", start_date, end_date),
     );
 
-    // Get performance data
-    // Note: This is simplified - actual implementation would use the performance module
+    // Get performance data from SSOT
+    let ttwror_result = performance::calculate_ttwror(conn, portfolio_id, start, end)
+        .map_err(|e| e.to_string())?;
+
+    let cash_flows = performance::get_cash_flows_with_fallback(conn, portfolio_id, start, end)
+        .map_err(|e| e.to_string())?;
+
+    let current_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, end)
+        .map_err(|e| e.to_string())?;
+
+    let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
+        .map_err(|e| e.to_string())?;
+
+    let risk_metrics = performance::calculate_risk_metrics(conn, portfolio_id, start, end, None, None).ok();
     let mut y = 250.0;
 
     add_text(&current_layer, &font_bold, Mm(20.0), Mm(y), 12.0, "Performance Kennzahlen");
     y -= 10.0;
 
-    // Placeholder data - would come from actual performance calculation
+    let ttwror = ttwror_result.total_return * 100.0;
+    let ttwror_annualized = ttwror_result.annualized_return * 100.0;
+    let irr = irr_result.irr * 100.0;
+
+    let max_drawdown = risk_metrics
+        .as_ref()
+        .map(|m| format!("-{:.2}%", m.max_drawdown * 100.0))
+        .unwrap_or_else(|| "n/a".to_string());
+    let volatility = risk_metrics
+        .as_ref()
+        .map(|m| format!("{:.2}%", m.volatility * 100.0))
+        .unwrap_or_else(|| "n/a".to_string());
+
     let metrics = vec![
-        ("Gesamtrendite (TTWROR)", "12.5%"),
-        ("Annualisierte Rendite", "8.3%"),
-        ("Interner Zinsfuß (IRR)", "9.1%"),
-        ("Max. Drawdown", "-15.2%"),
-        ("Volatilität (ann.)", "18.5%"),
+        ("Gesamtrendite (TTWROR)", format!("{:.2}%", ttwror)),
+        ("Annualisierte Rendite", format!("{:.2}%", ttwror_annualized)),
+        ("Interner Zinsfuß (IRR)", format!("{:.2}%", irr)),
+        ("Max. Drawdown", max_drawdown),
+        ("Volatilität (ann.)", volatility),
     ];
 
     for (label, value) in metrics {
         add_text(&current_layer, &font, Mm(20.0), Mm(y), 10.0, label);
-        add_text(&current_layer, &font, Mm(120.0), Mm(y), 10.0, value);
+        add_text(&current_layer, &font, Mm(120.0), Mm(y), 10.0, &value);
         y -= 6.0;
     }
 

@@ -1,6 +1,9 @@
 pub mod ai;
 pub mod ai_helpers;
 pub mod alerts;
+pub mod attributes;
+pub mod consortium;
+pub mod dashboard;
 pub mod annotations;
 pub mod benchmark;
 pub mod brandfetch;
@@ -9,6 +12,8 @@ pub mod crud;
 pub mod csv;
 pub mod currency;
 pub mod data;
+pub mod divvydiary;
+pub mod dividends;
 pub mod drawings;
 pub mod file;
 pub mod import;

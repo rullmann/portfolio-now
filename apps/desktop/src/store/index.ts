@@ -23,10 +23,12 @@ export type View =
   | 'taxonomies'
   | 'plans'
   | 'rebalancing'
+  | 'optimization'
   | 'charts'
   | 'screener'
   | 'benchmark'
   | 'reports'
+  | 'consortium'
   | 'settings';
 
 export interface NavItem {
@@ -49,13 +51,17 @@ export const navItems: NavItem[] = [
   // Analysis section
   { id: 'asset-statement', label: 'Vermögensaufstellung', icon: 'Table2', section: 'analysis' },
   { id: 'taxonomies', label: 'Klassifizierung', icon: 'FolderTree', section: 'analysis' },
-  { id: 'benchmark', label: 'Benchmark', icon: 'Target', section: 'analysis' },
-  { id: 'reports', label: 'Berichte', icon: 'BarChart3', section: 'analysis' },
+  // --- HIDDEN FOR v0.1.0 RELEASE (see RELEASE_NOTES.md) ---
+  // { id: 'benchmark', label: 'Benchmark', icon: 'Target', section: 'analysis' },
+  // { id: 'consortium', label: 'Portfolio-Gruppen', icon: 'FolderKanban', section: 'analysis' },
+  // { id: 'reports', label: 'Berichte', icon: 'BarChart3', section: 'analysis' },
   // Tools section
-  { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
-  { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
+  { id: 'optimization', label: 'Optimierung', icon: 'Sparkles', section: 'tools' },
   { id: 'charts', label: 'Technische Analyse', icon: 'CandlestickChart', section: 'tools' },
-  { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
+  // --- HIDDEN FOR v0.1.0 RELEASE (see RELEASE_NOTES.md) ---
+  // { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
+  // { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
+  // { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
 ];
 
 // ============================================================================
@@ -347,6 +353,10 @@ interface SettingsState {
   perplexityApiKey: string;
   setPerplexityApiKey: (key: string) => void;
 
+  // External Services API Keys
+  divvyDiaryApiKey: string;
+  setDivvyDiaryApiKey: (key: string) => void;
+
   // Model migration tracking (not persisted)
   pendingModelMigration: { from: string; to: string; provider: string } | null;
   clearPendingModelMigration: () => void;
@@ -411,6 +421,10 @@ export const useSettingsStore = create<SettingsState>()(
       setGeminiApiKey: (key) => set({ geminiApiKey: key }),
       perplexityApiKey: '',
       setPerplexityApiKey: (key) => set({ perplexityApiKey: key }),
+
+      // External Services API Keys
+      divvyDiaryApiKey: '',
+      setDivvyDiaryApiKey: (key) => set({ divvyDiaryApiKey: key }),
 
       // Model migration tracking (transient, not persisted)
       pendingModelMigration: null,
@@ -507,6 +521,8 @@ export const useSettingsStore = create<SettingsState>()(
           setGeminiApiKey,
           perplexityApiKey,
           setPerplexityApiKey,
+          divvyDiaryApiKey,
+          setDivvyDiaryApiKey,
           // Keep the rest
           ...persisted
         } = state;
@@ -520,6 +536,7 @@ export const useSettingsStore = create<SettingsState>()(
         void openaiApiKey; void setOpenaiApiKey;
         void geminiApiKey; void setGeminiApiKey;
         void perplexityApiKey; void setPerplexityApiKey;
+        void divvyDiaryApiKey; void setDivvyDiaryApiKey;
         void pendingModelMigration; void clearPendingModelMigration;
         return persisted as SettingsState;
       },

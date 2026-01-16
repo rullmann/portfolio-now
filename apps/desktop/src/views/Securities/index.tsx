@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ChangeEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, Sparkles, GitMerge, Split, ChevronDown, ClipboardCheck } from 'lucide-react';
 import type { SecurityData, TransactionData } from '../../lib/types';
 import {
   getSecurities,
@@ -17,8 +17,9 @@ import {
   deleteSecurityLogo,
   getTransactions,
   deleteTransaction,
+  getUnconfiguredSecuritiesCount,
 } from '../../lib/api';
-import { SecurityFormModal, SecurityPriceModal, TransactionFormModal } from '../../components/modals';
+import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, QuoteSuggestionModal, QuoteAuditModal, StockSplitModal, MergerModal } from '../../components/modals';
 import { formatCurrency } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
@@ -91,6 +92,16 @@ export function SecuritiesView() {
   const [logoMenuOpen, setLogoMenuOpen] = useState<number | null>(null);
   const [recentlyUploadedLogos, setRecentlyUploadedLogos] = useState<Set<number>>(new Set());
 
+  // Quote suggestion modal state
+  const [isQuoteSuggestionModalOpen, setIsQuoteSuggestionModalOpen] = useState(false);
+  const [isQuoteAuditModalOpen, setIsQuoteAuditModalOpen] = useState(false);
+  const [unconfiguredCount, setUnconfiguredCount] = useState(0);
+
+  // Corporate actions modal state
+  const [isStockSplitModalOpen, setIsStockSplitModalOpen] = useState(false);
+  const [isMergerModalOpen, setIsMergerModalOpen] = useState(false);
+  const [isCorporateActionsMenuOpen, setIsCorporateActionsMenuOpen] = useState(false);
+
   // Track which logos need caching after they load
   const logosToCache = useRef<Map<number, { url: string; domain: string }>>(new Map());
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -119,6 +130,9 @@ export function SecuritiesView() {
     try {
       const data = await getSecurities();
       setDbSecurities(data);
+      // Also load unconfigured count
+      const countInfo = await getUnconfiguredSecuritiesCount();
+      setUnconfiguredCount(countInfo.totalUnconfigured);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -525,6 +539,26 @@ export function SecuritiesView() {
           Wertpapiere ({filteredSecurities.length} von {dbSecurities.length})
         </h2>
         <div className="flex gap-2">
+          {unconfiguredCount > 0 && (
+            <button
+              onClick={() => setIsQuoteSuggestionModalOpen(true)}
+              disabled={isLoading}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-primary/50 bg-primary/5 text-primary rounded-md hover:bg-primary/10 transition-colors disabled:opacity-50"
+              title="Kursquellen für Wertpapiere ohne Konfiguration vorschlagen"
+            >
+              <Sparkles size={16} />
+              Kursquellen vorschlagen ({unconfiguredCount})
+            </button>
+          )}
+          <button
+            onClick={() => setIsQuoteAuditModalOpen(true)}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            title="Bestehende Kursquellen-Konfigurationen prüfen und optimieren"
+          >
+            <ClipboardCheck size={16} />
+            Konfiguration prüfen
+          </button>
           <button
             onClick={handleSyncPrices}
             disabled={isSyncing || isLoading}
@@ -549,6 +583,47 @@ export function SecuritiesView() {
             <Plus size={16} />
             Neu
           </button>
+          {/* Corporate Actions Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setIsCorporateActionsMenuOpen(!isCorporateActionsMenuOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+            >
+              <Split size={16} />
+              Kapitalmaßnahmen
+              <ChevronDown size={14} className={`transition-transform ${isCorporateActionsMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isCorporateActionsMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsCorporateActionsMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-md shadow-lg py-1 min-w-[180px]">
+                  <button
+                    onClick={() => {
+                      setIsCorporateActionsMenuOpen(false);
+                      setIsStockSplitModalOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+                  >
+                    <Split size={16} className="text-muted-foreground" />
+                    Aktiensplit
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsCorporateActionsMenuOpen(false);
+                      setIsMergerModalOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+                  >
+                    <GitMerge size={16} className="text-muted-foreground" />
+                    Fusion / Übernahme
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1067,6 +1142,36 @@ export function SecuritiesView() {
         onSuccess={handleTransactionModalSuccess}
         defaultSecurityId={selectedSecurity?.id}
         transaction={editingTransaction || undefined}
+      />
+
+      {/* Quote Suggestion Modal */}
+      <QuoteSuggestionModal
+        isOpen={isQuoteSuggestionModalOpen}
+        onClose={() => setIsQuoteSuggestionModalOpen(false)}
+        onComplete={loadSecurities}
+      />
+
+      {/* Quote Audit Modal */}
+      <QuoteAuditModal
+        isOpen={isQuoteAuditModalOpen}
+        onClose={() => setIsQuoteAuditModalOpen(false)}
+        onComplete={loadSecurities}
+      />
+
+      {/* Stock Split Modal */}
+      <StockSplitModal
+        isOpen={isStockSplitModalOpen}
+        onClose={() => setIsStockSplitModalOpen(false)}
+        onSuccess={loadSecurities}
+        defaultSecurityId={selectedSecurity?.id}
+      />
+
+      {/* Merger Modal */}
+      <MergerModal
+        isOpen={isMergerModalOpen}
+        onClose={() => setIsMergerModalOpen(false)}
+        onSuccess={loadSecurities}
+        defaultSourceSecurityId={selectedSecurity?.id}
       />
     </div>
   );

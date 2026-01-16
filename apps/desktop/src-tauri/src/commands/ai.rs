@@ -158,18 +158,32 @@ pub struct PortfolioInsightsRequest {
     pub model: String,
     pub api_key: String,
     pub base_currency: String,
+    /// Analysis type: "insights" (portfolio evaluation) or "opportunities" (buy recommendations)
+    #[serde(default = "default_insights")]
+    pub analysis_type: String,
+}
+
+fn default_insights() -> String {
+    "insights".to_string()
 }
 
 
 /// Analyze portfolio with AI to get insights
 ///
 /// Returns a markdown-formatted analysis with strengths, weaknesses, and recommendations.
+/// The `analysis_type` parameter determines whether to analyze for general insights or buying opportunities.
 #[command]
 pub async fn analyze_portfolio_with_ai(
+    _app: AppHandle,
     request: PortfolioInsightsRequest,
 ) -> Result<PortfolioInsightsResponse, String> {
-    // Load portfolio context from database (no user name for insights)
-    let context = load_portfolio_context(&request.base_currency, None)?;
+    // Load portfolio context without technical signals (AI does the analysis now)
+    let context = load_portfolio_context(
+        &request.base_currency,
+        None,
+        false, // No technical signals needed - AI analyzes directly
+        None,
+    )?;
 
     // Check if portfolio has holdings
     if context.holdings.is_empty() {
@@ -184,13 +198,28 @@ pub async fn analyze_portfolio_with_ai(
         request.model.clone()
     };
 
-    // Call the appropriate provider
-    let result = match request.provider.as_str() {
-        "claude" => claude::analyze_portfolio(&model, &request.api_key, &context).await,
-        "openai" => openai::analyze_portfolio(&model, &request.api_key, &context).await,
-        "gemini" => gemini::analyze_portfolio(&model, &request.api_key, &context).await,
-        "perplexity" => perplexity::analyze_portfolio(&model, &request.api_key, &context).await,
-        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+    // Call the appropriate provider based on analysis type
+    let result = match request.analysis_type.as_str() {
+        "opportunities" => {
+            // Buy opportunity analysis
+            match request.provider.as_str() {
+                "claude" => claude::analyze_opportunities(&model, &request.api_key, &context).await,
+                "openai" => openai::analyze_opportunities(&model, &request.api_key, &context).await,
+                "gemini" => gemini::analyze_opportunities(&model, &request.api_key, &context).await,
+                "perplexity" => perplexity::analyze_opportunities(&model, &request.api_key, &context).await,
+                _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+            }
+        }
+        _ => {
+            // Default: portfolio insights
+            match request.provider.as_str() {
+                "claude" => claude::analyze_portfolio(&model, &request.api_key, &context).await,
+                "openai" => openai::analyze_portfolio(&model, &request.api_key, &context).await,
+                "gemini" => gemini::analyze_portfolio(&model, &request.api_key, &context).await,
+                "perplexity" => perplexity::analyze_portfolio(&model, &request.api_key, &context).await,
+                _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+            }
+        }
     };
 
     result.map_err(|e| {
@@ -224,7 +253,8 @@ pub async fn chat_with_portfolio_assistant(
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
     // Load portfolio context from database with user name
-    let context = load_portfolio_context(&request.base_currency, request.user_name.clone())?;
+    // For chat, we always include technical signals (no progress events needed)
+    let context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
 
     // Auto-upgrade deprecated models
     let model = if let Some(upgraded) = get_model_upgrade(&request.model) {

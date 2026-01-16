@@ -122,7 +122,7 @@ function PortfolioChart({
   portfolioData: Array<{ date: string; value: number }>;
   investedData: Array<{ date: string; value: number }>;
   timeRange: string;
-  onTimeRangeChange: (range: '1M' | '3M' | '6M' | '1Y' | 'MAX') => void;
+  onTimeRangeChange: (range: '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX') => void;
   currency: string;
   currentTotalValue?: number;
   currentCostBasis?: number;
@@ -249,11 +249,11 @@ function PortfolioChart({
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex gap-1">
-            {(['1M', '3M', '6M', '1Y', 'MAX'] as const).map((range) => (
+            {(['1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'MAX'] as const).map((range) => (
               <button
                 key={range}
                 onClick={() => onTimeRangeChange(range)}
-                className={`px-2.5 py-1 text-[10px] font-medium rounded-md transition-all ${
+                className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all ${
                   timeRange === range
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -387,7 +387,7 @@ export function DashboardView({
 
   const [baseCurrency, setBaseCurrency] = useState<string>('EUR');
   const [performance, setPerformance] = useState<PerformanceResult | null>(null);
-  const [chartTimeRange, setChartTimeRange] = useState<'1M' | '3M' | '6M' | '1Y' | 'MAX'>('1Y');
+  const [chartTimeRange, setChartTimeRange] = useState<'1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX'>('1Y');
   const [isSyncing, setIsSyncing] = useState(false);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const lastSyncTime = useSettingsStore((state) => state.lastSyncTime);
@@ -502,13 +502,39 @@ export function DashboardView({
       .catch(() => setBaseCurrency('EUR'));
   }, []);
 
+  // Calculate start date based on time range for performance metrics
+  const performanceStartDate = useMemo(() => {
+    const now = new Date();
+    switch (chartTimeRange) {
+      case '1W':
+        return new Date(new Date().setDate(now.getDate() - 7)).toISOString().split('T')[0];
+      case '1M':
+        return new Date(new Date().setMonth(now.getMonth() - 1)).toISOString().split('T')[0];
+      case '3M':
+        return new Date(new Date().setMonth(now.getMonth() - 3)).toISOString().split('T')[0];
+      case '6M':
+        return new Date(new Date().setMonth(now.getMonth() - 6)).toISOString().split('T')[0];
+      case 'YTD':
+        return new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
+      case '1Y':
+        return new Date(new Date().setFullYear(now.getFullYear() - 1)).toISOString().split('T')[0];
+      case '3Y':
+        return new Date(new Date().setFullYear(now.getFullYear() - 3)).toISOString().split('T')[0];
+      case '5Y':
+        return new Date(new Date().setFullYear(now.getFullYear() - 5)).toISOString().split('T')[0];
+      case 'MAX':
+      default:
+        return undefined; // Use default (first transaction date)
+    }
+  }, [chartTimeRange]);
+
   useEffect(() => {
     if (dbHoldings.length > 0) {
-      calculatePerformance()
+      calculatePerformance({ startDate: performanceStartDate })
         .then(setPerformance)
         .catch(() => setPerformance(null));
     }
-  }, [dbHoldings]);
+  }, [dbHoldings, performanceStartDate]);
 
   const { filteredChartData, filteredInvestedData } = useMemo(() => {
     if (dbPortfolioHistory.length === 0) {
@@ -518,6 +544,9 @@ export function DashboardView({
     const now = new Date();
     let cutoffDate: Date;
     switch (chartTimeRange) {
+      case '1W':
+        cutoffDate = new Date(new Date().setDate(now.getDate() - 7));
+        break;
       case '1M':
         cutoffDate = new Date(new Date().setMonth(now.getMonth() - 1));
         break;
@@ -527,8 +556,17 @@ export function DashboardView({
       case '6M':
         cutoffDate = new Date(new Date().setMonth(now.getMonth() - 6));
         break;
+      case 'YTD':
+        cutoffDate = new Date(now.getFullYear(), 0, 1); // January 1st of current year
+        break;
       case '1Y':
         cutoffDate = new Date(new Date().setFullYear(now.getFullYear() - 1));
+        break;
+      case '3Y':
+        cutoffDate = new Date(new Date().setFullYear(now.getFullYear() - 3));
+        break;
+      case '5Y':
+        cutoffDate = new Date(new Date().setFullYear(now.getFullYear() - 5));
         break;
       case 'MAX':
       default:

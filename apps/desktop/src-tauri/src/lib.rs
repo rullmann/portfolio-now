@@ -5,12 +5,14 @@ pub mod db;
 pub mod events;
 pub mod fifo;
 mod models;
+pub mod optimization;
 pub mod pdf_import;
 pub mod performance;
 pub mod pp;
 pub mod protobuf;
 pub mod quotes;
 pub mod security;
+pub mod tax;
 
 use tauri::Manager;
 
@@ -68,6 +70,11 @@ pub fn run() {
             commands::quotes::detect_all_splits,
             commands::quotes::get_corporate_actions,
             commands::quotes::detect_splits_by_price_heuristic,
+            // Quote Provider Suggestions
+            commands::quotes::suggest_quote_providers,
+            commands::quotes::apply_quote_suggestion,
+            commands::quotes::get_unconfigured_securities_count,
+            commands::quotes::audit_quote_configurations,
             // New PP Import commands
             commands::import::import_pp_file,
             commands::import::get_imports,
@@ -79,6 +86,8 @@ pub fn run() {
             commands::data::get_pp_portfolios,
             commands::data::get_transactions,
             commands::data::get_price_history,
+            commands::data::get_price_history_with_outliers,
+            commands::data::get_price_history_filtered,
             commands::data::get_holdings,
             commands::data::get_all_holdings,
             commands::data::get_portfolio_summary,
@@ -92,6 +101,7 @@ pub fn run() {
             commands::data::get_fifo_cost_basis_history,
             // CRUD commands
             commands::crud::create_security,
+            commands::crud::create_security_with_history,
             commands::crud::update_security,
             commands::crud::delete_security,
             commands::crud::search_securities,
@@ -113,6 +123,7 @@ pub fn run() {
             // Performance
             commands::performance::calculate_performance,
             commands::performance::get_period_returns,
+            commands::performance::calculate_risk_metrics,
             // Currency
             commands::currency::get_exchange_rate,
             commands::currency::convert_currency,
@@ -132,6 +143,26 @@ pub fn run() {
             commands::reports::generate_realized_gains_report,
             commands::reports::generate_tax_report,
             commands::reports::get_dividend_yield,
+            commands::reports::get_monthly_returns,
+            commands::reports::get_yearly_returns,
+            // Dividend Calendar & Forecast
+            commands::dividends::get_dividend_calendar,
+            commands::dividends::get_dividend_patterns,
+            commands::dividends::estimate_annual_dividends,
+            commands::dividends::get_portfolio_dividend_yield,
+            // Ex-Dividend Management
+            commands::dividends::get_ex_dividends,
+            commands::dividends::create_ex_dividend,
+            commands::dividends::update_ex_dividend,
+            commands::dividends::delete_ex_dividend,
+            commands::dividends::get_upcoming_ex_dividends,
+            commands::dividends::get_enhanced_dividend_calendar,
+            // German Tax (DE)
+            tax::get_tax_settings,
+            tax::save_tax_settings,
+            tax::generate_german_tax_report,
+            tax::get_freistellung_status,
+            tax::update_freistellung_used,
             // Taxonomy Management
             commands::taxonomy::get_taxonomies,
             commands::taxonomy::get_taxonomy,
@@ -148,6 +179,7 @@ pub fn run() {
             commands::taxonomy::assign_security,
             commands::taxonomy::remove_assignment,
             commands::taxonomy::get_taxonomy_allocation,
+            commands::taxonomy::get_all_security_classifications,
             commands::taxonomy::create_standard_taxonomies,
             // Corporate Actions
             commands::corporate_actions::preview_stock_split,
@@ -156,6 +188,9 @@ pub fn run() {
             commands::corporate_actions::apply_spin_off,
             commands::corporate_actions::get_split_history,
             commands::corporate_actions::get_split_adjusted_price,
+            // Merger & Acquisition
+            commands::corporate_actions::preview_merger,
+            commands::corporate_actions::apply_merger,
             // Watchlist Management
             commands::watchlist::get_watchlists,
             commands::watchlist::get_watchlist,
@@ -172,7 +207,9 @@ pub fn run() {
             commands::ai_helpers::ai_add_to_watchlist,
             commands::ai_helpers::ai_remove_from_watchlist,
             commands::ai_helpers::ai_list_watchlists,
+            commands::ai_helpers::ai_query_transactions,
             commands::ai_helpers::ai_query_portfolio_value,
+            commands::ai_helpers::ai_save_api_key,
             // PDF Import
             commands::pdf_import::get_supported_banks,
             commands::pdf_import::preview_pdf_import,
@@ -199,6 +236,10 @@ pub fn run() {
             commands::rebalancing::calculate_deviation,
             commands::rebalancing::suggest_rebalance_by_taxonomy,
             commands::rebalancing::suggest_rebalance_with_ai,
+            // Portfolio Optimization (Markowitz)
+            optimization::calculate_correlation_matrix,
+            optimization::calculate_efficient_frontier,
+            optimization::get_optimal_weights,
             // Benchmark
             commands::benchmark::get_benchmarks,
             commands::benchmark::add_benchmark,
@@ -245,6 +286,12 @@ pub fn run() {
             commands::alerts::toggle_price_alert,
             commands::alerts::check_price_alerts,
             commands::alerts::reset_alert_trigger,
+            // Allocation Alerts
+            commands::alerts::get_allocation_targets,
+            commands::alerts::set_allocation_target,
+            commands::alerts::delete_allocation_target,
+            commands::alerts::get_allocation_alerts,
+            commands::alerts::get_allocation_alert_count,
             // Pattern Tracking
             commands::patterns::save_pattern_detection,
             commands::patterns::evaluate_pattern_outcomes,
@@ -255,6 +302,33 @@ pub fn run() {
             commands::drawings::get_chart_drawings,
             commands::drawings::delete_chart_drawing,
             commands::drawings::clear_chart_drawings,
+            // Dashboard Widget System
+            commands::dashboard::get_available_widgets,
+            commands::dashboard::get_dashboard_layout,
+            commands::dashboard::save_dashboard_layout,
+            commands::dashboard::delete_dashboard_layout,
+            commands::dashboard::get_all_dashboard_layouts,
+            commands::dashboard::create_default_dashboard_layout,
+            // Custom Attributes
+            commands::attributes::get_attribute_types,
+            commands::attributes::create_attribute_type,
+            commands::attributes::update_attribute_type,
+            commands::attributes::delete_attribute_type,
+            commands::attributes::get_security_attributes,
+            commands::attributes::set_security_attribute,
+            commands::attributes::remove_security_attribute,
+            commands::attributes::get_securities_by_attribute,
+            // Consortium (Portfolio Groups)
+            commands::consortium::get_consortiums,
+            commands::consortium::create_consortium,
+            commands::consortium::update_consortium,
+            commands::consortium::delete_consortium,
+            commands::consortium::get_consortium_performance,
+            commands::consortium::compare_portfolios,
+            commands::consortium::get_consortium_history,
+            // DivvyDiary Export
+            commands::divvydiary::get_divvydiary_portfolios,
+            commands::divvydiary::upload_to_divvydiary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,6 +6,42 @@ Cross-Platform Desktop-App zur Portfolio-Verwaltung. Neuimplementierung von [Por
 |-------------|------|
 | **Bundle ID** | `com.portfolio-now.app` |
 | **Version** | 0.1.0 |
+| **Jahr** | 2026 |
+
+## Build-Hinweise
+
+- **KEINE Mac DMG bauen** - nur Development-Builds verwenden
+- Für Release-Builds: `pnpm tauri build --bundles app`
+
+---
+
+## ✅ Performance-Berechnungen (TTWROR, IRR) - KORRIGIERT (2026-01)
+
+**Status:** Die Hauptprobleme wurden behoben.
+
+**Implementierte Fixes:**
+1. **Cashflow-Trennung:** `get_cash_flows()` nur DEPOSIT/REMOVAL (für TTWROR/Risk), `get_cash_flows_with_fallback()` mit BUY/SELL Fallback (nur für IRR)
+2. **Keine Doppelerfassung:** IRR mischt NICHT mehr BUY/SELL mit DEPOSIT/REMOVAL
+3. **Portfolio-Wert korrekt:** FX-Konvertierung, GBX/GBp-Korrektur, Cash-Bestände inkludiert
+4. **Historische Werte:** TTWROR-Fallback nutzt jetzt end_date statt today
+5. **Portfolio-spezifisch:** Beta/Alpha berechnet für angefragtes Portfolio (nicht alle)
+6. **IRR Start-Wert:** Portfolio-Wert am Periodenstart wird als initialer Cashflow eingefügt (wie Portfolio Performance)
+
+**SSOT-Funktionen:**
+- TTWROR/Risk: `get_cash_flows()` - nur externe Cashflows
+- IRR: `get_cash_flows_with_fallback()` - mit Fallback + Start-Wert als Cashflow
+- Wert: `get_portfolio_value_at_date_with_currency()` - inkl. Cash + FX
+
+**IRR-Berechnung:**
+Der IRR (Internal Rate of Return / IZF - Interner Zinsfuß) berücksichtigt:
+- Initialer Portfolio-Wert am Periodenstart als positiver Cashflow
+- Alle DEPOSIT/REMOVAL während der Periode
+- DELIVERY_INBOUND/OUTBOUND (mit Fallback)
+- Finaler Portfolio-Wert am Periodenende
+
+**Dateien:**
+- `src-tauri/src/performance/mod.rs` - Hauptmodul
+- `src-tauri/src/commands/performance.rs` - Tauri Commands
 
 ## Architektur
 
@@ -32,7 +68,9 @@ apps/desktop/
         ├── quotes/         # Kursquellen (Yahoo, Finnhub, EZB, etc.)
         ├── fifo/           # FIFO Cost Basis
         ├── pdf_import/     # PDF Import mit OCR (Vision API)
-        └── ai/             # KI-Analyse, Chat, Portfolio Insights, Models Registry
+        ├── ai/             # KI-Analyse, Chat, Portfolio Insights, Models Registry
+        ├── optimization/   # Portfolio-Optimierung (Markowitz, Efficient Frontier)
+        └── tax/            # Steuerberechnungen (DE: Anlage KAP)
 ```
 
 ## Tech Stack
@@ -67,6 +105,11 @@ cd apps/desktop/src-tauri && cargo test --release
 | **AI-Modelle** | `ai/models.rs` | `get_model()`, `get_model_upgrade()`, `get_fallback()` | Hardcodierte Modell-IDs |
 | **Kurse abrufen** | `quotes/mod.rs` | `fetch_all_quotes()`, Provider-spezifische Funktionen | Direkte API-Calls |
 | **Performance (TTWROR/IRR)** | `performance/mod.rs` | `calculate_ttwror()`, `calculate_irr()` | Eigene Berechnungen |
+| **Cashflows (TTWROR/Risk)** | `performance/mod.rs` | `get_cash_flows()` - nur DEPOSIT/REMOVAL | BUY/SELL für TTWROR |
+| **Cashflows (IRR)** | `performance/mod.rs` | `get_cash_flows_with_fallback()` - mit BUY/SELL Fallback | Mischen von BUY/SELL + DEPOSIT/REMOVAL |
+| **Portfolio-Wert** | `performance/mod.rs` | `get_portfolio_value_at_date_with_currency()` | latest_price ohne FX/Cash |
+| **Risk Metrics** | `performance/mod.rs` | `calculate_risk_metrics()` | Eigene Volatilität/Sharpe |
+| **Beta/Alpha** | `performance/mod.rs` | `calculate_beta_alpha(portfolio_id, ...)` | portfolio_id=None (alle Portfolios) |
 
 ### Warum SSOT?
 
@@ -193,7 +236,25 @@ GROUP BY security_id
 - `get_taxonomies()`, `get_taxonomy_allocations()`
 - `get_investment_plans()`, `execute_investment_plan()`
 - `preview_rebalance()`, `execute_rebalance()`
-- `record_stock_split()`, `record_spinoff()`, `record_merger()`
+
+### Corporate Actions
+- `preview_stock_split(security_id, date, ratio_from, ratio_to)` - Aktiensplit-Vorschau
+- `apply_stock_split(request)` - Aktiensplit anwenden
+- `undo_stock_split(...)` - Aktiensplit rückgängig machen
+- `apply_spin_off(request)` - Spin-Off durchführen
+- `preview_merger(source_id, target_id, date, ratio, cash)` - Fusion-Vorschau
+- `apply_merger(request)` - Fusion/Übernahme durchführen (DELIVERY_OUT/IN + Barabfindung)
+
+### Portfolio Optimization (Markowitz)
+- `calculate_correlation_matrix(portfolio_id?, start?, end?)` - Korrelationsmatrix
+- `calculate_efficient_frontier(portfolio_id?, start?, end?, risk_free_rate?)` - Efficient Frontier mit Monte Carlo
+- `get_optimal_weights(target_return, portfolio_id?, start?, end?)` - Optimale Gewichtung für Zielrendite
+
+### German Tax (DE)
+- `get_tax_settings(year)` - Steuereinstellungen laden
+- `save_tax_settings(settings)` - Steuereinstellungen speichern
+- `generate_german_tax_report(year)` - Detaillierter Steuerreport (Anlage KAP)
+- `get_freistellung_status(year)` - Freistellungsauftrag-Status
 
 ### AI Features
 - `analyze_chart_with_ai(request)` - Chart-Bild mit KI analysieren
@@ -230,6 +291,7 @@ GROUP BY security_id
 | Provider | API Key | Beschreibung |
 |----------|---------|--------------|
 | **Yahoo** | Nein | Kostenlos, aktuell + historisch |
+| **TradingView** | Nein | Globale Märkte, inoffizielle API (EXCHANGE:SYMBOL Format) |
 | **Portfolio Report** | Nein | ISIN/WKN-Lookup, Kurse (wie PP) |
 | **Finnhub** | Ja | US-Aktien, Premium für Historie |
 | **AlphaVantage** | Ja | 25 Calls/Tag free |
@@ -400,20 +462,21 @@ toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
 
 | View | Status | Beschreibung |
 |------|--------|--------------|
-| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts, KI Insights, Sync-Button |
+| Dashboard | ✅ | Depotwert, Holdings, Mini-Charts, KI Insights, Zeitraum-Filter (1W-MAX) |
 | Portfolio | ✅ | CRUD, History Chart |
-| Securities | ✅ | CRUD, Logos, Sync-Button |
+| Securities | ✅ | CRUD, Logos, Sync-Button, Kapitalmaßnahmen (Split, Merger) |
 | Accounts | ✅ | CRUD, Balance-Tracking |
 | Transactions | ✅ | Filter, Pagination |
 | Holdings | ✅ | Donut-Chart mit Logos |
-| Dividends | ✅ | Dividenden-Übersicht mit Logos |
+| Dividends | ✅ | Dividenden-Übersicht, Kalender, Prognose |
 | Watchlist | ✅ | Multiple Listen, Mini-Charts, ChatBot-Integration |
 | Taxonomies | ✅ | Hierarchischer Baum |
 | Benchmark | ✅ | Performance-Vergleich |
 | Charts | ✅ | Candlestick, RSI, MACD, Bollinger, KI-Analyse, Zeichenwerkzeuge, Pattern-Erkennung |
 | Plans | ✅ | Sparpläne |
-| Reports | ✅ | Performance, Dividenden, Gewinne, Steuer mit Charts |
+| Reports | ✅ | Performance, Dividenden, Gewinne, Steuer (DE: Anlage KAP), Zeitraum-Filter |
 | Rebalancing | ✅ | Zielgewichtung, Vorschau, Ausführung |
+| Optimization | ✅ | Efficient Frontier Chart, Korrelationsmatrix, Min-Varianz/Max-Sharpe Portfolio |
 | Settings | ✅ | Sprache, Theme, API Keys, KI-Provider (4 Provider) |
 
 ---
@@ -507,6 +570,9 @@ check_rate_limit("sync_prices", &limits::price_sync())?;
     - FIFO-Lots neu berechnen: `fifo::build_fifo_lots(conn, security_id)`
     - Event emittieren: `emit_data_changed(&app, DataChangedPayload::transaction(...))`
 13. **PDF Import Duplikate:** Duplikat-Check muss mehrere Typ-Varianten prüfen! Ein "Buy" aus PDF kann als "DELIVERY_INBOUND" in DB stehen (wenn deliveryMode aktiv war). Nutze `get_duplicate_check_types()` in `commands/pdf_import.rs`.
+14. **Merger/Fusion:** Erzeugt DELIVERY_OUTBOUND (Quelle) + DELIVERY_INBOUND (Ziel) + optional DIVIDENDS (Barabfindung). FIFO-Lots werden von Quelle auf Ziel übertragen mit anteiliger Kostenbasis.
+15. **Portfolio-Optimierung:** Monte Carlo mit 10.000 Simulationen. Korrelationsmatrix basiert auf täglichen Returns. Mindestens 30 Datenpunkte pro Security erforderlich.
+16. **Performance-Berechnungen (IRR/TTWROR):** ✅ KORRIGIERT - siehe oben. IRR inkludiert Start-Wert als Cashflow. `get_cash_flows()` nur für TTWROR/Risk, `get_cash_flows_with_fallback()` nur für IRR.
 
 ---
 
@@ -543,6 +609,8 @@ listen('data_changed', (event) => {
 | `import_transactions_csv` | `import(security_ids)` |
 | `execute_rebalance` | `rebalance(security_ids)` |
 | `execute_investment_plan` | `investment_plan_executed(security_id)` |
+| `apply_stock_split` | `transaction("split", ...)` |
+| `apply_merger` | `transaction("merger", ...)` |
 
 ---
 
@@ -622,6 +690,41 @@ Beim Hinzufügen via ChatBot werden automatisch:
 1. **ISIN/WKN** von Portfolio Report ermittelt
 2. **Aktueller Kurs** von Yahoo Finance geladen
 3. **3 Monate Historie** für Mini-Charts abgerufen
+
+### Performance Zeiträume
+Dashboard und Reports unterstützen flexible Zeitraum-Auswahl:
+- **1W, 1M, 3M, 6M** - Letzte Woche/Monate
+- **YTD** - Year-to-Date (seit Jahresanfang)
+- **1Y, 3Y, 5Y** - Letzte Jahre
+- **MAX** - Gesamter Zeitraum
+
+Performance-Metriken (TTWROR, IRR, Gewinn/Verlust) werden dynamisch für den gewählten Zeitraum berechnet.
+
+### Portfolio-Optimierung (Markowitz)
+Die Optimierungsansicht bietet:
+- **Efficient Frontier Chart**: Scatter-Plot mit Risiko (Volatilität) vs. Rendite
+- **Portfolios**: Aktuell (grau), Min-Varianz (blau), Max-Sharpe (grün)
+- **Korrelationsmatrix**: Heatmap der Wertpapier-Korrelationen
+- **Gewichtungsvergleich**: Aktuelle vs. optimale Allokation
+
+**Technische Details:**
+- Monte Carlo Simulation mit 10.000 zufälligen Portfolios
+- Risikofreier Zinssatz konfigurierbar (Standard: 3%)
+- Basiert auf täglichen Returns der letzten 252 Handelstage
+
+### Kapitalmaßnahmen (Corporate Actions)
+Zugang über Securities View → Dropdown "Kapitalmaßnahmen":
+
+**Aktiensplit:**
+- Verhältnis alt:neu (z.B. 1:4 für Split, 10:1 für Reverse)
+- Optionale Anpassung historischer Kurse
+- FIFO-Lots werden automatisch angepasst
+
+**Fusion/Übernahme (Merger):**
+- Quell- und Zielwertpapier auswählen
+- Umtauschverhältnis (z.B. 0.5 = 2 alte für 1 neue)
+- Optionale Barabfindung pro Aktie
+- FIFO-Kostenbasis wird anteilig übertragen
 
 ---
 

@@ -401,6 +401,7 @@ export interface SecurityResult {
   uuid: string;
   name: string;
   currency: string;
+  targetCurrency?: string;
   isin?: string;
   wkn?: string;
   ticker?: string;
@@ -410,6 +411,8 @@ export interface SecurityResult {
   latestFeedUrl?: string;
   note?: string;
   isRetired: boolean;
+  attributes?: string;
+  properties?: string;
 }
 
 export interface CreateAccountRequest {
@@ -638,6 +641,19 @@ export interface ClassificationAssignmentData {
   rank?: number;
 }
 
+/** Security classification for grouping in asset statement */
+export interface SecurityClassification {
+  securityId: number;
+  securityUuid: string;
+  taxonomyId: number;
+  taxonomyName: string;
+  classificationId: number;
+  classificationName: string;
+  color?: string;
+  /** Weight in basis points (10000 = 100%) */
+  weight: number;
+}
+
 export interface TaxonomyAllocation {
   classificationId: number;
   classificationName: string;
@@ -784,6 +800,28 @@ export interface TaxReport {
   capitalGainsTaxes: number;
   dividends: DividendReport;
   realizedGains: RealizedGainsReport;
+}
+
+// ============================================================================
+// Monthly/Yearly Returns (Heatmap Widget)
+// ============================================================================
+
+export interface MonthlyReturn {
+  year: number;
+  month: number;
+  returnPercent: number;
+  absoluteGain: number;
+  startValue: number;
+  endValue: number;
+}
+
+export interface YearlyReturn {
+  year: number;
+  ttwror: number;
+  irr: number;
+  absoluteGain: number;
+  startValue: number;
+  endValue: number;
 }
 
 // ============================================================================
@@ -1466,4 +1504,262 @@ export interface TriggeredAlert {
   alert: PriceAlert;
   currentPrice: number;
   triggerReason: string;
+}
+
+// ============================================================================
+// Allocation Alert Types
+// ============================================================================
+
+export interface AllocationTarget {
+  id: number;
+  portfolioId: number;
+  securityId?: number;
+  securityName?: string;
+  taxonomyId?: number;
+  taxonomyName?: string;
+  classificationId?: number;
+  classificationName?: string;
+  /** Target weight as decimal (0.0 - 1.0) */
+  targetWeight: number;
+  /** Threshold for alerts as decimal (e.g., 0.05 = ±5%) */
+  threshold: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SetAllocationTargetRequest {
+  portfolioId: number;
+  securityId?: number;
+  taxonomyId?: number;
+  classificationId?: number;
+  targetWeight: number;
+  threshold: number;
+}
+
+export interface AllocationAlert {
+  alertType: 'over_weight' | 'under_weight';
+  entityName: string;
+  targetWeight: number;
+  currentWeight: number;
+  deviation: number;
+  severity: 'warning' | 'critical';
+  securityId?: number;
+  classificationId?: number;
+}
+
+export interface AllocationAlertCount {
+  total: number;
+  critical: number;
+  warning: number;
+}
+
+// ============================================================================
+// Custom Attributes Types
+// ============================================================================
+
+/** Attribute type definition */
+export interface AttributeType {
+  id: number;
+  uuid: string;
+  name: string;
+  columnLabel?: string;
+  target: 'security' | 'account' | 'portfolio';
+  dataType: 'STRING' | 'LONG_NUMBER' | 'DOUBLE_NUMBER' | 'DATE' | 'BOOLEAN' | 'LIMIT_PRICE' | 'SHARE';
+  converterClass?: string;
+  source?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** Request to create a new attribute type */
+export interface CreateAttributeTypeRequest {
+  name: string;
+  columnLabel?: string;
+  target?: 'security' | 'account' | 'portfolio';
+  dataType?: AttributeType['dataType'];
+  converterClass?: string;
+  source?: string;
+}
+
+/** Request to update an attribute type */
+export interface UpdateAttributeTypeRequest {
+  name?: string;
+  columnLabel?: string;
+  dataType?: AttributeType['dataType'];
+  converterClass?: string;
+  source?: string;
+}
+
+/** Attribute value for a security */
+export interface AttributeValue {
+  attributeTypeId: number;
+  attributeTypeName: string;
+  attributeTypeUuid: string;
+  dataType: string;
+  value?: string;
+}
+
+/** Request to set an attribute value */
+export interface SetAttributeValueRequest {
+  securityId: number;
+  attributeTypeId: number;
+  value: string;
+}
+
+/** Security with attribute value */
+export interface SecurityWithAttribute {
+  securityId: number;
+  securityName: string;
+  value?: string;
+}
+
+// ============================================================================
+// Consortium (Portfolio Groups)
+// ============================================================================
+
+/** A portfolio group (consortium) for combined analysis */
+export interface Consortium {
+  id: number;
+  name: string;
+  portfolioIds: number[];
+  createdAt: string;
+}
+
+/** Request to create or update a consortium */
+export interface CreateConsortiumRequest {
+  name: string;
+  portfolioIds: number[];
+}
+
+/** Risk metrics for consortium */
+export interface ConsortiumRiskMetrics {
+  /** Annualized volatility as percentage */
+  volatility: number;
+  /** Sharpe ratio */
+  sharpeRatio: number;
+  /** Sortino ratio */
+  sortinoRatio: number;
+  /** Maximum drawdown as percentage */
+  maxDrawdown: number;
+  /** Max drawdown start date */
+  maxDrawdownStart?: string;
+  /** Max drawdown end date */
+  maxDrawdownEnd?: string;
+}
+
+/** Performance summary for a single portfolio in consortium */
+export interface PortfolioPerformanceSummary {
+  portfolioId: number;
+  portfolioName: string;
+  /** Current value */
+  value: number;
+  /** Cost basis */
+  costBasis: number;
+  /** Absolute gain/loss */
+  gainLoss: number;
+  /** Gain/loss percentage */
+  gainLossPercent: number;
+  /** TTWROR percentage */
+  ttwror: number;
+  /** Annualized TTWROR */
+  ttwrorAnnualized: number;
+  /** IRR percentage */
+  irr: number;
+  /** Weight in consortium (% of total value) */
+  weight: number;
+}
+
+/** Combined performance result for a consortium */
+export interface ConsortiumPerformance {
+  consortiumId: number;
+  consortiumName: string;
+  /** Total current value of all portfolios */
+  totalValue: number;
+  /** Total cost basis (FIFO SSOT) */
+  totalCostBasis: number;
+  /** Absolute gain/loss */
+  totalGainLoss: number;
+  /** Gain/loss as percentage */
+  totalGainLossPercent: number;
+  /** TTWROR (True Time-Weighted Rate of Return) as percentage */
+  ttwror: number;
+  /** Annualized TTWROR as percentage */
+  ttwrorAnnualized: number;
+  /** IRR (Internal Rate of Return) as percentage */
+  irr: number;
+  /** Whether IRR calculation converged */
+  irrConverged: boolean;
+  /** Total invested capital (sum of deposits) */
+  totalInvested: number;
+  /** Number of days since first transaction */
+  days: number;
+  /** Start date */
+  startDate: string;
+  /** End date */
+  endDate: string;
+  /** Base currency */
+  currency: string;
+  /** Risk metrics (if enough data available) */
+  riskMetrics?: ConsortiumRiskMetrics;
+  /** Performance per portfolio in the consortium */
+  byPortfolio: PortfolioPerformanceSummary[];
+}
+
+/** Entry for portfolio comparison */
+export interface PortfolioComparisonEntry {
+  portfolioId: number;
+  portfolioName: string;
+  currentValue: number;
+  costBasis: number;
+  absoluteGain: number;
+  percentGain: number;
+  ttwror: number;
+  ttwrorAnnualized: number;
+  irr: number;
+  days: number;
+  /** Color for chart display */
+  color: string;
+}
+
+/** Combined comparison totals */
+export interface CombinedComparison {
+  totalValue: number;
+  totalCostBasis: number;
+  totalGain: number;
+  totalGainPercent: number;
+  combinedTtwror: number;
+  combinedTtwrorAnnualized: number;
+  combinedIrr: number;
+}
+
+/** Comparison data for multiple portfolios side-by-side */
+export interface PortfolioComparison {
+  portfolios: PortfolioComparisonEntry[];
+  /** Combined totals */
+  combined: CombinedComparison;
+}
+
+/** Historical performance data point for charts */
+export interface PerformanceHistoryPoint {
+  date: string;
+  value: number;
+  cumulativeReturn: number;
+}
+
+/** Historical data for a single portfolio */
+export interface PortfolioHistoryData {
+  portfolioId: number;
+  portfolioName: string;
+  color: string;
+  data: PerformanceHistoryPoint[];
+}
+
+/** Historical performance for consortium */
+export interface ConsortiumHistory {
+  consortiumId: number;
+  currency: string;
+  /** Combined value history */
+  combined: PerformanceHistoryPoint[];
+  /** Per-portfolio history */
+  byPortfolio: PortfolioHistoryData[];
 }

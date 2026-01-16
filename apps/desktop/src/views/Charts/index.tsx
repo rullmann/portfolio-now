@@ -41,7 +41,7 @@ import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC, convertToHeikinAshi } from '../../lib/indicators';
 import { useSettingsStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
-import { getWatchlists, getWatchlistSecurities } from '../../lib/api';
+import { getWatchlists, getWatchlistSecurities, getPriceHistoryWithOutliers, type OutlierSummary } from '../../lib/api';
 import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
 import type { AggregatedHolding } from '../types';
 
@@ -188,6 +188,9 @@ export function ChartsView() {
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
 
+  // Outlier detection state
+  const [outlierSummary, setOutlierSummary] = useState<OutlierSummary | null>(null);
+
   // Refs for AI chart capture (normal and fullscreen)
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const fullscreenChartRef = useRef<HTMLDivElement>(null);
@@ -301,11 +304,13 @@ export function ChartsView() {
     if (!selectedSecurity) {
       setPriceData([]);
       setChartAnnotations([]); // Clear annotations when no security
+      setOutlierSummary(null);
       return;
     }
 
     setIsLoading(true);
     setChartAnnotations([]); // Clear annotations when loading new security
+    setOutlierSummary(null);
     try {
       let startDate: string;
       const now = new Date();
@@ -336,15 +341,11 @@ export function ChartsView() {
 
       const endDate = new Date().toISOString().split('T')[0];
 
-      // First try to get cached data
-      let data = await invoke<PriceData[]>('get_price_history', {
-        securityId: selectedSecurity.id,
-        startDate,
-        endDate: null,
-      });
+      // First try to get cached data with outlier detection
+      let result = await getPriceHistoryWithOutliers(selectedSecurity.id, startDate, undefined);
 
       // If no data, fetch from provider (Yahoo)
-      if (data.length === 0) {
+      if (result.prices.length === 0) {
         try {
           await invoke('fetch_historical_prices', {
             securityId: selectedSecurity.id,
@@ -353,20 +354,32 @@ export function ChartsView() {
             apiKeys: null,
           });
           // Re-fetch from cache after download
-          data = await invoke<PriceData[]>('get_price_history', {
-            securityId: selectedSecurity.id,
-            startDate,
-            endDate: null,
-          });
+          result = await getPriceHistoryWithOutliers(selectedSecurity.id, startDate, undefined);
         } catch (fetchErr) {
           console.warn('Failed to fetch historical prices from provider:', fetchErr);
         }
       }
 
+      // Extract price data and outlier info
+      const data: PriceData[] = result.prices.map(p => ({
+        date: p.date,
+        value: p.value,
+      }));
+
       setPriceData(data);
+      setOutlierSummary(result.summary);
+
+      // Log outliers if found
+      if (result.summary.outlierCount > 0) {
+        console.warn(
+          `[Outlier Detection] ${selectedSecurity.name}: ${result.summary.outlierCount} outlier(s) detected`,
+          result.summary.outliers
+        );
+      }
     } catch (err) {
       console.error('Failed to load price data:', err);
       setPriceData([]);
+      setOutlierSummary(null);
     } finally {
       setIsLoading(false);
     }
@@ -844,6 +857,35 @@ export function ChartsView() {
                 </button>
               </div>
             </div>
+
+            {/* Outlier Warning Banner */}
+            {outlierSummary && outlierSummary.outlierCount > 0 && (
+              <div className="mb-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2">
+                <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                    {outlierSummary.outlierCount} Kursausreißer erkannt
+                  </div>
+                  <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                    Die folgenden Kursdaten zeigen ungewöhnliche Tagesänderungen (&gt;30% oder Spike-Muster) und werden
+                    bei Analysen nicht berücksichtigt:
+                  </div>
+                  <div className="text-xs text-amber-600 dark:text-amber-500 mt-1 font-mono">
+                    {outlierSummary.outliers.slice(0, 5).map((o, i) => (
+                      <span key={o.date} className="inline-block mr-2">
+                        {o.date}: {o.changePercent > 0 ? '+' : ''}{o.changePercent.toFixed(1)}%
+                        {i < Math.min(4, outlierSummary.outliers.length - 1) && ','}
+                      </span>
+                    ))}
+                    {outlierSummary.outliers.length > 5 && (
+                      <span className="text-amber-500 dark:text-amber-600">
+                        ... und {outlierSummary.outliers.length - 5} weitere
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Chart Area */}
             <div

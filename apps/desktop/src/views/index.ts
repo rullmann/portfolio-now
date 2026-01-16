@@ -11,11 +11,13 @@ export { WatchlistView } from './Watchlist';
 export { TaxonomiesView } from './Taxonomies';
 export { InvestmentPlansView } from './InvestmentPlans';
 export { RebalancingView } from './Rebalancing';
+export { OptimizationView } from './Optimization';
 export { ChartsView } from './Charts';
 export { BenchmarkView } from './Benchmark';
 export { ReportsView } from './Reports';
 export { ScreenerView } from './Screener';
 export { SettingsView } from './Settings';
+export { ConsortiumView } from './Consortium';
 
 // Export types
 export type {

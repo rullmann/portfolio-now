@@ -8,13 +8,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   X, Sparkles, RefreshCw, Loader2, AlertCircle, CheckCircle,
-  TrendingUp, Target, AlertTriangle, Lightbulb, PieChart
+  TrendingUp, Target, AlertTriangle, Lightbulb, PieChart, Brain, ShoppingCart
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import ReactMarkdown from 'react-markdown';
 import { useEscapeKey } from '../../lib/hooks';
+
+/** Analysis mode selection */
+type AnalysisMode = 'select' | 'insights' | 'opportunities';
 
 interface PortfolioInsightsModalProps {
   isOpen: boolean;
@@ -160,12 +163,12 @@ function InsightCard({ section }: { section: ParsedSection }) {
 export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsModalProps) {
   useEscapeKey(isOpen, onClose);
 
+  const [mode, setMode] = useState<AnalysisMode>('select');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PortfolioInsightsResponse | null>(null);
   const [steps, setSteps] = useState<LoadingStep[]>([
     { id: 'holdings', label: 'Holdings laden', status: 'pending' },
-    { id: 'performance', label: 'Performance berechnen', status: 'pending' },
     { id: 'analysis', label: 'KI-Analyse', status: 'pending' },
   ]);
 
@@ -214,31 +217,35 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
   const resetSteps = () => {
     setSteps([
       { id: 'holdings', label: 'Holdings laden', status: 'pending' },
-      { id: 'performance', label: 'Performance berechnen', status: 'pending' },
       { id: 'analysis', label: 'KI-Analyse', status: 'pending' },
     ]);
   };
 
-  const analyzePortfolio = async () => {
+  const runAnalysis = async (selectedMode: AnalysisMode) => {
+    if (selectedMode === 'select') return;
+
+    // Both modes require an API key now
     if (!hasApiKey()) {
       setError(`Bitte konfiguriere deinen ${aiProvider.toUpperCase()} API-Key in den Einstellungen.`);
       return;
     }
 
+    setMode(selectedMode);
     setIsLoading(true);
     setError(null);
     setResult(null);
-    resetSteps();
+
+    // Update steps
+    setSteps([
+      { id: 'holdings', label: 'Holdings laden', status: 'pending' },
+      { id: 'analysis', label: 'KI-Analyse', status: 'pending' },
+    ]);
 
     try {
-      // Simulate step progression for better UX
+      // Simulate holdings loading
       updateStep('holdings', 'loading');
       await new Promise((r) => setTimeout(r, 300));
       updateStep('holdings', 'done');
-
-      updateStep('performance', 'loading');
-      await new Promise((r) => setTimeout(r, 300));
-      updateStep('performance', 'done');
 
       updateStep('analysis', 'loading');
 
@@ -248,6 +255,7 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
           model: aiModel,
           apiKey: getApiKey(),
           baseCurrency: baseCurrency || 'EUR',
+          analysisType: selectedMode, // 'insights' or 'opportunities'
         },
       });
 
@@ -273,16 +281,10 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
     }
   };
 
-  // Auto-analyze when modal opens
-  useEffect(() => {
-    if (isOpen && !result && !isLoading && !error) {
-      analyzePortfolio();
-    }
-  }, [isOpen]);
-
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
+      setMode('select');
       setResult(null);
       setError(null);
       resetSteps();
@@ -317,6 +319,53 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Mode Selection */}
+          {mode === 'select' && !isLoading && !result && !error && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Welche Analyse möchtest du durchführen?
+              </p>
+
+              <button
+                onClick={() => runAnalysis('insights')}
+                disabled={!hasApiKey()}
+                className="w-full flex items-start gap-4 p-4 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <div className="p-2 rounded-lg bg-primary/10 shrink-0">
+                  <Brain className="h-5 w-5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">KI-Insights</div>
+                  <div className="text-sm text-muted-foreground">
+                    Portfolio-Bewertung mit Stärken, Risiken und Empfehlungen
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => runAnalysis('opportunities')}
+                disabled={!hasApiKey()}
+                className="w-full flex items-start gap-4 p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <div className="p-2 rounded-lg bg-green-500/10 shrink-0">
+                  <ShoppingCart className="h-5 w-5 text-green-600 dark:text-green-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">Nachkauf-Chancen</div>
+                  <div className="text-sm text-muted-foreground">
+                    KI analysiert welche Positionen nachkaufenswert sind
+                  </div>
+                </div>
+              </button>
+
+              {!hasApiKey() && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Für beide Analysen wird ein {aiProvider.toUpperCase()} API-Key benötigt.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Loading Steps */}
           {isLoading && (
             <div className="space-y-2 p-4 bg-muted/50 rounded-lg">
@@ -379,24 +428,6 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
               )}
             </div>
           )}
-
-          {/* No API Key Warning */}
-          {!hasApiKey() && !isLoading && !result && !error && (
-            <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium text-yellow-600 dark:text-yellow-400">
-                    API-Key erforderlich
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Bitte konfiguriere deinen {aiProvider.toUpperCase()} API-Key in den Einstellungen,
-                    um KI-Analysen zu nutzen.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}
@@ -413,23 +444,30 @@ export function PortfolioInsightsModal({ isOpen, onClose }: PortfolioInsightsMod
             )}
           </div>
 
-          <button
-            onClick={analyzePortfolio}
-            disabled={isLoading || !hasApiKey()}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Analysiere...</span>
-              </>
-            ) : (
-              <>
-                <RefreshCw className="h-4 w-4" />
-                <span>Neu analysieren</span>
-              </>
-            )}
-          </button>
+          {mode !== 'select' && (
+            <button
+              onClick={() => {
+                setMode('select');
+                setResult(null);
+                setError(null);
+                resetSteps();
+              }}
+              disabled={isLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Analysiere...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Neue Analyse</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

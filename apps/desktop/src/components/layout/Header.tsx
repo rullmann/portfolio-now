@@ -9,6 +9,7 @@ import {
   Database,
   RefreshCw,
   FileDown,
+  FileUp,
   FileText,
   Globe,
 } from 'lucide-react';
@@ -22,6 +23,9 @@ import { DropdownMenu, DropdownItem } from '../common';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import { TransactionFormModal } from '../modals/TransactionFormModal';
 import { PdfImportModal } from '../modals/PdfImportModal';
+import { PdfExportModal } from '../modals/PdfExportModal';
+import { DivvyDiaryExportModal } from '../modals/DivvyDiaryExportModal';
+import { DivvyDiaryLogo } from '../common/DivvyDiaryLogo';
 
 interface HeaderProps {
   onImportPP: () => void;
@@ -62,6 +66,8 @@ export function Header({
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
   const [showPdfImportModal, setShowPdfImportModal] = useState(false);
+  const [showPdfExportModal, setShowPdfExportModal] = useState(false);
+  const [showDivvyDiaryModal, setShowDivvyDiaryModal] = useState(false);
 
   // Check if AI is configured (has API key for selected provider)
   const hasAiApiKey = () => {
@@ -130,6 +136,32 @@ export function Header({
             </DropdownItem>
           </DropdownMenu>
 
+          {/* Export Menu Dropdown */}
+          <DropdownMenu
+            trigger={
+              <>
+                <FileUp className="w-4 h-4" aria-hidden="true" />
+                <span>Exportieren</span>
+              </>
+            }
+            disabled={isLoading}
+          >
+            <DropdownItem
+              onClick={() => setShowPdfExportModal(true)}
+              disabled={isLoading}
+              icon={<FileText className="w-4 h-4" />}
+            >
+              PDF Bericht...
+            </DropdownItem>
+            <DropdownItem
+              onClick={() => setShowDivvyDiaryModal(true)}
+              disabled={isLoading}
+              icon={<DivvyDiaryLogo size={16} />}
+            >
+              DivvyDiary...
+            </DropdownItem>
+          </DropdownMenu>
+
           {/* Refresh button */}
           <button
             onClick={onRefresh}
@@ -172,6 +204,18 @@ export function Header({
         isOpen={showPdfImportModal}
         onClose={() => setShowPdfImportModal(false)}
         onSuccess={onRefresh}
+      />
+
+      {/* PDF Export Modal */}
+      <PdfExportModal
+        isOpen={showPdfExportModal}
+        onClose={() => setShowPdfExportModal(false)}
+      />
+
+      {/* DivvyDiary Export Modal */}
+      <DivvyDiaryExportModal
+        isOpen={showDivvyDiaryModal}
+        onClose={() => setShowDivvyDiaryModal(false)}
       />
     </>
   );

@@ -82,6 +82,47 @@ pub struct ApplySpinOffRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ApplyMergerRequest {
+    /// Security being acquired (will be sold/removed)
+    pub source_security_id: i64,
+    /// Acquiring company security (will receive shares)
+    pub target_security_id: i64,
+    pub effective_date: String,
+    /// Shares of target per source share (e.g., 0.5 = 1 target for 2 source)
+    pub share_ratio: f64,
+    /// Cash component per source share (in source currency)
+    pub cash_per_share: f64,
+    /// Currency of cash component
+    pub cash_currency: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergerPreview {
+    pub source_security_name: String,
+    pub target_security_name: String,
+    pub effective_date: String,
+    pub share_ratio: f64,
+    pub cash_per_share: f64,
+    pub affected_portfolios: Vec<MergerAffectedPortfolio>,
+    pub total_source_shares: f64,
+    pub total_target_shares: f64,
+    pub total_cash: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergerAffectedPortfolio {
+    pub portfolio_id: i64,
+    pub portfolio_name: String,
+    pub source_shares: f64,
+    pub target_shares: f64,
+    pub cash_received: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StockSplitPreview {
     pub security_name: String,
     pub effective_date: String,
@@ -520,4 +561,289 @@ pub fn get_split_adjusted_price(
     // For now, just return the original price
     // Would need split history to properly adjust
     Ok(original_price)
+}
+
+/// Preview a merger/acquisition
+#[command]
+pub fn preview_merger(
+    source_security_id: i64,
+    target_security_id: i64,
+    effective_date: String,
+    share_ratio: f64,
+    cash_per_share: f64,
+) -> Result<MergerPreview, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get security names
+    let source_name: String = conn
+        .query_row(
+            "SELECT name FROM pp_security WHERE id = ?",
+            [source_security_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Source security not found: {}", e))?;
+
+    let target_name: String = conn
+        .query_row(
+            "SELECT name FROM pp_security WHERE id = ?",
+            [target_security_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Target security not found: {}", e))?;
+
+    // Get holdings in source security
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                p.id, p.name,
+                SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) as net_shares
+            FROM pp_txn t
+            JOIN pp_portfolio p ON p.id = t.owner_id
+            WHERE t.security_id = ? AND t.owner_type = 'portfolio' AND t.date <= ?
+            GROUP BY p.id
+            HAVING net_shares > 0
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![source_security_id, effective_date], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut affected_portfolios = Vec::new();
+    let mut total_source_shares = 0.0;
+    let mut total_target_shares = 0.0;
+    let mut total_cash = 0.0;
+
+    for row in rows.flatten() {
+        let (portfolio_id, portfolio_name, shares_raw) = row;
+        let source_shares = shares::to_decimal(shares_raw);
+        let target_shares = source_shares * share_ratio;
+        let cash_received = source_shares * cash_per_share;
+
+        total_source_shares += source_shares;
+        total_target_shares += target_shares;
+        total_cash += cash_received;
+
+        affected_portfolios.push(MergerAffectedPortfolio {
+            portfolio_id,
+            portfolio_name,
+            source_shares,
+            target_shares,
+            cash_received,
+        });
+    }
+
+    Ok(MergerPreview {
+        source_security_name: source_name,
+        target_security_name: target_name,
+        effective_date,
+        share_ratio,
+        cash_per_share,
+        affected_portfolios,
+        total_source_shares,
+        total_target_shares,
+        total_cash,
+    })
+}
+
+/// Apply a merger/acquisition
+/// Creates SELL for source and BUY for target (stock component)
+/// Plus cash dividend if cash component exists
+#[command]
+pub fn apply_merger(request: ApplyMergerRequest) -> Result<CorporateActionResult, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Get holdings in source security
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT owner_id, SUM(CASE
+                WHEN txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN shares
+                WHEN txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -shares
+                ELSE 0
+            END) as net_shares
+            FROM pp_txn
+            WHERE security_id = ? AND owner_type = 'portfolio' AND date <= ?
+            GROUP BY owner_id
+            HAVING net_shares > 0
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let holdings: Vec<(i64, i64)> = stmt
+        .query_map(
+            rusqlite::params![request.source_security_id, request.effective_date],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let import_id: i64 = conn
+        .query_row("SELECT id FROM pp_import ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+        .unwrap_or(1);
+
+    // Get source security currency for cost basis
+    let source_currency: String = conn
+        .query_row(
+            "SELECT COALESCE(currency, 'EUR') FROM pp_security WHERE id = ?",
+            [request.source_security_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "EUR".to_string());
+
+    let cash_currency = request.cash_currency.unwrap_or_else(|| source_currency.clone());
+
+    let mut transactions_created = 0i64;
+    let mut fifo_lots_adjusted = 0i64;
+
+    for (portfolio_id, source_shares_raw) in holdings {
+        let source_shares = shares::to_decimal(source_shares_raw);
+        let target_shares_raw = (source_shares * request.share_ratio * 100_000_000.0) as i64;
+        let cash_amount = (source_shares * request.cash_per_share * 100.0) as i64;
+
+        // Get cost basis from source security
+        let source_cost: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(gross_amount), 0) FROM pp_fifo_lot WHERE security_id = ? AND portfolio_id = ? AND remaining_shares > 0",
+                rusqlite::params![request.source_security_id, portfolio_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // 1. Create DELIVERY_OUTBOUND for source shares (merger exchange)
+        let sell_uuid = uuid::Uuid::new_v4().to_string();
+        let _ = conn.execute(
+            r#"
+            INSERT INTO pp_txn (import_id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note)
+            VALUES (?, ?, 'portfolio', ?, ?, 'DELIVERY_OUTBOUND', ?, ?, ?, ?, ?)
+            "#,
+            rusqlite::params![
+                import_id,
+                sell_uuid,
+                portfolio_id,
+                request.source_security_id,
+                request.effective_date,
+                source_cost, // Use cost basis as amount
+                source_currency,
+                source_shares_raw,
+                request.note.as_deref().unwrap_or("Merger - shares exchanged")
+            ],
+        );
+        transactions_created += 1;
+
+        // 2. Create DELIVERY_INBOUND for target shares (stock component)
+        if target_shares_raw > 0 {
+            let buy_uuid = uuid::Uuid::new_v4().to_string();
+            let _ = conn.execute(
+                r#"
+                INSERT INTO pp_txn (import_id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note)
+                VALUES (?, ?, 'portfolio', ?, ?, 'DELIVERY_INBOUND', ?, ?, ?, ?, ?)
+                "#,
+                rusqlite::params![
+                    import_id,
+                    buy_uuid,
+                    portfolio_id,
+                    request.target_security_id,
+                    request.effective_date,
+                    source_cost, // Transfer cost basis to new shares
+                    source_currency,
+                    target_shares_raw,
+                    request.note.as_deref().unwrap_or("Merger - shares received")
+                ],
+            );
+            transactions_created += 1;
+
+            // Create FIFO lot for target shares with transferred cost basis
+            let txn_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM pp_txn WHERE uuid = ?",
+                    rusqlite::params![buy_uuid],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+
+            let _ = conn.execute(
+                r#"
+                INSERT INTO pp_fifo_lot (security_id, portfolio_id, purchase_txn_id, purchase_date, original_shares, remaining_shares, gross_amount, net_amount, currency)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+                rusqlite::params![
+                    request.target_security_id,
+                    portfolio_id,
+                    txn_id,
+                    request.effective_date,
+                    target_shares_raw,
+                    target_shares_raw,
+                    source_cost,
+                    source_cost,
+                    source_currency
+                ],
+            );
+            fifo_lots_adjusted += 1;
+        }
+
+        // 3. Create cash dividend transaction if cash component exists
+        if cash_amount > 0 {
+            let dividend_uuid = uuid::Uuid::new_v4().to_string();
+
+            // Get reference account for this portfolio
+            let account_id: Option<i64> = conn
+                .query_row(
+                    "SELECT reference_account_id FROM pp_portfolio WHERE id = ?",
+                    [portfolio_id],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(acc_id) = account_id {
+                let _ = conn.execute(
+                    r#"
+                    INSERT INTO pp_txn (import_id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, note)
+                    VALUES (?, ?, 'account', ?, ?, 'DIVIDENDS', ?, ?, ?, ?)
+                    "#,
+                    rusqlite::params![
+                        import_id,
+                        dividend_uuid,
+                        acc_id,
+                        request.source_security_id,
+                        request.effective_date,
+                        cash_amount,
+                        cash_currency,
+                        format!("Merger cash component - {}", request.note.as_deref().unwrap_or(""))
+                    ],
+                );
+                transactions_created += 1;
+            }
+        }
+
+        // 4. Mark source FIFO lots as consumed
+        let _ = conn.execute(
+            "UPDATE pp_fifo_lot SET remaining_shares = 0 WHERE security_id = ? AND portfolio_id = ? AND remaining_shares > 0",
+            rusqlite::params![request.source_security_id, portfolio_id],
+        );
+        fifo_lots_adjusted += 1;
+    }
+
+    Ok(CorporateActionResult {
+        success: true,
+        message: "Merger applied successfully".to_string(),
+        transactions_adjusted: transactions_created,
+        fifo_lots_adjusted,
+        prices_adjusted: 0,
+    })
 }

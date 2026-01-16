@@ -394,12 +394,6 @@ pub async fn get_available_quote_providers(api_keys: Option<ApiKeys>) -> Result<
             requires_api_key: false,
             supports_historical: true,
         },
-        QuoteProvider {
-            id: "PP".to_string(),
-            name: "Portfolio Report".to_string(),
-            requires_api_key: false,
-            supports_historical: true,
-        },
     ];
 
     // Add Finnhub only if API key is provided
@@ -1540,6 +1534,341 @@ fn get_quote_sync_status(conn: &rusqlite::Connection) -> Result<QuoteSyncStatus,
         outdated_count,
         today: today_str,
         outdated_securities,
+    })
+}
+
+// ============================================================================
+// Quote Provider Suggestions
+// ============================================================================
+
+use crate::quotes::suggestion::{self, QuoteSuggestion, SecurityForSuggestion};
+
+/// Get quote provider suggestions for securities without configured feed
+#[command]
+pub fn suggest_quote_providers(portfolio_id: Option<i64>) -> Result<Vec<QuoteSuggestion>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    // Valid feed providers that can fetch quotes automatically
+    // Note: MANUAL is excluded as it cannot auto-fetch
+    let valid_feeds_condition = "UPPER(TRIM(s.feed)) IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW')";
+
+    // Get securities without valid auto-fetch feed
+    let sql = if let Some(pid) = portfolio_id {
+        format!(
+            "SELECT DISTINCT s.id, s.name, s.isin, s.ticker, s.currency
+             FROM pp_security s
+             JOIN pp_txn t ON t.security_id = s.id
+             WHERE s.is_retired = 0
+               AND NOT ({})
+               AND t.owner_type = 'portfolio'
+               AND t.owner_id = {}
+               AND (
+                   SELECT COALESCE(SUM(CASE
+                       WHEN t2.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t2.shares
+                       WHEN t2.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t2.shares
+                       ELSE 0
+                   END), 0)
+                   FROM pp_txn t2
+                   WHERE t2.security_id = s.id AND t2.owner_type = 'portfolio'
+               ) > 0",
+            valid_feeds_condition,
+            pid
+        )
+    } else {
+        format!(
+            "SELECT s.id, s.name, s.isin, s.ticker, s.currency
+             FROM pp_security s
+             WHERE s.is_retired = 0
+               AND NOT ({})",
+            valid_feeds_condition
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let securities: Vec<SecurityForSuggestion> = stmt
+        .query_map([], |row| {
+            Ok(SecurityForSuggestion {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                isin: row.get(2)?,
+                ticker: row.get(3)?,
+                currency: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Generate suggestions for each security
+    let suggestions: Vec<QuoteSuggestion> = securities
+        .iter()
+        .filter_map(|s| suggestion::suggest_quote_provider(s))
+        .collect();
+
+    log::info!(
+        "Generated {} quote suggestions for {} securities without feed",
+        suggestions.len(),
+        securities.len()
+    );
+
+    Ok(suggestions)
+}
+
+/// Apply a quote provider suggestion to a security
+#[command]
+pub fn apply_quote_suggestion(
+    security_id: i64,
+    feed: String,
+    feed_url: Option<String>,
+) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    // Validate feed is a known provider
+    let valid_feeds = ["YAHOO", "YAHOO-ADJUSTEDCLOSE", "COINGECKO", "KRAKEN", "FINNHUB", "ALPHAVANTAGE", "TWELVEDATA", "MANUAL"];
+    if !valid_feeds.contains(&feed.as_str()) {
+        return Err(format!("Unknown feed provider: {}", feed));
+    }
+
+    // Update security with suggested feed
+    conn.execute(
+        "UPDATE pp_security SET feed = ?1, feed_url = ?2 WHERE id = ?3",
+        params![feed, feed_url, security_id],
+    )
+    .map_err(|e| format!("Failed to update security: {}", e))?;
+
+    log::info!(
+        "Applied quote suggestion for security {}: feed={}, feed_url={:?}",
+        security_id,
+        feed,
+        feed_url
+    );
+
+    Ok(())
+}
+
+/// Get count of securities without configured quote provider
+#[command]
+pub fn get_unconfigured_securities_count() -> Result<UnconfiguredSecuritiesInfo, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    // Valid feed providers that can fetch quotes automatically
+    // Note: MANUAL is excluded as it cannot auto-fetch
+    let valid_feeds_condition = "UPPER(TRIM(feed)) IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW')";
+
+    // Count all securities without valid auto-fetch feed
+    let total_unconfigured: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM pp_security
+                 WHERE is_retired = 0 AND NOT ({})",
+                valid_feeds_condition
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Count held securities without valid auto-fetch feed
+    let held_unconfigured: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(DISTINCT s.id) FROM pp_security s
+                 WHERE s.is_retired = 0
+                   AND NOT ({})
+                   AND (
+                       SELECT COALESCE(SUM(CASE
+                           WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                           WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                           ELSE 0
+                       END), 0)
+                       FROM pp_txn t
+                       WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
+                   ) > 0",
+                valid_feeds_condition.replace("feed", "s.feed")
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(UnconfiguredSecuritiesInfo {
+        total_unconfigured: total_unconfigured as usize,
+        held_unconfigured: held_unconfigured as usize,
+    })
+}
+
+/// Info about unconfigured securities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnconfiguredSecuritiesInfo {
+    pub total_unconfigured: usize,
+    pub held_unconfigured: usize,
+}
+
+// ============================================================================
+// QUOTE CONFIGURATION AUDIT
+// ============================================================================
+
+/// Result of auditing a single security's quote configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteConfigAuditResult {
+    pub security_id: i64,
+    pub security_name: String,
+    pub ticker: Option<String>,
+    pub feed: String,
+    /// Status: "ok", "stale", "missing"
+    pub status: String,
+    pub last_price_date: Option<String>,
+    pub days_since_last_price: Option<i64>,
+}
+
+/// Summary of audit results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteAuditSummary {
+    pub total_audited: usize,
+    pub ok_count: usize,
+    pub stale_count: usize,       // > 7 days old
+    pub missing_count: usize,     // no prices at all
+    pub results: Vec<QuoteConfigAuditResult>,
+}
+
+/// Audit all configured quote sources - checks for missing or stale prices
+#[command]
+pub fn audit_quote_configurations(only_held: Option<bool>) -> Result<QuoteAuditSummary, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let only_held = only_held.unwrap_or(true);
+
+    // Valid feeds that can auto-fetch
+    let valid_feeds = ["YAHOO", "YAHOO-ADJUSTEDCLOSE", "COINGECKO", "KRAKEN", "FINNHUB", "ALPHAVANTAGE", "TWELVEDATA", "TRADINGVIEW"];
+    let valid_feeds_condition = valid_feeds.iter()
+        .map(|f| format!("'{}'", f))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Get securities with configured feeds
+    let sql = if only_held {
+        format!(
+            "SELECT s.id, s.name, s.feed, s.ticker
+             FROM pp_security s
+             WHERE s.is_retired = 0
+               AND UPPER(TRIM(s.feed)) IN ({})
+               AND (
+                   SELECT COALESCE(SUM(CASE
+                       WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                       WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                       ELSE 0
+                   END), 0)
+                   FROM pp_txn t
+                   WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
+               ) > 0
+             ORDER BY s.name",
+            valid_feeds_condition
+        )
+    } else {
+        format!(
+            "SELECT s.id, s.name, s.feed, s.ticker
+             FROM pp_security s
+             WHERE s.is_retired = 0
+               AND UPPER(TRIM(s.feed)) IN ({})
+             ORDER BY s.name",
+            valid_feeds_condition
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let securities: Vec<(i64, String, String, Option<String>)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut results = Vec::new();
+    let mut ok_count = 0;
+    let mut stale_count = 0;
+    let mut missing_count = 0;
+
+    for (id, name, feed, ticker) in securities {
+        // Get last price info - check both pp_latest_price and pp_price
+        let price_info: Option<(String, f64)> = conn
+            .query_row(
+                "SELECT date, (julianday('now') - julianday(date)) as days_ago
+                 FROM pp_latest_price WHERE security_id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()
+            .or_else(|| {
+                conn.query_row(
+                    "SELECT date, (julianday('now') - julianday(date)) as days_ago
+                     FROM pp_price WHERE security_id = ?1 ORDER BY date DESC LIMIT 1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()
+            });
+
+        let (status, last_price_date, days_since) = match price_info {
+            Some((date, days)) => {
+                let days_i64 = days as i64;
+                if days_i64 > 7 {
+                    stale_count += 1;
+                    ("stale".to_string(), Some(date), Some(days_i64))
+                } else {
+                    ok_count += 1;
+                    ("ok".to_string(), Some(date), Some(days_i64))
+                }
+            }
+            None => {
+                missing_count += 1;
+                ("missing".to_string(), None, None)
+            }
+        };
+
+        // Only add to results if there's an issue
+        if status != "ok" {
+            results.push(QuoteConfigAuditResult {
+                security_id: id,
+                security_name: name,
+                ticker,
+                feed,
+                status,
+                last_price_date,
+                days_since_last_price: days_since,
+            });
+        }
+    }
+
+    // Sort: missing first, then stale by days descending
+    results.sort_by(|a, b| {
+        match (&a.status[..], &b.status[..]) {
+            ("missing", "stale") => std::cmp::Ordering::Less,
+            ("stale", "missing") => std::cmp::Ordering::Greater,
+            _ => b.days_since_last_price.cmp(&a.days_since_last_price),
+        }
+    });
+
+    Ok(QuoteAuditSummary {
+        total_audited: ok_count + stale_count + missing_count,
+        ok_count,
+        stale_count,
+        missing_count,
+        results,
     })
 }
 

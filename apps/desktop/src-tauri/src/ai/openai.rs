@@ -3,7 +3,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse,
@@ -39,8 +39,8 @@ fn extract_responses_text(response: &ResponsesApiResponse) -> String {
 #[derive(Serialize)]
 struct ChatCompletionRequest {
     model: String,
-    /// GPT-5 uses max_completion_tokens instead of max_tokens
-    max_completion_tokens: u32,
+    /// Chat Completions API uses max_tokens (max_completion_tokens is for newer APIs)
+    max_tokens: u32,
     messages: Vec<ChatMessage>,
 }
 
@@ -211,7 +211,7 @@ pub async fn analyze(
 
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_completion_tokens: MAX_TOKENS,
+        max_tokens: MAX_TOKENS,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -315,7 +315,7 @@ pub async fn analyze_with_custom_prompt(
 
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_completion_tokens: MAX_TOKENS,
+        max_tokens: MAX_TOKENS,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -413,7 +413,7 @@ pub async fn analyze_with_annotations(
 
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_completion_tokens: MAX_TOKENS,
+        max_tokens: MAX_TOKENS,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -517,7 +517,7 @@ pub async fn analyze_enhanced(
 
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_completion_tokens: MAX_TOKENS,
+        max_tokens: MAX_TOKENS,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -606,7 +606,7 @@ pub async fn analyze_enhanced(
 #[derive(Serialize)]
 struct TextChatCompletionRequest {
     model: String,
-    max_completion_tokens: u32,
+    max_tokens: u32,
     messages: Vec<TextChatMessage>,
 }
 
@@ -614,7 +614,7 @@ struct TextChatCompletionRequest {
 #[derive(Serialize)]
 struct TextChatWithToolsRequest {
     model: String,
-    max_completion_tokens: u32,
+    max_tokens: u32,
     messages: Vec<TextChatMessage>,
     tools: Vec<WebSearchTool>,
 }
@@ -726,7 +726,154 @@ pub async fn analyze_portfolio(
         // GPT-4.x and older use Chat Completions API
         let request_body = TextChatCompletionRequest {
             model: model.to_string(),
-            max_completion_tokens: MAX_TOKENS_INSIGHTS,
+            max_tokens: MAX_TOKENS_INSIGHTS,
+            messages: vec![TextChatMessage {
+                role: "user".to_string(),
+                content: prompt.clone(),
+            }],
+        };
+
+        let response = match client.post(CHAT_API_URL).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("OpenAI", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: ChatCompletionResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+        let raw_analysis = data
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
+
+        let analysis = normalize_markdown_response(&raw_analysis);
+
+        return Ok(PortfolioInsightsResponse {
+            analysis,
+            provider: "OpenAI".to_string(),
+            model: model.to_string(),
+            tokens_used: data.usage.map(|u| u.total_tokens),
+        });
+    }
+
+    Err(last_error)
+}
+
+/// Analyze portfolio for buy opportunities with OpenAI (text-only, no image)
+pub async fn analyze_opportunities(
+    model: &str,
+    api_key: &str,
+    context: &PortfolioInsightsContext,
+) -> Result<PortfolioInsightsResponse, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key))
+            .map_err(|_| AiError::invalid_api_key("OpenAI", model))?,
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
+
+    let prompt = build_opportunities_prompt(context);
+    let use_responses_api = uses_responses_api(model);
+    let mut last_error = AiError::other("OpenAI", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        // GPT-5 uses Responses API
+        if use_responses_api {
+            let request_body = ResponsesApiRequest {
+                model: model.to_string(),
+                input: ResponsesInput::Text(prompt.clone()),
+                instructions: None,
+                max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+            };
+
+            let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_error = if e.is_timeout() {
+                        AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                    } else if e.is_connect() {
+                        AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                    } else {
+                        AiError::network_error("OpenAI", model, &e.to_string())
+                    };
+
+                    if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = parse_error(status.as_u16(), &body, model);
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+
+            let data: ResponsesApiResponse = response
+                .json()
+                .await
+                .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+            let raw_analysis = extract_responses_text(&data);
+            let analysis = normalize_markdown_response(&raw_analysis);
+
+            return Ok(PortfolioInsightsResponse {
+                analysis,
+                provider: "OpenAI".to_string(),
+                model: model.to_string(),
+                tokens_used: data.usage.map(|u| u.total_tokens),
+            });
+        }
+
+        // GPT-4.x and older use Chat Completions API
+        let request_body = TextChatCompletionRequest {
+            model: model.to_string(),
+            max_tokens: MAX_TOKENS_INSIGHTS,
             messages: vec![TextChatMessage {
                 role: "user".to_string(),
                 content: prompt.clone(),
@@ -900,7 +1047,7 @@ pub async fn chat(
         let response = if use_web_search {
             let request_body = TextChatWithToolsRequest {
                 model: model.to_string(),
-                max_completion_tokens: MAX_TOKENS_CHAT,
+                max_tokens: MAX_TOKENS_CHAT,
                 messages: openai_messages.clone(),
                 tools: vec![WebSearchTool {
                     tool_type: "web_search_preview".to_string(),
@@ -911,7 +1058,7 @@ pub async fn chat(
         } else {
             let request_body = TextChatCompletionRequest {
                 model: model.to_string(),
-                max_completion_tokens: MAX_TOKENS_CHAT,
+                max_tokens: MAX_TOKENS_CHAT,
                 messages: openai_messages.clone(),
             };
             client.post(CHAT_API_URL).json(&request_body).send().await
@@ -1047,7 +1194,7 @@ pub async fn complete_text(
         // GPT-4.x and older use Chat Completions API
         let request_body = TextChatCompletionRequest {
             model: model.to_string(),
-            max_completion_tokens: MAX_TOKENS_INSIGHTS,
+            max_tokens: MAX_TOKENS_INSIGHTS,
             messages: vec![TextChatMessage {
                 role: "user".to_string(),
                 content: prompt.to_string(),

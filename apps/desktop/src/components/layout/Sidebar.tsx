@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   Eye,
   FolderTree,
+  FolderKanban,
   Target,
   CalendarClock,
   Scale,
@@ -24,8 +25,10 @@ import {
   CandlestickChart,
   Coins,
   Search,
+  Sparkles,
 } from 'lucide-react';
 import { useUIStore, navItems, type NavItem } from '../../store';
+// AlertBadge import removed - rebalancing nav item hidden for v0.1.0
 
 // Icon mapping for navItems
 const iconComponents = {
@@ -37,6 +40,7 @@ const iconComponents = {
   BarChart3,
   Eye,
   FolderTree,
+  FolderKanban,
   Target,
   CalendarClock,
   Scale,
@@ -45,6 +49,7 @@ const iconComponents = {
   CandlestickChart,
   Coins,
   Search,
+  Sparkles,
 };
 
 function getIcon(iconName: string) {
@@ -169,14 +174,17 @@ export function Sidebar() {
                     aria-label={sidebarCollapsed ? item.label : undefined}
                     aria-current={currentView === item.id ? 'page' : undefined}
                     role="listitem"
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                       currentView === item.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                     }`}
                   >
                     {getIcon(item.icon)}
-                    {!sidebarCollapsed && <span>{item.label}</span>}
+                    {!sidebarCollapsed && (
+                      <span className="flex-1 text-left">{item.label}</span>
+                    )}
+                    {/* Alert badge for rebalancing - HIDDEN FOR v0.1.0 (rebalancing nav item hidden) */}
                   </button>
                 ))}
               </div>

@@ -39,6 +39,7 @@ import type {
   TaxonomyData,
   ClassificationData,
   ClassificationAssignmentData,
+  SecurityClassification,
   TaxonomyAllocation,
   CreateTaxonomyRequest,
   UpdateTaxonomyRequest,
@@ -82,6 +83,13 @@ import type {
   DetectedSplit,
   SplitDetectionResult,
   PortfolioValuePoint,
+  // Custom Attributes
+  AttributeType,
+  CreateAttributeTypeRequest,
+  UpdateAttributeTypeRequest,
+  AttributeValue,
+  SetAttributeValueRequest,
+  SecurityWithAttribute,
 } from './types';
 
 // ============================================================================
@@ -291,6 +299,99 @@ export async function getProviderStatus(apiKeys?: ApiKeys): Promise<ProviderStat
   return invoke<ProviderStatus>('get_provider_status', { apiKeys });
 }
 
+// ============================================================================
+// Quote Provider Suggestions
+// ============================================================================
+
+/**
+ * Quote provider suggestion from rule-based analysis
+ */
+export interface QuoteSuggestion {
+  securityId: number;
+  securityName: string;
+  isin: string | null;
+  ticker: string | null;
+  suggestedFeed: string;
+  suggestedFeedUrl: string | null;
+  confidence: number;
+  reason: string;
+}
+
+/**
+ * Info about securities without configured quote providers
+ */
+export interface UnconfiguredSecuritiesInfo {
+  totalUnconfigured: number;
+  heldUnconfigured: number;
+}
+
+/**
+ * Get quote provider suggestions for securities without configured feed.
+ * Uses rule-based analysis (ISIN prefix, ticker format, crypto detection).
+ * @param portfolioId Optional portfolio ID to filter to held securities
+ */
+export async function suggestQuoteProviders(portfolioId?: number): Promise<QuoteSuggestion[]> {
+  return invoke<QuoteSuggestion[]>('suggest_quote_providers', { portfolioId });
+}
+
+/**
+ * Apply a quote provider suggestion to a security.
+ * @param securityId Security to update
+ * @param feed Provider name (e.g., "YAHOO", "COINGECKO")
+ * @param feedUrl Optional feed URL/suffix (e.g., ".SW" for Swiss stocks)
+ */
+export async function applyQuoteSuggestion(
+  securityId: number,
+  feed: string,
+  feedUrl?: string | null
+): Promise<void> {
+  return invoke<void>('apply_quote_suggestion', { securityId, feed, feedUrl });
+}
+
+/**
+ * Get count of securities without configured quote provider.
+ */
+export async function getUnconfiguredSecuritiesCount(): Promise<UnconfiguredSecuritiesInfo> {
+  return invoke<UnconfiguredSecuritiesInfo>('get_unconfigured_securities_count', {});
+}
+
+// =============================================================================
+// QUOTE CONFIGURATION AUDIT
+// =============================================================================
+
+/**
+ * Result of auditing a single security's quote configuration
+ */
+export interface QuoteConfigAuditResult {
+  securityId: number;
+  securityName: string;
+  ticker?: string;
+  feed: string;
+  /** Status: "ok", "stale", "missing" */
+  status: 'ok' | 'stale' | 'missing';
+  lastPriceDate?: string;
+  daysSinceLastPrice?: number;
+}
+
+/**
+ * Summary of audit results
+ */
+export interface QuoteAuditSummary {
+  totalAudited: number;
+  okCount: number;
+  staleCount: number;
+  missingCount: number;
+  results: QuoteConfigAuditResult[];
+}
+
+/**
+ * Audit all configured quote sources and provide improvement recommendations.
+ * @param onlyHeld If true, only audit securities with current holdings (default: true)
+ */
+export async function auditQuoteConfigurations(onlyHeld?: boolean): Promise<QuoteAuditSummary> {
+  return invoke<QuoteAuditSummary>('audit_quote_configurations', { onlyHeld });
+}
+
 /**
  * Fetch historical prices from the provider and save to database.
  * @param securityId ID of the security
@@ -394,6 +495,100 @@ export async function getPriceHistory(
 }
 
 /**
+ * Information about a single price outlier.
+ */
+export interface OutlierInfo {
+  date: string;
+  value: number;
+  previousValue: number;
+  changePercent: number;
+}
+
+/**
+ * Summary of outliers detected in price data.
+ */
+export interface OutlierSummary {
+  /** Total number of price points */
+  totalPrices: number;
+  /** Number of detected outliers */
+  outlierCount: number;
+  /** List of outlier details */
+  outliers: OutlierInfo[];
+  /** Whether data quality is good (few outliers) */
+  dataQualityGood: boolean;
+}
+
+/**
+ * Price data point with outlier detection.
+ */
+export interface PriceDataWithOutliers {
+  date: string;
+  value: number;
+  /** Whether this price is detected as an outlier (>75% daily change) */
+  isOutlier: boolean;
+  /** Percentage change from previous day */
+  changePercent: number | null;
+}
+
+/**
+ * Price history with outlier analysis.
+ */
+export interface PriceHistoryWithOutliers {
+  prices: PriceDataWithOutliers[];
+  summary: OutlierSummary;
+}
+
+/**
+ * Filtered price history (outliers removed).
+ */
+export interface FilteredPriceHistory {
+  prices: PriceData[];
+  summary: OutlierSummary;
+}
+
+/**
+ * Get price history with outlier detection.
+ * Use this for charts where you want to visually mark outliers.
+ *
+ * @param securityId The security ID
+ * @param startDate Optional start date (ISO format)
+ * @param endDate Optional end date (ISO format)
+ * @returns Prices with outlier flags and a summary
+ */
+export async function getPriceHistoryWithOutliers(
+  securityId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<PriceHistoryWithOutliers> {
+  return invoke<PriceHistoryWithOutliers>('get_price_history_with_outliers', {
+    securityId,
+    startDate,
+    endDate,
+  });
+}
+
+/**
+ * Get filtered price history (outliers removed).
+ * Use this for performance calculations and analysis where outliers would distort results.
+ *
+ * @param securityId The security ID
+ * @param startDate Optional start date (ISO format)
+ * @param endDate Optional end date (ISO format)
+ * @returns Filtered prices plus a summary of what was removed
+ */
+export async function getPriceHistoryFiltered(
+  securityId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<FilteredPriceHistory> {
+  return invoke<FilteredPriceHistory>('get_price_history_filtered', {
+    securityId,
+    startDate,
+    endDate,
+  });
+}
+
+/**
  * Get FIFO cost basis history and trade data for a security.
  * Used for the security detail chart showing:
  * - Cost basis evolution over time (Einstandskurs)
@@ -469,6 +664,33 @@ export async function createNewPortfolio(baseCurrency?: string): Promise<unknown
  */
 export async function createSecurity(data: CreateSecurityRequest): Promise<SecurityResult> {
   return invoke<SecurityResult>('create_security', { data });
+}
+
+/**
+ * Result from creating a security with historical data fetch.
+ */
+export interface SecurityWithHistoryResult {
+  security: SecurityResult;
+  historyFetched: boolean;
+  quotesCount: number;
+  oldestDate: string | null;
+  newestDate: string | null;
+  error: string | null;
+}
+
+/**
+ * Create a new security and automatically fetch historical prices from Yahoo Finance.
+ * This is ideal for stocks and ETFs where you want historical data immediately.
+ *
+ * @param data Security creation data (same as createSecurity)
+ * @param historyYears Number of years of historical data to fetch (default: 10)
+ * @returns The created security plus historical data fetch results
+ */
+export async function createSecurityWithHistory(
+  data: CreateSecurityRequest,
+  historyYears?: number
+): Promise<SecurityWithHistoryResult> {
+  return invoke<SecurityWithHistoryResult>('create_security_with_history', { data, historyYears });
 }
 
 /**
@@ -644,6 +866,125 @@ export async function getPeriodReturns(options?: {
   endDate?: string;
 }): Promise<PeriodReturnData[]> {
   return invoke<PeriodReturnData[]>('get_period_returns', options ?? {});
+}
+
+/**
+ * Risk metrics (Sharpe, Sortino, Drawdown, Volatility, Beta/Alpha)
+ */
+export interface RiskMetrics {
+  sharpeRatio: number;
+  sortinoRatio: number;
+  maxDrawdown: number;
+  maxDrawdownStart: string | null;
+  maxDrawdownEnd: string | null;
+  volatility: number;
+  beta: number | null;
+  alpha: number | null;
+  calmarRatio: number | null;
+  dataPoints: number;
+}
+
+/**
+ * Calculate risk metrics for a portfolio.
+ */
+export async function calculateRiskMetrics(options?: {
+  portfolioId?: number;
+  startDate?: string;
+  endDate?: string;
+  benchmarkId?: number;
+  riskFreeRate?: number;
+}): Promise<RiskMetrics> {
+  return invoke<RiskMetrics>('calculate_risk_metrics', options ?? {});
+}
+
+// ============================================================================
+// Portfolio Optimization API (Markowitz)
+// ============================================================================
+
+/**
+ * Security info for optimization
+ */
+export interface OptimizationSecurityInfo {
+  id: number;
+  name: string;
+  ticker: string | null;
+}
+
+/**
+ * Correlation pair between two securities
+ */
+export interface CorrelationPair {
+  security1Id: number;
+  security1Name: string;
+  security2Id: number;
+  security2Name: string;
+  correlation: number;
+}
+
+/**
+ * Full correlation matrix result
+ */
+export interface CorrelationMatrix {
+  securities: OptimizationSecurityInfo[];
+  matrix: number[][];
+  pairs: CorrelationPair[];
+}
+
+/**
+ * A point on the efficient frontier
+ */
+export interface EfficientFrontierPoint {
+  expectedReturn: number;
+  volatility: number;
+  sharpeRatio: number;
+  weights: Record<number, number>;
+}
+
+/**
+ * Efficient frontier result
+ */
+export interface EfficientFrontier {
+  points: EfficientFrontierPoint[];
+  minVariancePortfolio: EfficientFrontierPoint;
+  maxSharpePortfolio: EfficientFrontierPoint;
+  currentPortfolio: EfficientFrontierPoint;
+  securities: OptimizationSecurityInfo[];
+}
+
+/**
+ * Calculate correlation matrix for portfolio holdings.
+ */
+export async function calculateCorrelationMatrix(options?: {
+  portfolioId?: number;
+  startDate?: string;
+  endDate?: string;
+}): Promise<CorrelationMatrix> {
+  return invoke<CorrelationMatrix>('calculate_correlation_matrix', options ?? {});
+}
+
+/**
+ * Calculate efficient frontier for portfolio.
+ */
+export async function calculateEfficientFrontier(options?: {
+  portfolioId?: number;
+  startDate?: string;
+  endDate?: string;
+  riskFreeRate?: number;
+  numPoints?: number;
+}): Promise<EfficientFrontier> {
+  return invoke<EfficientFrontier>('calculate_efficient_frontier', options ?? {});
+}
+
+/**
+ * Get optimal portfolio weights for target return.
+ */
+export async function getOptimalWeights(options: {
+  targetReturn: number;
+  portfolioId?: number;
+  startDate?: string;
+  endDate?: string;
+}): Promise<Record<number, number>> {
+  return invoke<Record<number, number>>('get_optimal_weights', options);
 }
 
 // ============================================================================
@@ -927,6 +1268,14 @@ export async function getTaxonomyAllocation(
 }
 
 /**
+ * Get all security classifications for a specific taxonomy.
+ * Used for grouping in asset statement view.
+ */
+export async function getAllSecurityClassifications(taxonomyId: number): Promise<SecurityClassification[]> {
+  return invoke<SecurityClassification[]>('get_all_security_classifications', { taxonomyId });
+}
+
+/**
  * Create standard taxonomies (Asset Classes, Regions).
  */
 export async function createStandardTaxonomies(): Promise<TaxonomyData[]> {
@@ -980,6 +1329,381 @@ export async function generateTaxReport(year: number): Promise<TaxReport> {
  */
 export async function getDividendYield(securityId: number): Promise<number> {
   return invoke<number>('get_dividend_yield', { securityId });
+}
+
+// ============================================================================
+// Monthly/Yearly Returns API (Heatmap Widget)
+// ============================================================================
+
+// Types are defined in types.ts
+import type { MonthlyReturn, YearlyReturn } from './types';
+export type { MonthlyReturn, YearlyReturn };
+
+/**
+ * Get monthly returns for heatmap visualization.
+ * @param portfolioId Optional portfolio filter
+ * @param years Optional years to include
+ */
+export async function getMonthlyReturns(
+  portfolioId?: number,
+  years?: number[]
+): Promise<MonthlyReturn[]> {
+  return invoke<MonthlyReturn[]>('get_monthly_returns', { portfolioId, years });
+}
+
+/**
+ * Get yearly returns for year returns widget.
+ * @param portfolioId Optional portfolio filter
+ */
+export async function getYearlyReturns(portfolioId?: number): Promise<YearlyReturn[]> {
+  return invoke<YearlyReturn[]>('get_yearly_returns', { portfolioId });
+}
+
+// ============================================================================
+// Dividend Calendar & Forecast API
+// ============================================================================
+
+/** A single dividend event for the calendar */
+export interface CalendarDividend {
+  date: string;
+  securityId: number;
+  securityName: string;
+  securityIsin?: string;
+  amount: number;
+  currency: string;
+  isEstimated: boolean;
+}
+
+/** Calendar data for a month */
+export interface MonthCalendarData {
+  year: number;
+  month: number;
+  totalAmount: number;
+  currency: string;
+  dividends: CalendarDividend[];
+}
+
+/** Dividend payment pattern for a security */
+export interface DividendPattern {
+  securityId: number;
+  securityName: string;
+  securityIsin?: string;
+  /** Payment frequency: MONTHLY, QUARTERLY, SEMI_ANNUAL, ANNUAL, IRREGULAR */
+  frequency: string;
+  /** Typical payment months (1-12) */
+  paymentMonths: number[];
+  /** Average dividend per share */
+  avgPerShare: number;
+  /** Last 4 dividends per share for trend */
+  recentAmounts: number[];
+  /** Growth rate (year over year) */
+  growthRate?: number;
+  currency: string;
+}
+
+/** Expected payment in forecast */
+export interface ExpectedPayment {
+  month: number;
+  estimatedAmount: number;
+  isReceived: boolean;
+  actualAmount?: number;
+}
+
+/** Per-security forecast */
+export interface SecurityForecast {
+  securityId: number;
+  securityName: string;
+  securityIsin?: string;
+  pattern: DividendPattern;
+  /** Current shares held */
+  sharesHeld: number;
+  /** Estimated annual dividends */
+  estimatedAnnual: number;
+  /** Expected payments this year */
+  expectedPayments: ExpectedPayment[];
+}
+
+/** Monthly forecast */
+export interface MonthForecast {
+  month: number;
+  monthName: string;
+  estimated: number;
+  received: number;
+  isPast: boolean;
+}
+
+/** Annual dividend forecast */
+export interface DividendForecast {
+  year: number;
+  currency: string;
+  totalEstimated: number;
+  totalReceived: number;
+  totalRemaining: number;
+  byMonth: MonthForecast[];
+  bySecurity: SecurityForecast[];
+}
+
+/**
+ * Get dividend calendar for a specific year/month.
+ * @param year Year to get calendar for
+ * @param month Optional month (1-12) for single month view
+ */
+export async function getDividendCalendar(
+  year: number,
+  month?: number
+): Promise<MonthCalendarData[]> {
+  return invoke<MonthCalendarData[]>('get_dividend_calendar', { year, month });
+}
+
+/**
+ * Get dividend patterns for all securities with dividend history.
+ */
+export async function getDividendPatterns(): Promise<DividendPattern[]> {
+  return invoke<DividendPattern[]>('get_dividend_patterns');
+}
+
+/**
+ * Estimate annual dividends based on historical patterns.
+ * @param year Year to forecast (defaults to current year)
+ */
+export async function estimateAnnualDividends(year?: number): Promise<DividendForecast> {
+  return invoke<DividendForecast>('estimate_annual_dividends', { year });
+}
+
+/**
+ * Get portfolio-wide dividend yield (trailing 12 months).
+ */
+export async function getPortfolioDividendYield(): Promise<number> {
+  return invoke<number>('get_portfolio_dividend_yield');
+}
+
+// ============================================================================
+// Ex-Dividend Management API
+// ============================================================================
+
+/** Ex-dividend entry with security details */
+export interface ExDividend {
+  id: number;
+  securityId: number;
+  securityName: string;
+  securityIsin?: string;
+  exDate: string;
+  recordDate?: string;
+  payDate?: string;
+  amount?: number;
+  currency?: string;
+  frequency?: string;
+  source?: string;
+  isConfirmed: boolean;
+  note?: string;
+  createdAt: string;
+}
+
+/** Request to create/update an ex-dividend entry */
+export interface ExDividendRequest {
+  securityId: number;
+  exDate: string;
+  recordDate?: string;
+  payDate?: string;
+  amount?: number;
+  currency?: string;
+  frequency?: string;
+  source?: string;
+  isConfirmed?: boolean;
+  note?: string;
+}
+
+/** A calendar event (ex-dividend, record date, or payment) */
+export interface DividendCalendarEvent {
+  date: string;
+  /** Event type: "ex_dividend", "record_date", "payment" */
+  eventType: string;
+  securityId: number;
+  securityName: string;
+  securityIsin?: string;
+  amount?: number;
+  currency?: string;
+  isConfirmed: boolean;
+  relatedExDate?: string;
+}
+
+/** Enhanced calendar data combining ex-dividends with payments */
+export interface EnhancedMonthCalendarData {
+  year: number;
+  month: number;
+  events: DividendCalendarEvent[];
+  totalExDividends: number;
+  totalPayments: number;
+}
+
+/**
+ * Get ex-dividend entries for a date range.
+ * @param startDate Start of date range (ISO format)
+ * @param endDate End of date range (ISO format)
+ * @param securityId Optional filter by security
+ */
+export async function getExDividends(
+  startDate: string,
+  endDate: string,
+  securityId?: number
+): Promise<ExDividend[]> {
+  return invoke<ExDividend[]>('get_ex_dividends', { startDate, endDate, securityId });
+}
+
+/**
+ * Create a new ex-dividend entry.
+ * @param request Ex-dividend data
+ */
+export async function createExDividend(request: ExDividendRequest): Promise<ExDividend> {
+  return invoke<ExDividend>('create_ex_dividend', { request });
+}
+
+/**
+ * Update an existing ex-dividend entry.
+ * @param id Ex-dividend ID
+ * @param request Updated data
+ */
+export async function updateExDividend(id: number, request: ExDividendRequest): Promise<ExDividend> {
+  return invoke<ExDividend>('update_ex_dividend', { id, request });
+}
+
+/**
+ * Delete an ex-dividend entry.
+ * @param id Ex-dividend ID
+ */
+export async function deleteExDividend(id: number): Promise<void> {
+  return invoke<void>('delete_ex_dividend', { id });
+}
+
+/**
+ * Get upcoming ex-dividend dates for held securities.
+ * @param days Number of days to look ahead (default: 30)
+ */
+export async function getUpcomingExDividends(days?: number): Promise<ExDividend[]> {
+  return invoke<ExDividend[]>('get_upcoming_ex_dividends', { days });
+}
+
+/**
+ * Get enhanced dividend calendar combining ex-dividends with payment dates.
+ * @param year Year to get calendar for
+ * @param month Optional month (1-12)
+ */
+export async function getEnhancedDividendCalendar(
+  year: number,
+  month?: number
+): Promise<EnhancedMonthCalendarData[]> {
+  return invoke<EnhancedMonthCalendarData[]>('get_enhanced_dividend_calendar', { year, month });
+}
+
+// ============================================================================
+// German Tax API (DE)
+// ============================================================================
+
+/** Tax settings for a year */
+export interface TaxSettings {
+  year: number;
+  isMarried: boolean;
+  kirchensteuerRate?: number;
+  bundesland?: string;
+  freistellungLimit: number;
+  freistellungUsed: number;
+}
+
+/** Individual taxable item */
+export interface TaxableItem {
+  date: string;
+  securityName: string;
+  securityIsin?: string;
+  grossAmount: number;
+  withholdingTax: number;
+  netAmount: number;
+  itemType: string;
+}
+
+/** Data for German tax form "Anlage KAP" */
+export interface AnlageKapData {
+  zeile7InlandDividenden: number;
+  zeile8AuslandDividenden: number;
+  zeile14Zinsen: number;
+  zeile15Veraeusserungsgewinne: number;
+  zeile16Veraeusserungsverluste: number;
+  zeile47AuslaendischeSteuern: number;
+  zeile48Kapest: number;
+  zeile49Soli: number;
+  zeile50Kist: number;
+}
+
+/** Detailed German tax report */
+export interface GermanTaxReport {
+  year: number;
+  currency: string;
+  settings: TaxSettings;
+  dividendIncomeGross: number;
+  interestIncomeGross: number;
+  realizedGains: number;
+  realizedLosses: number;
+  totalTaxableIncome: number;
+  freistellungAvailable: number;
+  freistellungUsed: number;
+  lossCarryforward: number;
+  taxableAfterDeductions: number;
+  foreignWithholdingTax: number;
+  creditableForeignTax: number;
+  abgeltungssteuer: number;
+  solidaritaetszuschlag: number;
+  kirchensteuer: number;
+  totalGermanTax: number;
+  taxAlreadyPaid: number;
+  remainingTaxLiability: number;
+  dividendDetails: TaxableItem[];
+  gainsDetails: TaxableItem[];
+  lossesDetails: TaxableItem[];
+  anlageKap: AnlageKapData;
+}
+
+/** Freistellung status */
+export interface FreistellungStatus {
+  year: number;
+  limit: number;
+  used: number;
+  remaining: number;
+  isMarried: boolean;
+  usagePercent: number;
+}
+
+/**
+ * Get tax settings for a year.
+ */
+export async function getTaxSettings(year: number): Promise<TaxSettings> {
+  return invoke<TaxSettings>('get_tax_settings', { year });
+}
+
+/**
+ * Save tax settings for a year.
+ */
+export async function saveTaxSettings(settings: TaxSettings): Promise<void> {
+  return invoke('save_tax_settings', { settings });
+}
+
+/**
+ * Generate detailed German tax report for a year.
+ */
+export async function generateGermanTaxReport(year: number): Promise<GermanTaxReport> {
+  return invoke<GermanTaxReport>('generate_german_tax_report', { year });
+}
+
+/**
+ * Get Freistellung status for a year.
+ */
+export async function getFreistellungStatus(year: number): Promise<FreistellungStatus> {
+  return invoke<FreistellungStatus>('get_freistellung_status', { year });
+}
+
+/**
+ * Update Freistellung used amount.
+ */
+export async function updateFreistellungUsed(year: number, amount: number): Promise<void> {
+  return invoke('update_freistellung_used', { year, amount });
 }
 
 // ============================================================================
@@ -1207,6 +1931,84 @@ export async function getSplitAdjustedPrice(
     originalPrice,
     originalDate,
   });
+}
+
+// ============================================================================
+// Merger & Acquisition API
+// ============================================================================
+
+/**
+ * Request for applying a merger/acquisition.
+ */
+export interface ApplyMergerRequest {
+  sourceSecurityId: number;
+  targetSecurityId: number;
+  effectiveDate: string;
+  shareRatio: number;      // target shares per source share
+  cashPerShare: number;    // cash component per source share (in cents)
+  cashCurrency?: string;
+  note?: string;
+}
+
+/**
+ * Information about an affected portfolio in a merger.
+ */
+export interface MergerAffectedPortfolio {
+  portfolioId: number;
+  portfolioName: string;
+  sourceShares: number;    // scaled 10^8
+  targetShares: number;    // scaled 10^8
+  cashAmount: number;      // cents
+  costBasisTransferred: number;  // cents
+}
+
+/**
+ * Preview of a merger's effects.
+ */
+export interface MergerPreview {
+  sourceSecurityId: number;
+  sourceSecurityName: string;
+  targetSecurityId: number;
+  targetSecurityName: string;
+  effectiveDate: string;
+  shareRatio: number;
+  cashPerShare: number;
+  cashCurrency: string;
+  totalSourceShares: number;      // scaled 10^8
+  totalTargetShares: number;      // scaled 10^8
+  totalCashAmount: number;        // cents
+  totalCostBasisTransferred: number;  // cents
+  affectedPortfolios: MergerAffectedPortfolio[];
+}
+
+/**
+ * Preview the effect of a merger/acquisition.
+ */
+export async function previewMerger(
+  sourceSecurityId: number,
+  targetSecurityId: number,
+  effectiveDate: string,
+  shareRatio: number,
+  cashPerShare: number,
+  cashCurrency?: string
+): Promise<MergerPreview> {
+  return invoke<MergerPreview>('preview_merger', {
+    sourceSecurityId,
+    targetSecurityId,
+    effectiveDate,
+    shareRatio,
+    cashPerShare,
+    cashCurrency,
+  });
+}
+
+/**
+ * Apply a merger/acquisition corporate action.
+ * Creates DELIVERY_OUTBOUND for source shares and DELIVERY_INBOUND for target shares.
+ * Optionally creates dividend transaction for cash component.
+ */
+export async function applyMerger(request: ApplyMergerRequest): Promise<CorporateActionResult> {
+  return invoke<CorporateActionResult>('apply_merger', { request });
 }
 
 // ============================================================================
@@ -1796,6 +2598,10 @@ import type {
   CreateAlertRequest,
   UpdateAlertRequest,
   TriggeredAlert,
+  AllocationTarget,
+  SetAllocationTargetRequest,
+  AllocationAlert,
+  AllocationAlertCount,
 } from './types';
 
 /**
@@ -1853,4 +2659,226 @@ export async function checkPriceAlerts(): Promise<TriggeredAlert[]> {
  */
 export async function resetAlertTrigger(id: number): Promise<void> {
   return invoke('reset_alert_trigger', { id });
+}
+
+// ============================================================================
+// Allocation Alerts
+// ============================================================================
+
+/**
+ * Get all allocation targets for a portfolio.
+ */
+export async function getAllocationTargets(portfolioId: number): Promise<AllocationTarget[]> {
+  return invoke<AllocationTarget[]>('get_allocation_targets', { portfolioId });
+}
+
+/**
+ * Set (create or update) an allocation target.
+ */
+export async function setAllocationTarget(request: SetAllocationTargetRequest): Promise<number> {
+  return invoke<number>('set_allocation_target', { request });
+}
+
+/**
+ * Delete an allocation target.
+ */
+export async function deleteAllocationTarget(id: number): Promise<void> {
+  return invoke('delete_allocation_target', { id });
+}
+
+/**
+ * Get allocation alerts for a portfolio or all portfolios.
+ */
+export async function getAllocationAlerts(portfolioId?: number): Promise<AllocationAlert[]> {
+  return invoke<AllocationAlert[]>('get_allocation_alerts', { portfolioId });
+}
+
+/**
+ * Get the count of active allocation alerts (for badge display).
+ */
+export async function getAllocationAlertCount(portfolioId?: number): Promise<AllocationAlertCount> {
+  return invoke<AllocationAlertCount>('get_allocation_alert_count', { portfolioId });
+}
+
+// ============================================================================
+// Dashboard Widget System
+// ============================================================================
+
+import type {
+  DashboardLayout,
+  WidgetDefinition,
+} from '../components/dashboard/types';
+
+/**
+ * Get available widget definitions for the catalog.
+ */
+export async function getAvailableWidgets(): Promise<WidgetDefinition[]> {
+  return invoke<WidgetDefinition[]>('get_available_widgets');
+}
+
+/**
+ * Get a dashboard layout by ID, or the default layout if no ID provided.
+ */
+export async function getDashboardLayout(layoutId?: number): Promise<DashboardLayout | null> {
+  return invoke<DashboardLayout | null>('get_dashboard_layout', { layoutId });
+}
+
+/**
+ * Save a dashboard layout (creates new if id=0, updates if id>0).
+ */
+export async function saveDashboardLayout(layout: DashboardLayout): Promise<number> {
+  return invoke<number>('save_dashboard_layout', { layout });
+}
+
+/**
+ * Delete a dashboard layout.
+ */
+export async function deleteDashboardLayout(layoutId: number): Promise<void> {
+  return invoke('delete_dashboard_layout', { layoutId });
+}
+
+/**
+ * Get all dashboard layouts.
+ */
+export async function getAllDashboardLayouts(): Promise<DashboardLayout[]> {
+  return invoke<DashboardLayout[]>('get_all_dashboard_layouts');
+}
+
+/**
+ * Create the default dashboard layout.
+ */
+export async function createDefaultDashboardLayout(): Promise<DashboardLayout> {
+  return invoke<DashboardLayout>('create_default_dashboard_layout');
+}
+
+// ============================================================================
+// Custom Attributes API
+// ============================================================================
+
+/**
+ * Get all attribute type definitions.
+ * @param target - Optional filter by target entity (security, account, portfolio)
+ */
+export async function getAttributeTypes(target?: 'security' | 'account' | 'portfolio'): Promise<AttributeType[]> {
+  return invoke<AttributeType[]>('get_attribute_types', { target });
+}
+
+/**
+ * Create a new attribute type.
+ */
+export async function createAttributeType(request: CreateAttributeTypeRequest): Promise<AttributeType> {
+  return invoke<AttributeType>('create_attribute_type', { request });
+}
+
+/**
+ * Update an existing attribute type.
+ */
+export async function updateAttributeType(id: number, request: UpdateAttributeTypeRequest): Promise<AttributeType> {
+  return invoke<AttributeType>('update_attribute_type', { id, request });
+}
+
+/**
+ * Delete an attribute type.
+ */
+export async function deleteAttributeType(id: number): Promise<void> {
+  return invoke('delete_attribute_type', { id });
+}
+
+/**
+ * Get all attribute values for a security.
+ */
+export async function getSecurityAttributes(securityId: number): Promise<AttributeValue[]> {
+  return invoke<AttributeValue[]>('get_security_attributes', { securityId });
+}
+
+/**
+ * Set an attribute value for a security.
+ */
+export async function setSecurityAttribute(request: SetAttributeValueRequest): Promise<void> {
+  return invoke('set_security_attribute', { request });
+}
+
+/**
+ * Remove an attribute value from a security.
+ */
+export async function removeSecurityAttribute(securityId: number, attributeTypeId: number): Promise<void> {
+  return invoke('remove_security_attribute', { securityId, attributeTypeId });
+}
+
+/**
+ * Get all securities with their values for a specific attribute type.
+ */
+export async function getSecuritiesByAttribute(attributeTypeId: number): Promise<SecurityWithAttribute[]> {
+  const data = await invoke<[number, string, string | null][]>('get_securities_by_attribute', { attributeTypeId });
+  return data.map(([securityId, securityName, value]) => ({
+    securityId,
+    securityName,
+    value: value ?? undefined,
+  }));
+}
+
+// ============================================================================
+// Consortium (Portfolio Groups) API
+// ============================================================================
+
+import type {
+  Consortium,
+  CreateConsortiumRequest,
+  ConsortiumPerformance,
+  PortfolioComparison,
+  ConsortiumHistory,
+} from './types';
+
+/**
+ * Get all consortiums (portfolio groups).
+ */
+export async function getConsortiums(): Promise<Consortium[]> {
+  return invoke<Consortium[]>('get_consortiums');
+}
+
+/**
+ * Create a new consortium.
+ */
+export async function createConsortium(request: CreateConsortiumRequest): Promise<Consortium> {
+  return invoke<Consortium>('create_consortium', { request });
+}
+
+/**
+ * Update an existing consortium.
+ */
+export async function updateConsortium(id: number, request: CreateConsortiumRequest): Promise<Consortium> {
+  return invoke<Consortium>('update_consortium', { id, request });
+}
+
+/**
+ * Delete a consortium.
+ */
+export async function deleteConsortium(id: number): Promise<void> {
+  return invoke('delete_consortium', { id });
+}
+
+/**
+ * Get combined performance metrics for a consortium.
+ * Includes TTWROR, IRR, risk metrics, and per-portfolio breakdown.
+ */
+export async function getConsortiumPerformance(consortiumId: number): Promise<ConsortiumPerformance> {
+  return invoke<ConsortiumPerformance>('get_consortium_performance', { consortiumId });
+}
+
+/**
+ * Compare multiple portfolios side-by-side.
+ */
+export async function comparePortfolios(portfolioIds: number[]): Promise<PortfolioComparison> {
+  return invoke<PortfolioComparison>('compare_portfolios', { portfolioIds });
+}
+
+/**
+ * Get historical performance data for a consortium (for charts).
+ */
+export async function getConsortiumHistory(
+  consortiumId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<ConsortiumHistory> {
+  return invoke<ConsortiumHistory>('get_consortium_history', { consortiumId, startDate, endDate });
 }

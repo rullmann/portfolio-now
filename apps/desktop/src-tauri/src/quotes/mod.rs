@@ -7,6 +7,7 @@
 //! - Kraken (Kryptowährungen - Börsenpreise)
 //! - Alpha Vantage (Aktien, ETFs - API-Key erforderlich)
 //! - Twelve Data (Schweizer Aktien, internationale Märkte - API-Key erforderlich)
+//! - TradingView (Globale Märkte - inoffizielle API)
 //! - Portfolio Report (Deutsche Fonds, ETFs)
 
 pub mod alphavantage;
@@ -15,6 +16,8 @@ pub mod ecb;
 pub mod finnhub;
 pub mod kraken;
 pub mod portfolio_report;
+pub mod suggestion;
+pub mod tradingview;
 pub mod twelvedata;
 pub mod yahoo;
 
@@ -104,7 +107,7 @@ pub enum ProviderType {
     Ecb,
     AlphaVantage,
     TwelveData,
-    PortfolioReport,
+    TradingView,
     CoinGecko,
     Kraken,
     Finnhub,
@@ -119,7 +122,7 @@ impl ProviderType {
             "ECB" => Some(Self::Ecb),
             "ALPHAVANTAGE" => Some(Self::AlphaVantage),
             "TWELVEDATA" | "TWELVE_DATA" => Some(Self::TwelveData),
-            "PP" | "PORTFOLIO_REPORT" => Some(Self::PortfolioReport),
+            "TRADINGVIEW" | "TRADING_VIEW" => Some(Self::TradingView),
             "COINGECKO" => Some(Self::CoinGecko),
             "KRAKEN" => Some(Self::Kraken),
             "FINNHUB" => Some(Self::Finnhub),
@@ -135,7 +138,7 @@ impl ProviderType {
             Self::Ecb => "ECB",
             Self::AlphaVantage => "ALPHAVANTAGE",
             Self::TwelveData => "TWELVEDATA",
-            Self::PortfolioReport => "PP",
+            Self::TradingView => "TRADINGVIEW",
             Self::CoinGecko => "COINGECKO",
             Self::Kraken => "KRAKEN",
             Self::Finnhub => "FINNHUB",
@@ -319,20 +322,6 @@ async fn fetch_quote_for_security(sec: &SecurityQuoteRequest) -> QuoteResult {
                 Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
             }
         }
-        ProviderType::PortfolioReport => {
-            // feed_url contains the Portfolio Report UUID, or use ISIN as symbol
-            let result = if let Some(ref uuid) = sec.feed_url {
-                portfolio_report::fetch_quote(uuid).await
-            } else {
-                // Try to fetch by ISIN
-                portfolio_report::fetch_quote_by_isin(&sec.symbol).await
-            };
-
-            match result {
-                Ok(quote) => QuoteResult::success(sec.id, sec.symbol.clone(), sec.provider.as_str(), quote),
-                Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
-            }
-        }
         ProviderType::Finnhub => {
             // API key from request, feed_url, or environment
             let api_key = sec.api_key.clone()
@@ -346,6 +335,32 @@ async fn fetch_quote_for_security(sec: &SecurityQuoteRequest) -> QuoteResult {
             }
 
             match finnhub::fetch_quote(&sec.symbol, &api_key).await {
+                Ok(quote) => QuoteResult::success(sec.id, sec.symbol.clone(), sec.provider.as_str(), quote),
+                Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
+            }
+        }
+        ProviderType::TradingView => {
+            // TradingView uses EXCHANGE:SYMBOL format
+            // Remove Yahoo-style exchange suffixes (.DE, .SW, .L, etc.) from ticker
+            let base_symbol = sec.symbol
+                .split('.')
+                .next()
+                .unwrap_or(&sec.symbol)
+                .to_string();
+
+            let symbol = if let Some(ref exchange) = sec.feed_url {
+                if !base_symbol.contains(':') && !exchange.is_empty() {
+                    format!("{}:{}", exchange, base_symbol)
+                } else {
+                    base_symbol.clone()
+                }
+            } else {
+                base_symbol.clone()
+            };
+
+            log::debug!("TradingView: ticker={} -> base={} -> symbol={}", sec.symbol, base_symbol, symbol);
+
+            match tradingview::fetch_quote(&symbol).await {
                 Ok(quote) => QuoteResult::success(sec.id, sec.symbol.clone(), sec.provider.as_str(), quote),
                 Err(e) => QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.to_string()),
             }
@@ -458,9 +473,24 @@ pub async fn fetch_historical_quotes_with_options(
             }
             finnhub::fetch_historical(symbol, &key, from, to).await
         }
-        ProviderType::PortfolioReport => {
-            // symbol should be the Portfolio Report UUID
-            portfolio_report::fetch_historical(symbol, "XFRA", from, to).await
+        ProviderType::TradingView => {
+            // TradingView uses EXCHANGE:SYMBOL format
+            // Remove Yahoo-style exchange suffixes (.DE, .SW, .L, etc.) from symbol
+            let base_symbol = symbol
+                .split('.')
+                .next()
+                .unwrap_or(symbol);
+
+            let full_symbol = if let Some(exchange) = exchange_suffix {
+                if !base_symbol.contains(':') && !exchange.is_empty() {
+                    format!("{}:{}", exchange, base_symbol)
+                } else {
+                    base_symbol.to_string()
+                }
+            } else {
+                base_symbol.to_string()
+            };
+            tradingview::fetch_historical(&full_symbol, from, to).await
         }
         _ => {
             anyhow::bail!("Historical quotes not supported for provider {:?}", provider)

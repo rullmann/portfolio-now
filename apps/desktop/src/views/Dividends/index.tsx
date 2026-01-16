@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Coins, TrendingUp, TrendingDown, Calendar, RefreshCw, AlertCircle, Building2 } from 'lucide-react';
+import { Coins, TrendingUp, TrendingDown, Calendar, RefreshCw, AlertCircle, Building2, LayoutGrid, CalendarDays, LineChart } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -27,6 +27,10 @@ import {
 import type { DividendReport, SecurityData } from '../../lib/types';
 import { formatDate } from '../../lib/types';
 import { useSettingsStore } from '../../store';
+import { DividendCalendar } from './DividendCalendar';
+import { DividendForecast } from './DividendForecast';
+
+type TabType = 'overview' | 'calendar' | 'forecast';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
@@ -44,6 +48,7 @@ export function DividendsView() {
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [logos, setLogos] = useState<Map<number, LogoData>>(new Map());
   const logosToCache = useRef<Map<number, { url: string; domain: string }>>(new Map());
+  const [activeTab, setActiveTab] = useState<TabType>('overview');
 
   const { brandfetchApiKey } = useSettingsStore();
 
@@ -284,25 +289,80 @@ export function DividendsView() {
               </option>
             ))}
           </select>
-          <button
-            onClick={loadData}
-            disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-            Aktualisieren
-          </button>
+          {activeTab === 'overview' && (
+            <button
+              onClick={loadData}
+              disabled={isLoading}
+              className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+              Aktualisieren
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'overview'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <LayoutGrid size={16} />
+          Übersicht
+        </button>
+        <button
+          onClick={() => setActiveTab('calendar')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'calendar'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <CalendarDays size={16} />
+          Kalender
+        </button>
+        <button
+          onClick={() => setActiveTab('forecast')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'forecast'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <LineChart size={16} />
+          Prognose
+        </button>
+      </div>
+
       {/* Error */}
-      {error && (
+      {error && activeTab === 'overview' && (
         <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
           <AlertCircle size={16} />
           {error}
         </div>
       )}
 
+      {/* Calendar Tab */}
+      {activeTab === 'calendar' && (
+        <DividendCalendar
+          selectedYear={selectedYear}
+          onYearChange={setSelectedYear}
+        />
+      )}
+
+      {/* Forecast Tab */}
+      {activeTab === 'forecast' && (
+        <DividendForecast selectedYear={selectedYear} />
+      )}
+
+      {/* Overview Tab - Summary Cards */}
+      {activeTab === 'overview' && (
+        <>
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-card rounded-lg border border-border p-4">
@@ -598,6 +658,8 @@ export function DividendsView() {
           <Coins className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p>Keine Dividenden für {selectedYear} gefunden.</p>
         </div>
+      )}
+        </>
       )}
     </div>
   );

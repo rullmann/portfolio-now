@@ -3,15 +3,21 @@
  * Shows holdings table with PP-style columns and a chart with cost basis line.
  * Clicking on a row opens the SecurityDetailChartModal with price history,
  * FIFO cost basis evolution, and trade markers.
+ *
+ * Features:
+ * - Grouping by currency or taxonomy
+ * - Subtotals per group
+ * - CSV/PDF export
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Building2, Table2, LineChart as LineChartIcon, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Building2, Table2, LineChart as LineChartIcon, ArrowUpDown, ArrowUp, ArrowDown, Download, Layers, ChevronDown, ChevronRight, FileSpreadsheet, FileText } from 'lucide-react';
 import { createChart, AreaSeries, LineSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, LineData, AreaData, Time } from 'lightweight-charts';
 import type { AggregatedHolding, PortfolioData } from '../types';
+import type { TaxonomyData, SecurityClassification } from '../../lib/types';
 import { formatNumber } from '../utils';
-import { getBaseCurrency, getPortfolioHistory } from '../../lib/api';
+import { getBaseCurrency, getPortfolioHistory, getTaxonomies, getAllSecurityClassifications } from '../../lib/api';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
 import { SecurityDetailChartModal } from '../../components/modals';
@@ -24,6 +30,18 @@ interface AssetStatementViewProps {
 type SortField = 'name' | 'shares' | 'purchasePrice' | 'costBasis' | 'currentValue' | 'gainLoss' | 'gainLossPercent' | 'dividends';
 type SortDir = 'asc' | 'desc';
 type DisplayMode = 'table' | 'chart';
+type GroupBy = 'none' | 'currency' | `taxonomy-${number}`;
+
+// Group with calculated totals
+interface HoldingGroup {
+  name: string;
+  color?: string;
+  holdings: HoldingWithLogo[];
+  totalValue: number;
+  totalCostBasis: number;
+  totalGainLoss: number;
+  totalDividends: number;
+}
 
 // Table header with sort functionality
 interface SortableHeaderProps {
@@ -68,10 +86,20 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
   const [selectedHolding, setSelectedHolding] = useState<HoldingWithLogo | null>(null);
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
 
+  // Grouping state
+  const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [taxonomies, setTaxonomies] = useState<TaxonomyData[]>([]);
+  const [classifications, setClassifications] = useState<SecurityClassification[]>([]);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [showGroupMenu, setShowGroupMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const valueSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
   const costBasisSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const groupMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Prepare securities list for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -91,6 +119,39 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
     getBaseCurrency()
       .then(setBaseCurrency)
       .catch(() => setBaseCurrency('EUR'));
+  }, []);
+
+  // Fetch taxonomies for grouping
+  useEffect(() => {
+    getTaxonomies()
+      .then(setTaxonomies)
+      .catch(() => setTaxonomies([]));
+  }, []);
+
+  // Fetch classifications when taxonomy is selected
+  useEffect(() => {
+    if (groupBy.startsWith('taxonomy-')) {
+      const taxonomyId = parseInt(groupBy.replace('taxonomy-', ''), 10);
+      getAllSecurityClassifications(taxonomyId)
+        .then(setClassifications)
+        .catch(() => setClassifications([]));
+    } else {
+      setClassifications([]);
+    }
+  }, [groupBy]);
+
+  // Close menus on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (groupMenuRef.current && !groupMenuRef.current.contains(event.target as Node)) {
+        setShowGroupMenu(false);
+      }
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Fetch portfolio history for chart
@@ -196,6 +257,122 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
 
     return sorted;
   }, [holdingsWithLogos, sortField, sortDir]);
+
+  // Group holdings based on selected grouping
+  const groupedHoldings = useMemo((): HoldingGroup[] => {
+    if (groupBy === 'none') {
+      return [];
+    }
+
+    const groups = new Map<string, HoldingGroup>();
+
+    for (const holding of sortedHoldings) {
+      let groupName = 'Sonstige';
+      let groupColor: string | undefined;
+
+      if (groupBy === 'currency') {
+        groupName = holding.currency || 'Unbekannt';
+      } else if (groupBy.startsWith('taxonomy-')) {
+        // Find classification for this security
+        const classification = classifications.find(c => c.securityId === holding.securityId);
+        if (classification) {
+          groupName = classification.classificationName;
+          groupColor = classification.color || undefined;
+        }
+      }
+
+      if (!groups.has(groupName)) {
+        groups.set(groupName, {
+          name: groupName,
+          color: groupColor,
+          holdings: [],
+          totalValue: 0,
+          totalCostBasis: 0,
+          totalGainLoss: 0,
+          totalDividends: 0,
+        });
+      }
+
+      const group = groups.get(groupName)!;
+      group.holdings.push(holding);
+      group.totalValue += holding.currentValue || 0;
+      group.totalCostBasis += holding.costBasis || 0;
+      group.totalGainLoss += holding.gainLoss || 0;
+      group.totalDividends += holding.dividendsTotal || 0;
+    }
+
+    // Sort groups by value descending
+    return Array.from(groups.values()).sort((a, b) => b.totalValue - a.totalValue);
+  }, [sortedHoldings, groupBy, classifications]);
+
+  // Toggle group collapse
+  const toggleGroup = useCallback((groupName: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  }, []);
+
+  // Export to CSV
+  const exportToCsv = useCallback(() => {
+    const headers = ['Wertpapier', 'ISIN', 'Währung', 'Anteile', 'Einstandskurs', 'Einstandswert', 'Marktwert', 'Gewinn/Verlust', 'G/V %', 'Dividenden'];
+    const rows = sortedHoldings.map(h => [
+      h.name,
+      h.isin || '',
+      h.currency,
+      h.totalShares.toString(),
+      (h.purchasePrice ?? 0).toFixed(2),
+      h.costBasis.toFixed(2),
+      (h.currentValue ?? 0).toFixed(2),
+      (h.gainLoss ?? 0).toFixed(2),
+      (h.gainLossPercent ?? 0).toFixed(2),
+      h.dividendsTotal.toFixed(2),
+    ]);
+
+    // Add totals row
+    rows.push([
+      'Summe',
+      '',
+      baseCurrency,
+      '',
+      '',
+      totalCostBasis.toFixed(2),
+      totalValue.toFixed(2),
+      totalGainLoss.toFixed(2),
+      totalCostBasis > 0 ? ((totalGainLoss / totalCostBasis) * 100).toFixed(2) : '0',
+      totalDividends.toFixed(2),
+    ]);
+
+    const csvContent = [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `vermoegenaufstellung_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+  }, [sortedHoldings, baseCurrency, totalCostBasis, totalValue, totalGainLoss, totalDividends]);
+
+  // Export to PDF (simple print dialog)
+  const exportToPdf = useCallback(() => {
+    window.print();
+    setShowExportMenu(false);
+  }, []);
+
+  // Get group label for display
+  const getGroupLabel = useCallback(() => {
+    if (groupBy === 'none') return 'Keine';
+    if (groupBy === 'currency') return 'Währung';
+    const taxonomyId = parseInt(groupBy.replace('taxonomy-', ''), 10);
+    const taxonomy = taxonomies.find(t => t.id === taxonomyId);
+    return taxonomy?.name || 'Taxonomie';
+  }, [groupBy, taxonomies]);
 
   // Initialize chart
   useEffect(() => {
@@ -321,26 +498,100 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
           </p>
         </div>
 
-        {/* Display mode toggle */}
-        <div className="flex border border-border rounded-md overflow-hidden">
-          <button
-            className={`px-3 py-1.5 text-sm flex items-center gap-1 ${
-              displayMode === 'table' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-accent'
-            }`}
-            onClick={() => setDisplayMode('table')}
-          >
-            <Table2 size={14} />
-            Tabelle
-          </button>
-          <button
-            className={`px-3 py-1.5 text-sm flex items-center gap-1 ${
-              displayMode === 'chart' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-accent'
-            }`}
-            onClick={() => setDisplayMode('chart')}
-          >
-            <LineChartIcon size={14} />
-            Chart
-          </button>
+        <div className="flex items-center gap-2">
+          {/* Grouping dropdown */}
+          <div className="relative" ref={groupMenuRef}>
+            <button
+              className="px-3 py-1.5 text-sm flex items-center gap-1 border border-border rounded-md bg-background hover:bg-accent"
+              onClick={() => setShowGroupMenu(!showGroupMenu)}
+            >
+              <Layers size={14} />
+              Gruppieren: {getGroupLabel()}
+              <ChevronDown size={14} />
+            </button>
+            {showGroupMenu && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50">
+                <button
+                  className={`w-full px-3 py-2 text-sm text-left hover:bg-accent ${groupBy === 'none' ? 'bg-accent' : ''}`}
+                  onClick={() => { setGroupBy('none'); setShowGroupMenu(false); }}
+                >
+                  Keine Gruppierung
+                </button>
+                <button
+                  className={`w-full px-3 py-2 text-sm text-left hover:bg-accent ${groupBy === 'currency' ? 'bg-accent' : ''}`}
+                  onClick={() => { setGroupBy('currency'); setShowGroupMenu(false); }}
+                >
+                  Nach Währung
+                </button>
+                {taxonomies.length > 0 && (
+                  <div className="border-t border-border">
+                    <div className="px-3 py-1 text-xs text-muted-foreground">Taxonomien</div>
+                    {taxonomies.map(tax => (
+                      <button
+                        key={tax.id}
+                        className={`w-full px-3 py-2 text-sm text-left hover:bg-accent ${groupBy === `taxonomy-${tax.id}` ? 'bg-accent' : ''}`}
+                        onClick={() => { setGroupBy(`taxonomy-${tax.id}`); setShowGroupMenu(false); }}
+                      >
+                        {tax.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Export dropdown */}
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              className="px-3 py-1.5 text-sm flex items-center gap-1 border border-border rounded-md bg-background hover:bg-accent"
+              onClick={() => setShowExportMenu(!showExportMenu)}
+            >
+              <Download size={14} />
+              Export
+              <ChevronDown size={14} />
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-popover border border-border rounded-md shadow-lg z-50">
+                <button
+                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2"
+                  onClick={exportToCsv}
+                >
+                  <FileSpreadsheet size={14} />
+                  CSV Export
+                </button>
+                <button
+                  className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2"
+                  onClick={exportToPdf}
+                >
+                  <FileText size={14} />
+                  Drucken/PDF
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Display mode toggle */}
+          <div className="flex border border-border rounded-md overflow-hidden">
+            <button
+              className={`px-3 py-1.5 text-sm flex items-center gap-1 ${
+                displayMode === 'table' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-accent'
+              }`}
+              onClick={() => setDisplayMode('table')}
+            >
+              <Table2 size={14} />
+              Tabelle
+            </button>
+            <button
+              className={`px-3 py-1.5 text-sm flex items-center gap-1 ${
+                displayMode === 'chart' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-accent'
+              }`}
+              onClick={() => setDisplayMode('chart')}
+            >
+              <LineChartIcon size={14} />
+              Chart
+            </button>
+          </div>
         </div>
       </div>
 
@@ -388,74 +639,191 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                 </tr>
               </thead>
               <tbody>
-                {sortedHoldings.map((holding) => {
-                  const gainLossColor = (holding.gainLoss ?? 0) >= 0 ? 'text-green-600' : 'text-red-600';
-                  return (
-                    <tr
-                      key={holding.securityId}
-                      className="border-b border-border hover:bg-accent/50 transition-colors cursor-pointer"
-                      onClick={() => setSelectedHolding(holding)}
-                      title="Klicken für Detailansicht"
-                    >
-                      {/* Name with Logo */}
-                      <td className="py-2 px-3">
-                        <div className="flex items-center gap-2">
-                          {holding.logoUrl ? (
-                            <img
-                              src={holding.logoUrl}
-                              alt=""
-                              className="w-6 h-6 rounded flex-shrink-0"
-                              crossOrigin="anonymous"
-                            />
-                          ) : (
-                            <Building2 size={20} className="text-muted-foreground flex-shrink-0" />
-                          )}
-                          <span className="font-medium truncate" title={holding.name}>
-                            {holding.name}
-                          </span>
-                        </div>
-                      </td>
-                      {/* Shares */}
-                      <td className="py-2 px-3 text-right tabular-nums">
-                        {holding.totalShares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}
-                      </td>
-                      {/* Purchase Price (Einstandskurs) */}
-                      <td className="py-2 px-3 text-right tabular-nums">
-                        {holding.purchasePrice != null ? formatNumber(holding.purchasePrice) : '-'}
-                      </td>
-                      {/* Cost Basis (Einstandswert) */}
-                      <td className="py-2 px-3 text-right tabular-nums">
-                        {formatNumber(holding.costBasis)}
-                      </td>
-                      {/* Current Value (Marktwert) */}
-                      <td className="py-2 px-3 text-right tabular-nums font-medium">
-                        {holding.currentValue != null ? formatNumber(holding.currentValue) : '-'}
-                      </td>
-                      {/* Gain/Loss */}
-                      <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
-                        {holding.gainLoss != null ? (
-                          <>
-                            {holding.gainLoss >= 0 ? '+' : ''}
-                            {formatNumber(holding.gainLoss)}
-                          </>
-                        ) : '-'}
-                      </td>
-                      {/* Gain/Loss % */}
-                      <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
-                        {holding.gainLossPercent != null ? (
-                          <>
-                            {holding.gainLossPercent >= 0 ? '+' : ''}
-                            {holding.gainLossPercent.toFixed(2)}%
-                          </>
-                        ) : '-'}
-                      </td>
-                      {/* Dividends */}
-                      <td className="py-2 px-3 text-right tabular-nums text-blue-600">
-                        {holding.dividendsTotal > 0 ? formatNumber(holding.dividendsTotal) : '-'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {groupBy === 'none' ? (
+                  // Ungrouped view
+                  sortedHoldings.map((holding) => {
+                    const gainLossColor = (holding.gainLoss ?? 0) >= 0 ? 'text-green-600' : 'text-red-600';
+                    return (
+                      <tr
+                        key={holding.securityId}
+                        className="border-b border-border hover:bg-accent/50 transition-colors cursor-pointer"
+                        onClick={() => setSelectedHolding(holding)}
+                        title="Klicken für Detailansicht"
+                      >
+                        {/* Name with Logo */}
+                        <td className="py-2 px-3">
+                          <div className="flex items-center gap-2">
+                            {holding.logoUrl ? (
+                              <img
+                                src={holding.logoUrl}
+                                alt=""
+                                className="w-6 h-6 rounded flex-shrink-0"
+                                crossOrigin="anonymous"
+                              />
+                            ) : (
+                              <Building2 size={20} className="text-muted-foreground flex-shrink-0" />
+                            )}
+                            <span className="font-medium truncate" title={holding.name}>
+                              {holding.name}
+                            </span>
+                          </div>
+                        </td>
+                        {/* Shares */}
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {holding.totalShares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}
+                        </td>
+                        {/* Purchase Price (Einstandskurs) */}
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {holding.purchasePrice != null ? formatNumber(holding.purchasePrice) : '-'}
+                        </td>
+                        {/* Cost Basis (Einstandswert) */}
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {formatNumber(holding.costBasis)}
+                        </td>
+                        {/* Current Value (Marktwert) */}
+                        <td className="py-2 px-3 text-right tabular-nums font-medium">
+                          {holding.currentValue != null ? formatNumber(holding.currentValue) : '-'}
+                        </td>
+                        {/* Gain/Loss */}
+                        <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
+                          {holding.gainLoss != null ? (
+                            <>
+                              {holding.gainLoss >= 0 ? '+' : ''}
+                              {formatNumber(holding.gainLoss)}
+                            </>
+                          ) : '-'}
+                        </td>
+                        {/* Gain/Loss % */}
+                        <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
+                          {holding.gainLossPercent != null ? (
+                            <>
+                              {holding.gainLossPercent >= 0 ? '+' : ''}
+                              {holding.gainLossPercent.toFixed(2)}%
+                            </>
+                          ) : '-'}
+                        </td>
+                        {/* Dividends */}
+                        <td className="py-2 px-3 text-right tabular-nums text-blue-600">
+                          {holding.dividendsTotal > 0 ? formatNumber(holding.dividendsTotal) : '-'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  // Grouped view
+                  groupedHoldings.map((group) => {
+                    const isCollapsed = collapsedGroups.has(group.name);
+                    const groupGainLossColor = group.totalGainLoss >= 0 ? 'text-green-600' : 'text-red-600';
+                    const groupGainLossPercent = group.totalCostBasis > 0 ? (group.totalGainLoss / group.totalCostBasis) * 100 : 0;
+                    return (
+                      <React.Fragment key={group.name}>
+                        {/* Group header row */}
+                        <tr
+                          className="bg-muted/30 cursor-pointer hover:bg-muted/50 border-b border-border"
+                          onClick={() => toggleGroup(group.name)}
+                        >
+                          <td className="py-2 px-3 font-semibold" colSpan={3}>
+                            <div className="flex items-center gap-2">
+                              {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                              {group.color && (
+                                <div
+                                  className="w-3 h-3 rounded-full flex-shrink-0"
+                                  style={{ backgroundColor: group.color }}
+                                />
+                              )}
+                              <span>{group.name}</span>
+                              <span className="text-muted-foreground font-normal">({group.holdings.length})</span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                            {formatNumber(group.totalCostBasis)}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                            {formatNumber(group.totalValue)}
+                          </td>
+                          <td className={`py-2 px-3 text-right tabular-nums font-semibold ${groupGainLossColor}`}>
+                            {group.totalGainLoss >= 0 ? '+' : ''}{formatNumber(group.totalGainLoss)}
+                          </td>
+                          <td className={`py-2 px-3 text-right tabular-nums font-semibold ${groupGainLossColor}`}>
+                            {groupGainLossPercent >= 0 ? '+' : ''}{groupGainLossPercent.toFixed(2)}%
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-blue-600 font-semibold">
+                            {group.totalDividends > 0 ? formatNumber(group.totalDividends) : '-'}
+                          </td>
+                        </tr>
+                        {/* Group holdings */}
+                        {!isCollapsed && group.holdings.map((holding) => {
+                          const gainLossColor = (holding.gainLoss ?? 0) >= 0 ? 'text-green-600' : 'text-red-600';
+                          return (
+                            <tr
+                              key={holding.securityId}
+                              className="border-b border-border hover:bg-accent/50 transition-colors cursor-pointer"
+                              onClick={() => setSelectedHolding(holding)}
+                              title="Klicken für Detailansicht"
+                            >
+                              {/* Name with Logo (indented) */}
+                              <td className="py-2 px-3 pl-8">
+                                <div className="flex items-center gap-2">
+                                  {holding.logoUrl ? (
+                                    <img
+                                      src={holding.logoUrl}
+                                      alt=""
+                                      className="w-6 h-6 rounded flex-shrink-0"
+                                      crossOrigin="anonymous"
+                                    />
+                                  ) : (
+                                    <Building2 size={20} className="text-muted-foreground flex-shrink-0" />
+                                  )}
+                                  <span className="font-medium truncate" title={holding.name}>
+                                    {holding.name}
+                                  </span>
+                                </div>
+                              </td>
+                              {/* Shares */}
+                              <td className="py-2 px-3 text-right tabular-nums">
+                                {holding.totalShares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}
+                              </td>
+                              {/* Purchase Price */}
+                              <td className="py-2 px-3 text-right tabular-nums">
+                                {holding.purchasePrice != null ? formatNumber(holding.purchasePrice) : '-'}
+                              </td>
+                              {/* Cost Basis */}
+                              <td className="py-2 px-3 text-right tabular-nums">
+                                {formatNumber(holding.costBasis)}
+                              </td>
+                              {/* Current Value */}
+                              <td className="py-2 px-3 text-right tabular-nums font-medium">
+                                {holding.currentValue != null ? formatNumber(holding.currentValue) : '-'}
+                              </td>
+                              {/* Gain/Loss */}
+                              <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
+                                {holding.gainLoss != null ? (
+                                  <>
+                                    {holding.gainLoss >= 0 ? '+' : ''}
+                                    {formatNumber(holding.gainLoss)}
+                                  </>
+                                ) : '-'}
+                              </td>
+                              {/* Gain/Loss % */}
+                              <td className={`py-2 px-3 text-right tabular-nums font-medium ${gainLossColor}`}>
+                                {holding.gainLossPercent != null ? (
+                                  <>
+                                    {holding.gainLossPercent >= 0 ? '+' : ''}
+                                    {holding.gainLossPercent.toFixed(2)}%
+                                  </>
+                                ) : '-'}
+                              </td>
+                              {/* Dividends */}
+                              <td className="py-2 px-3 text-right tabular-nums text-blue-600">
+                                {holding.dividendsTotal > 0 ? formatNumber(holding.dividendsTotal) : '-'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    );
+                  })
+                )}
               </tbody>
               {/* Footer with totals */}
               <tfoot className="bg-muted/50 font-medium border-t-2 border-border">

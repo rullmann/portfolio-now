@@ -401,6 +401,142 @@ pub struct PriceData {
     pub value: f64,
 }
 
+/// Extended price data with outlier detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceDataWithOutliers {
+    pub date: String,
+    pub value: f64,
+    /// Whether this price is detected as an outlier (>75% daily change)
+    pub is_outlier: bool,
+    /// Percentage change from previous day (None for first data point)
+    pub change_percent: Option<f64>,
+}
+
+/// Summary of outliers in price data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlierSummary {
+    /// Total number of price points
+    pub total_prices: usize,
+    /// Number of detected outliers
+    pub outlier_count: usize,
+    /// List of outlier dates with their change percentages
+    pub outliers: Vec<OutlierInfo>,
+    /// Whether the data quality is considered good (few outliers)
+    pub data_quality_good: bool,
+}
+
+/// Information about a single outlier
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlierInfo {
+    pub date: String,
+    pub value: f64,
+    pub previous_value: f64,
+    pub change_percent: f64,
+}
+
+/// Price history with outlier analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceHistoryWithOutliers {
+    pub prices: Vec<PriceDataWithOutliers>,
+    pub summary: OutlierSummary,
+}
+
+/// Threshold for outlier detection: 30% daily change
+const OUTLIER_THRESHOLD_PERCENT: f64 = 30.0;
+
+/// Detect outliers in a list of prices (sorted by date)
+/// An outlier is detected when:
+/// 1. Price changes more than OUTLIER_THRESHOLD_PERCENT from previous day, OR
+/// 2. Price is a "spike" - deviates significantly from BOTH previous AND next day
+///    (typical for Yahoo data errors that appear as single-day spikes)
+fn detect_outliers(prices: &[PriceData]) -> PriceHistoryWithOutliers {
+    let mut result_prices = Vec::with_capacity(prices.len());
+    let mut outliers = Vec::new();
+
+    for (i, price) in prices.iter().enumerate() {
+        let (is_outlier, change_percent, prev_value) = if i == 0 {
+            (false, None, None)
+        } else {
+            let prev = &prices[i - 1];
+            if prev.value > 0.0 {
+                let change_from_prev = ((price.value - prev.value) / prev.value) * 100.0;
+
+                // Check if this is a spike (deviates from both neighbors)
+                let is_spike = if i < prices.len() - 1 {
+                    let next = &prices[i + 1];
+                    if next.value > 0.0 {
+                        let change_to_next = ((next.value - price.value) / price.value) * 100.0;
+                        // It's a spike if it jumps up/down from prev AND jumps back to next
+                        // (both changes in opposite directions and significant)
+                        let prev_significant = change_from_prev.abs() > OUTLIER_THRESHOLD_PERCENT / 2.0;
+                        let next_significant = change_to_next.abs() > OUTLIER_THRESHOLD_PERCENT / 2.0;
+                        let opposite_directions = (change_from_prev > 0.0) != (change_to_next > 0.0);
+                        prev_significant && next_significant && opposite_directions
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // Outlier if: large single-day change OR spike pattern
+                let is_outlier = change_from_prev.abs() > OUTLIER_THRESHOLD_PERCENT || is_spike;
+                (is_outlier, Some(change_from_prev), Some(prev.value))
+            } else {
+                (false, None, None)
+            }
+        };
+
+        if is_outlier {
+            outliers.push(OutlierInfo {
+                date: price.date.clone(),
+                value: price.value,
+                previous_value: prev_value.unwrap_or(0.0),
+                change_percent: change_percent.unwrap_or(0.0),
+            });
+        }
+
+        result_prices.push(PriceDataWithOutliers {
+            date: price.date.clone(),
+            value: price.value,
+            is_outlier,
+            change_percent,
+        });
+    }
+
+    let total_prices = prices.len();
+    let outlier_count = outliers.len();
+    // Data quality is considered good if less than 1% of prices are outliers
+    let data_quality_good = total_prices == 0 || (outlier_count as f64 / total_prices as f64) < 0.01;
+
+    PriceHistoryWithOutliers {
+        prices: result_prices,
+        summary: OutlierSummary {
+            total_prices,
+            outlier_count,
+            outliers,
+            data_quality_good,
+        },
+    }
+}
+
+/// Filter out outliers from price data for analysis
+/// Returns only non-outlier prices
+fn filter_outliers(prices: &[PriceDataWithOutliers]) -> Vec<PriceData> {
+    prices
+        .iter()
+        .filter(|p| !p.is_outlier)
+        .map(|p| PriceData {
+            date: p.date.clone(),
+            value: p.value,
+        })
+        .collect()
+}
+
 /// Get price history for a security
 #[command]
 pub fn get_price_history(
@@ -445,6 +581,79 @@ pub fn get_price_history(
     Ok(prices)
 }
 
+/// Get price history for a security with outlier detection
+///
+/// Returns all prices with outlier flags and a summary of detected outliers.
+/// Use this for charts where you want to visually mark outliers.
+#[command]
+pub fn get_price_history_with_outliers(
+    security_id: i64,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<PriceHistoryWithOutliers, String> {
+    // First get the raw price history
+    let prices = get_price_history(security_id, start_date, end_date)?;
+
+    // Then detect outliers
+    let result = detect_outliers(&prices);
+
+    // Log warning if outliers found
+    if result.summary.outlier_count > 0 {
+        log::warn!(
+            "Security {} has {} outlier(s) in price data ({:.1}% of data points)",
+            security_id,
+            result.summary.outlier_count,
+            (result.summary.outlier_count as f64 / result.summary.total_prices as f64) * 100.0
+        );
+        for outlier in &result.summary.outliers {
+            log::warn!(
+                "  Outlier on {}: {:.2} -> {:.2} ({:+.1}%)",
+                outlier.date,
+                outlier.previous_value,
+                outlier.value,
+                outlier.change_percent
+            );
+        }
+    }
+
+    Ok(result)
+}
+
+/// Get filtered price history for a security (outliers removed)
+///
+/// Use this for performance calculations and analysis where outliers would distort results.
+/// Returns the filtered prices plus a summary of what was removed.
+#[command]
+pub fn get_price_history_filtered(
+    security_id: i64,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<FilteredPriceHistory, String> {
+    // First get the raw price history
+    let prices = get_price_history(security_id, start_date, end_date)?;
+
+    // Detect outliers
+    let with_outliers = detect_outliers(&prices);
+
+    // Filter out outliers
+    let filtered_prices = filter_outliers(&with_outliers.prices);
+
+    Ok(FilteredPriceHistory {
+        prices: filtered_prices,
+        summary: with_outliers.summary,
+    })
+}
+
+/// Filtered price history with removed outliers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilteredPriceHistory {
+    /// Prices with outliers removed
+    pub prices: Vec<PriceData>,
+    /// Summary of what was filtered
+    pub summary: OutlierSummary,
+}
+
 /// Holdings data (current position in a portfolio)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -462,6 +671,7 @@ pub struct HoldingData {
 }
 
 /// Get holdings for a portfolio
+/// Uses SINGLE SOURCE OF TRUTH for cost basis calculation (FIFO lots)
 #[command]
 pub fn get_holdings(portfolio_id: i64) -> Result<Vec<HoldingData>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
@@ -469,6 +679,10 @@ pub fn get_holdings(portfolio_id: i64) -> Result<Vec<HoldingData>, String> {
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
+    // Get base currency for cost basis conversion
+    let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+
+    // STEP 1: Get holdings from transaction sums (for shares count)
     let sql = "
         WITH holdings AS (
             SELECT
@@ -477,11 +691,7 @@ pub fn get_holdings(portfolio_id: i64) -> Result<Vec<HoldingData>, String> {
                     WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
                     WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
                     ELSE 0
-                END) as total_shares,
-                SUM(CASE
-                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.amount
-                    ELSE 0
-                END) as cost_basis
+                END) as total_shares
             FROM pp_txn t
             WHERE t.owner_type = 'portfolio'
               AND t.owner_id = ?1
@@ -495,26 +705,32 @@ pub fn get_holdings(portfolio_id: i64) -> Result<Vec<HoldingData>, String> {
             s.name,
             s.currency,
             h.total_shares,
-            lp.value as latest_price,
-            h.cost_basis
+            lp.value as latest_price
         FROM holdings h
         JOIN pp_security s ON s.id = h.security_id
         LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
         ORDER BY s.name
     ";
 
+    // STEP 2: Get cost basis from FIFO lots using SINGLE SOURCE OF TRUTH
+    // Uses fifo::get_cost_basis_by_security_for_portfolio() which converts each lot individually
+    let cost_basis_map = crate::fifo::get_cost_basis_by_security_for_portfolio(conn, portfolio_id, &base_currency)
+        .unwrap_or_default();
+
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
 
     let holdings: Vec<HoldingData> = stmt
         .query_map(params![portfolio_id], |row| {
+            let security_id: i64 = row.get(0)?;
             let shares_raw: i64 = row.get(4)?;
             let latest_price_raw: Option<i64> = row.get(5)?;
-            let cost_basis_cents: i64 = row.get(6)?;
 
             let shares_decimal = shares::to_decimal(shares_raw);
             let current_price = latest_price_raw.map(prices::to_decimal);
             let current_value = current_price.map(|p| p * shares_decimal);
-            let cost_basis = cost_basis_cents as f64 / 100.0;
+
+            // Get cost basis from FIFO SSOT map (already converted to base currency)
+            let cost_basis = cost_basis_map.get(&security_id).copied().unwrap_or(0.0);
 
             let gain_loss = current_value.map(|v| v - cost_basis);
             let gain_loss_percent = if cost_basis > 0.0 {
@@ -524,7 +740,7 @@ pub fn get_holdings(portfolio_id: i64) -> Result<Vec<HoldingData>, String> {
             };
 
             Ok(HoldingData {
-                security_id: row.get(0)?,
+                security_id,
                 security_uuid: row.get(1)?,
                 security_name: row.get(2)?,
                 currency: row.get(3)?,

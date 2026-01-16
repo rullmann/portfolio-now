@@ -834,6 +834,117 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Created pp_chart_drawing table");
     }
 
+    // Migration: Create pp_tax_settings table for German tax settings
+    if !table_exists(conn, "pp_tax_settings") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_tax_settings (
+                year INTEGER PRIMARY KEY,
+                is_married INTEGER NOT NULL DEFAULT 0,
+                kirchensteuer_rate REAL,
+                bundesland TEXT,
+                freistellung_used REAL NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_tax_settings table");
+    }
+
+    // Migration: Create pp_allocation_target table for portfolio rebalancing alerts
+    if !table_exists(conn, "pp_allocation_target") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_allocation_target (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                portfolio_id INTEGER NOT NULL,
+                security_id INTEGER,
+                taxonomy_id INTEGER,
+                classification_id INTEGER,
+                target_weight REAL NOT NULL,
+                threshold REAL NOT NULL DEFAULT 0.05,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (portfolio_id) REFERENCES pp_portfolio(id) ON DELETE CASCADE,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE,
+                FOREIGN KEY (taxonomy_id) REFERENCES pp_taxonomy(id) ON DELETE CASCADE,
+                FOREIGN KEY (classification_id) REFERENCES pp_classification(id) ON DELETE CASCADE,
+                UNIQUE(portfolio_id, security_id),
+                UNIQUE(portfolio_id, taxonomy_id, classification_id)
+            );
+            CREATE INDEX idx_pp_allocation_target_portfolio ON pp_allocation_target(portfolio_id);
+            CREATE INDEX idx_pp_allocation_target_security ON pp_allocation_target(security_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_allocation_target table");
+    }
+
+    // Migration: Create pp_attribute_type table for custom attribute definitions
+    if !table_exists(conn, "pp_attribute_type") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_attribute_type (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                column_label TEXT,
+                target TEXT NOT NULL DEFAULT 'security' CHECK(target IN ('security', 'account', 'portfolio')),
+                data_type TEXT NOT NULL DEFAULT 'STRING' CHECK(data_type IN (
+                    'STRING', 'LONG_NUMBER', 'DOUBLE_NUMBER', 'DATE', 'BOOLEAN', 'LIMIT_PRICE', 'SHARE'
+                )),
+                converter_class TEXT,
+                source TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT
+            );
+            CREATE INDEX idx_pp_attribute_type_target ON pp_attribute_type(target);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_attribute_type table");
+    }
+
+    // Migration: Create pp_ex_dividend table for ex-dividend dates
+    if !table_exists(conn, "pp_ex_dividend") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_ex_dividend (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                security_id INTEGER NOT NULL,
+                ex_date TEXT NOT NULL,
+                record_date TEXT,
+                pay_date TEXT,
+                amount REAL,
+                currency TEXT,
+                frequency TEXT,
+                source TEXT,
+                is_confirmed INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE,
+                UNIQUE(security_id, ex_date)
+            );
+            CREATE INDEX idx_pp_ex_dividend_ex_date ON pp_ex_dividend(ex_date);
+            CREATE INDEX idx_pp_ex_dividend_security ON pp_ex_dividend(security_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_ex_dividend table");
+    }
+
+    // Migration: Create pp_consortium table for portfolio groups
+    if !table_exists(conn, "pp_consortium") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_consortium (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                portfolio_ids TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_consortium table");
+    }
+
     Ok(())
 }
 

@@ -917,3 +917,106 @@ pub fn ai_query_portfolio_value(date: String) -> Result<AiPortfolioValueResult, 
         message: "Keine Daten gefunden.".to_string(),
     })
 }
+
+// ============================================================================
+// API Key Management Commands
+// ============================================================================
+
+/// Result of API key save operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSaveApiKeyResult {
+    pub success: bool,
+    pub message: String,
+    pub provider: String,
+}
+
+/// Save an API key to secure storage.
+/// Used by ChatBot to allow users to configure API keys via conversation.
+///
+/// Valid providers:
+/// - AI: "anthropic", "openai", "gemini", "perplexity"
+/// - Quote: "finnhub", "coingecko", "alphaVantage", "twelveData", "brandfetch"
+/// - Export: "divvyDiary"
+#[command]
+pub async fn ai_save_api_key(
+    provider: String,
+    api_key: String,
+    app: tauri::AppHandle,
+) -> Result<AiSaveApiKeyResult, String> {
+    use tauri_plugin_store::StoreExt;
+
+    let provider_lower = provider.to_lowercase();
+
+    // Map provider names to store keys
+    let store_key = match provider_lower.as_str() {
+        // AI Providers
+        "anthropic" | "claude" => "anthropic",
+        "openai" | "gpt" | "chatgpt" => "openai",
+        "gemini" | "google" => "gemini",
+        "perplexity" => "perplexity",
+        // Quote Providers
+        "finnhub" => "finnhub",
+        "coingecko" => "coingecko",
+        "alphavantage" | "alpha_vantage" | "alpha-vantage" => "alphaVantage",
+        "twelvedata" | "twelve_data" | "twelve-data" => "twelveData",
+        "brandfetch" => "brandfetch",
+        // Export Services
+        "divvydiary" | "divvy_diary" | "divvy-diary" => "divvyDiary",
+        _ => {
+            return Ok(AiSaveApiKeyResult {
+                success: false,
+                message: format!(
+                    "Unbekannter Provider: \"{}\". Gültige Provider: anthropic, openai, gemini, perplexity, finnhub, coingecko, alphaVantage, twelveData, brandfetch, divvyDiary",
+                    provider
+                ),
+                provider: provider_lower,
+            });
+        }
+    };
+
+    // Validate API key is not empty
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Ok(AiSaveApiKeyResult {
+            success: false,
+            message: "API-Key darf nicht leer sein.".to_string(),
+            provider: store_key.to_string(),
+        });
+    }
+
+    // Store in secure storage
+    let store = app
+        .store("secure-keys.json")
+        .map_err(|e| format!("Fehler beim Öffnen des sicheren Speichers: {}", e))?;
+
+    // set() doesn't return Result in tauri-plugin-store v2
+    store.set(store_key.to_string(), serde_json::json!(api_key));
+
+    store
+        .save()
+        .map_err(|e| format!("Fehler beim Speichern: {}", e))?;
+
+    log::info!("AI saved API key for provider: {}", store_key);
+
+    Ok(AiSaveApiKeyResult {
+        success: true,
+        message: format!(
+            "{} API-Key wurde erfolgreich gespeichert. Bitte die App neu starten, damit die Änderung wirksam wird.",
+            match store_key {
+                "anthropic" => "Claude (Anthropic)",
+                "openai" => "OpenAI",
+                "gemini" => "Google Gemini",
+                "perplexity" => "Perplexity",
+                "finnhub" => "Finnhub",
+                "coingecko" => "CoinGecko",
+                "alphaVantage" => "Alpha Vantage",
+                "twelveData" => "Twelve Data",
+                "brandfetch" => "Brandfetch",
+                "divvyDiary" => "DivvyDiary",
+                _ => store_key,
+            }
+        ),
+        provider: store_key.to_string(),
+    })
+}

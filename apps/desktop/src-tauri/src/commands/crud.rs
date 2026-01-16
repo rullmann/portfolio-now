@@ -2,10 +2,15 @@
 
 use crate::db;
 use crate::events::{emit_data_changed, DataChangedPayload};
+use crate::quotes::{self, yahoo, ProviderType};
+use chrono::{Datelike, NaiveDate};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle};
 use uuid::Uuid;
+
+/// Default number of years of historical data to fetch for stocks/ETFs
+const DEFAULT_HISTORY_YEARS: i32 = 10;
 
 // =============================================================================
 // Security CRUD
@@ -33,6 +38,7 @@ pub struct CreateSecurityRequest {
 pub struct UpdateSecurityRequest {
     pub name: Option<String>,
     pub currency: Option<String>,
+    pub target_currency: Option<String>,
     pub isin: Option<String>,
     pub wkn: Option<String>,
     pub ticker: Option<String>,
@@ -42,6 +48,8 @@ pub struct UpdateSecurityRequest {
     pub latest_feed_url: Option<String>, // URL/suffix for current quotes
     pub note: Option<String>,
     pub is_retired: Option<bool>,
+    pub attributes: Option<std::collections::HashMap<String, String>>,
+    pub properties: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Security data returned after create/update
@@ -52,6 +60,7 @@ pub struct SecurityResult {
     pub uuid: String,
     pub name: String,
     pub currency: String,
+    pub target_currency: Option<String>,
     pub isin: Option<String>,
     pub wkn: Option<String>,
     pub ticker: Option<String>,
@@ -61,6 +70,8 @@ pub struct SecurityResult {
     pub latest_feed_url: Option<String>,
     pub note: Option<String>,
     pub is_retired: bool,
+    pub attributes: Option<String>,
+    pub properties: Option<String>,
 }
 
 /// Validate ISIN checksum (ISO 7812)
@@ -173,6 +184,7 @@ pub fn create_security(data: CreateSecurityRequest) -> Result<SecurityResult, St
         uuid,
         name: data.name,
         currency: data.currency,
+        target_currency: None,
         isin: data.isin,
         wkn: data.wkn,
         ticker: data.ticker,
@@ -182,7 +194,297 @@ pub fn create_security(data: CreateSecurityRequest) -> Result<SecurityResult, St
         latest_feed_url: data.latest_feed_url,
         note: data.note,
         is_retired: false,
+        attributes: None,
+        properties: None,
     })
+}
+
+/// Result for create_security_with_history including fetch stats
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityWithHistoryResult {
+    pub security: SecurityResult,
+    pub history_fetched: bool,
+    pub quotes_count: usize,
+    pub oldest_date: Option<String>,
+    pub newest_date: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Create a new security and automatically fetch historical prices from Yahoo Finance
+///
+/// This command is ideal for stocks and ETFs where you want historical data immediately.
+/// It uses Yahoo Finance to fetch up to 10 years of historical daily OHLCV data.
+///
+/// # Arguments
+/// * `data` - Security creation data (same as create_security)
+/// * `history_years` - Optional number of years of history to fetch (default: 10)
+#[command]
+pub async fn create_security_with_history(
+    data: CreateSecurityRequest,
+    history_years: Option<i32>,
+) -> Result<SecurityWithHistoryResult, String> {
+    // First create the security using existing logic
+    let security = create_security_internal(&data)?;
+
+    // Determine if we should fetch history based on provider
+    let feed = data.feed.as_deref().unwrap_or("YAHOO");
+    let provider = ProviderType::from_str(feed);
+
+    // Only fetch for Yahoo-based providers
+    let should_fetch = matches!(
+        provider,
+        Some(ProviderType::Yahoo) | Some(ProviderType::YahooAdjustedClose)
+    );
+
+    if !should_fetch {
+        log::info!(
+            "Skipping historical fetch for security {} - provider {} doesn't support it",
+            security.name,
+            feed
+        );
+        return Ok(SecurityWithHistoryResult {
+            security,
+            history_fetched: false,
+            quotes_count: 0,
+            oldest_date: None,
+            newest_date: None,
+            error: None,
+        });
+    }
+
+    // Get the symbol to use for Yahoo
+    let symbol = data
+        .ticker
+        .as_ref()
+        .or(data.isin.as_ref())
+        .ok_or_else(|| "No ticker or ISIN provided for historical data fetch".to_string())?;
+
+    // Calculate date range
+    let years = history_years.unwrap_or(DEFAULT_HISTORY_YEARS);
+    let to = chrono::Utc::now().date_naive();
+    let from = NaiveDate::from_ymd_opt(to.year() - years, to.month(), to.day())
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(to.year() - years, to.month(), 1).unwrap());
+
+    log::info!(
+        "Fetching {} years of historical data for {} ({}) from {} to {}",
+        years,
+        security.name,
+        symbol,
+        from,
+        to
+    );
+
+    // Apply exchange suffix if provided
+    let symbol_with_suffix = if let Some(ref suffix) = data.feed_url {
+        if !suffix.is_empty() && !symbol.contains('.') {
+            format!("{}.{}", symbol, suffix.trim_start_matches('.'))
+        } else {
+            symbol.clone()
+        }
+    } else {
+        symbol.clone()
+    };
+
+    // Fetch historical data from Yahoo
+    let adjusted = matches!(provider, Some(ProviderType::YahooAdjustedClose));
+    match yahoo::fetch_historical(&symbol_with_suffix, from, to, adjusted).await {
+        Ok(quotes) => {
+            if quotes.is_empty() {
+                log::warn!("No historical quotes returned for {}", symbol_with_suffix);
+                return Ok(SecurityWithHistoryResult {
+                    security,
+                    history_fetched: false,
+                    quotes_count: 0,
+                    oldest_date: None,
+                    newest_date: None,
+                    error: Some("No historical data available".to_string()),
+                });
+            }
+
+            // Save quotes to database
+            let quotes_count = quotes.len();
+            let oldest_date = quotes.first().map(|q| q.date.to_string());
+            let newest_date = quotes.last().map(|q| q.date.to_string());
+
+            if let Err(e) = save_historical_quotes(security.id, &quotes) {
+                log::error!("Failed to save historical quotes: {}", e);
+                return Ok(SecurityWithHistoryResult {
+                    security,
+                    history_fetched: false,
+                    quotes_count: 0,
+                    oldest_date: None,
+                    newest_date: None,
+                    error: Some(format!("Failed to save quotes: {}", e)),
+                });
+            }
+
+            // Also save the latest quote
+            if let Some(latest) = quotes.last() {
+                if let Err(e) = save_latest_quote(security.id, latest) {
+                    log::warn!("Failed to save latest quote: {}", e);
+                }
+            }
+
+            log::info!(
+                "Successfully fetched {} quotes for {} ({} to {})",
+                quotes_count,
+                security.name,
+                oldest_date.as_deref().unwrap_or("?"),
+                newest_date.as_deref().unwrap_or("?")
+            );
+
+            Ok(SecurityWithHistoryResult {
+                security,
+                history_fetched: true,
+                quotes_count,
+                oldest_date,
+                newest_date,
+                error: None,
+            })
+        }
+        Err(e) => {
+            log::error!("Failed to fetch historical data for {}: {}", symbol_with_suffix, e);
+            Ok(SecurityWithHistoryResult {
+                security,
+                history_fetched: false,
+                quotes_count: 0,
+                oldest_date: None,
+                newest_date: None,
+                error: Some(format!("Yahoo Finance error: {}", e)),
+            })
+        }
+    }
+}
+
+/// Internal function to create security (shared logic)
+fn create_security_internal(data: &CreateSecurityRequest) -> Result<SecurityResult, String> {
+    // Validate ISIN if provided
+    if let Some(ref isin) = data.isin {
+        if !isin.is_empty() && !validate_isin(isin) {
+            return Err(format!("Invalid ISIN checksum: {}", isin));
+        }
+    }
+
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    // Check for duplicates
+    if let Some(ref isin) = data.isin {
+        if !isin.is_empty() {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pp_security WHERE isin = ?1)",
+                    params![isin],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+
+            if exists {
+                return Err(format!("Security with ISIN {} already exists", isin));
+            }
+        }
+    }
+
+    let uuid = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        r#"
+        INSERT INTO pp_security (uuid, name, currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)
+        "#,
+        params![
+            uuid,
+            data.name,
+            data.currency,
+            data.isin,
+            data.wkn,
+            data.ticker,
+            data.feed,
+            data.feed_url,
+            data.latest_feed,
+            data.latest_feed_url,
+            data.note,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(SecurityResult {
+        id,
+        uuid,
+        name: data.name.clone(),
+        currency: data.currency.clone(),
+        target_currency: None,
+        isin: data.isin.clone(),
+        wkn: data.wkn.clone(),
+        ticker: data.ticker.clone(),
+        feed: data.feed.clone(),
+        feed_url: data.feed_url.clone(),
+        latest_feed: data.latest_feed.clone(),
+        latest_feed_url: data.latest_feed_url.clone(),
+        note: data.note.clone(),
+        is_retired: false,
+        attributes: None,
+        properties: None,
+    })
+}
+
+/// Save historical quotes to database
+fn save_historical_quotes(security_id: i64, quotes: &[quotes::Quote]) -> Result<(), String> {
+    let mut conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_mut()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    for quote in quotes {
+        let price_value = quotes::price_to_db(quote.close);
+        tx.execute(
+            "INSERT OR REPLACE INTO pp_price (security_id, date, value) VALUES (?1, ?2, ?3)",
+            params![security_id, quote.date.to_string(), price_value],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Save latest quote to database
+fn save_latest_quote(security_id: i64, quote: &quotes::Quote) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let price_value = quotes::price_to_db(quote.close);
+    let high_value = quote.high.map(quotes::price_to_db);
+    let low_value = quote.low.map(quotes::price_to_db);
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    conn.execute(
+        "INSERT OR REPLACE INTO pp_latest_price (security_id, date, value, high, low, volume, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            security_id,
+            quote.date.to_string(),
+            price_value,
+            high_value,
+            low_value,
+            quote.volume,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 /// Update an existing security
@@ -201,9 +503,9 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
         .ok_or_else(|| "Database not initialized".to_string())?;
 
     // Check if security exists
-    let existing: Option<(String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32)> = conn
+    let existing: Option<(String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT uuid, name, currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired FROM pp_security WHERE id = ?1",
+            "SELECT uuid, name, currency, target_currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, attributes, properties FROM pp_security WHERE id = ?1",
             params![id],
             |row| Ok((
                 row.get(0)?,
@@ -218,11 +520,14 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
                 row.get(9)?,
                 row.get(10)?,
                 row.get(11)?,
+                row.get(12)?,
+                row.get(13)?,
+                row.get(14)?,
             )),
         )
         .ok();
 
-    let (uuid, current_name, current_currency, current_isin, current_wkn, current_ticker, current_feed, current_feed_url, current_latest_feed, current_latest_feed_url, current_note, current_retired) =
+    let (uuid, current_name, current_currency, current_target_currency, current_isin, current_wkn, current_ticker, current_feed, current_feed_url, current_latest_feed, current_latest_feed_url, current_note, current_retired, current_attributes, current_properties) =
         existing.ok_or_else(|| format!("Security with id {} not found", id))?;
 
     // Check for ISIN duplicate if changing ISIN
@@ -247,6 +552,11 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
     let currency = data.currency.unwrap_or(current_currency);
 
     // For optional fields: Some("") = clear, Some(value) = set, None = keep current
+    let target_currency = match &data.target_currency {
+        Some(s) if s.is_empty() => None,
+        Some(s) => Some(s.clone()),
+        None => current_target_currency,
+    };
     let isin = match &data.isin {
         Some(s) if s.is_empty() => None,
         Some(s) => Some(s.clone()),
@@ -289,15 +599,27 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
     };
     let is_retired = data.is_retired.map(|b| if b { 1 } else { 0 }).unwrap_or(current_retired);
 
+    // Handle attributes and properties as JSON
+    let attributes = match &data.attributes {
+        Some(map) if map.is_empty() => None,
+        Some(map) => Some(serde_json::to_string(map).map_err(|e| e.to_string())?),
+        None => current_attributes,
+    };
+    let properties = match &data.properties {
+        Some(map) if map.is_empty() => None,
+        Some(map) => Some(serde_json::to_string(map).map_err(|e| e.to_string())?),
+        None => current_properties,
+    };
+
     conn.execute(
         r#"
         UPDATE pp_security
-        SET name = ?1, currency = ?2, isin = ?3, wkn = ?4, ticker = ?5,
-            feed = ?6, feed_url = ?7, latest_feed = ?8, latest_feed_url = ?9,
-            note = ?10, is_retired = ?11, updated_at = ?12
-        WHERE id = ?13
+        SET name = ?1, currency = ?2, target_currency = ?3, isin = ?4, wkn = ?5, ticker = ?6,
+            feed = ?7, feed_url = ?8, latest_feed = ?9, latest_feed_url = ?10,
+            note = ?11, is_retired = ?12, attributes = ?13, properties = ?14, updated_at = ?15
+        WHERE id = ?16
         "#,
-        params![name, currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, now, id],
+        params![name, currency, target_currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, attributes, properties, now, id],
     )
     .map_err(|e| e.to_string())?;
 
@@ -306,6 +628,7 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
         uuid,
         name,
         currency,
+        target_currency,
         isin,
         wkn,
         ticker,
@@ -315,6 +638,8 @@ pub fn update_security(id: i64, data: UpdateSecurityRequest) -> Result<SecurityR
         latest_feed_url,
         note,
         is_retired: is_retired != 0,
+        attributes,
+        properties,
     })
 }
 
@@ -404,7 +729,7 @@ pub fn search_securities(
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, uuid, name, currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired
+            SELECT id, uuid, name, currency, target_currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, attributes, properties
             FROM pp_security
             WHERE name LIKE ?1 OR isin LIKE ?1 OR wkn LIKE ?1 OR ticker LIKE ?1
             ORDER BY name
@@ -420,15 +745,18 @@ pub fn search_securities(
                 uuid: row.get(1)?,
                 name: row.get(2)?,
                 currency: row.get(3)?,
-                isin: row.get(4)?,
-                wkn: row.get(5)?,
-                ticker: row.get(6)?,
-                feed: row.get(7)?,
-                feed_url: row.get(8)?,
-                latest_feed: row.get(9)?,
-                latest_feed_url: row.get(10)?,
-                note: row.get(11)?,
-                is_retired: row.get::<_, i32>(12)? != 0,
+                target_currency: row.get(4)?,
+                isin: row.get(5)?,
+                wkn: row.get(6)?,
+                ticker: row.get(7)?,
+                feed: row.get(8)?,
+                feed_url: row.get(9)?,
+                latest_feed: row.get(10)?,
+                latest_feed_url: row.get(11)?,
+                note: row.get(12)?,
+                is_retired: row.get::<_, i32>(13)? != 0,
+                attributes: row.get(14)?,
+                properties: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -448,7 +776,7 @@ pub fn get_security(id: i64) -> Result<SecurityResult, String> {
 
     conn.query_row(
         r#"
-        SELECT id, uuid, name, currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired
+        SELECT id, uuid, name, currency, target_currency, isin, wkn, ticker, feed, feed_url, latest_feed, latest_feed_url, note, is_retired, attributes, properties
         FROM pp_security
         WHERE id = ?1
         "#,
@@ -459,15 +787,18 @@ pub fn get_security(id: i64) -> Result<SecurityResult, String> {
                 uuid: row.get(1)?,
                 name: row.get(2)?,
                 currency: row.get(3)?,
-                isin: row.get(4)?,
-                wkn: row.get(5)?,
-                ticker: row.get(6)?,
-                feed: row.get(7)?,
-                feed_url: row.get(8)?,
-                latest_feed: row.get(9)?,
-                latest_feed_url: row.get(10)?,
-                note: row.get(11)?,
-                is_retired: row.get::<_, i32>(12)? != 0,
+                target_currency: row.get(4)?,
+                isin: row.get(5)?,
+                wkn: row.get(6)?,
+                ticker: row.get(7)?,
+                feed: row.get(8)?,
+                feed_url: row.get(9)?,
+                latest_feed: row.get(10)?,
+                latest_feed_url: row.get(11)?,
+                note: row.get(12)?,
+                is_retired: row.get::<_, i32>(13)? != 0,
+                attributes: row.get(14)?,
+                properties: row.get(15)?,
             })
         },
     )

@@ -459,6 +459,25 @@ fn save_client_to_db(path: &str, client: &Client, app: &AppHandle) -> Result<Imp
     })
 }
 
+/// Valid quote feed providers
+const VALID_FEED_PROVIDERS: &[&str] = &[
+    "YAHOO", "YAHOO-ADJUSTEDCLOSE", "COINGECKO", "KRAKEN",
+    "FINNHUB", "ALPHAVANTAGE", "TWELVEDATA", "TRADINGVIEW", "MANUAL"
+];
+
+/// Validate feed provider - returns None if provider doesn't exist anymore
+fn validate_feed_provider(feed: &Option<String>) -> Option<String> {
+    feed.as_ref().and_then(|f| {
+        let upper = f.to_uppercase();
+        if VALID_FEED_PROVIDERS.iter().any(|&valid| upper == valid) {
+            Some(f.clone())
+        } else {
+            log::info!("Ignoring unknown feed provider during import: {}", f);
+            None
+        }
+    })
+}
+
 /// Insert a security into the database
 fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Security) -> Result<i64> {
     // Serialize attributes to JSON
@@ -473,6 +492,22 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
         None
     } else {
         Some(serde_json::to_string(&security.properties).unwrap_or_default())
+    };
+
+    // Validate feed providers - set to None if provider doesn't exist anymore
+    let validated_feed = validate_feed_provider(&security.feed);
+    let validated_latest_feed = validate_feed_provider(&security.latest_feed);
+
+    // Only keep feed_url if the feed is valid
+    let validated_feed_url = if validated_feed.is_some() {
+        security.feed_url.clone()
+    } else {
+        None
+    };
+    let validated_latest_feed_url = if validated_latest_feed.is_some() {
+        security.latest_feed_url.clone()
+    } else {
+        None
     };
 
     tx.execute(
@@ -500,10 +535,10 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
             security.wkn,
             security.ticker,
             security.calendar,
-            security.feed,
-            security.feed_url,
-            security.latest_feed,
-            security.latest_feed_url,
+            validated_feed,
+            validated_feed_url,
+            validated_latest_feed,
+            validated_latest_feed_url,
             security.is_retired as i32,
             security.note,
             security.updated_at,

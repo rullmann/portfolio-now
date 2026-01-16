@@ -860,6 +860,74 @@ pub fn get_taxonomy_allocation(taxonomy_id: i64, portfolio_id: Option<i64>) -> R
 }
 
 // ============================================================================
+// Bulk Queries for Grouping
+// ============================================================================
+
+/// Security classification for grouping in asset statement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityClassification {
+    pub security_id: i64,
+    pub security_uuid: String,
+    pub taxonomy_id: i64,
+    pub taxonomy_name: String,
+    pub classification_id: i64,
+    pub classification_name: String,
+    pub color: Option<String>,
+    /// Weight in basis points (10000 = 100%)
+    pub weight: i32,
+}
+
+/// Get all security classifications for a specific taxonomy
+/// Used for grouping in asset statement view
+#[command]
+pub fn get_all_security_classifications(taxonomy_id: i64) -> Result<Vec<SecurityClassification>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                s.id as security_id,
+                s.uuid as security_uuid,
+                t.id as taxonomy_id,
+                t.name as taxonomy_name,
+                c.id as classification_id,
+                c.name as classification_name,
+                c.color,
+                a.weight
+            FROM pp_classification_assignment a
+            JOIN pp_classification c ON c.id = a.classification_id
+            JOIN pp_taxonomy t ON t.id = c.taxonomy_id
+            JOIN pp_security s ON s.uuid = a.vehicle_uuid
+            WHERE a.vehicle_type = 'security' AND t.id = ?
+            ORDER BY c.name, s.name
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([taxonomy_id], |row| {
+            Ok(SecurityClassification {
+                security_id: row.get(0)?,
+                security_uuid: row.get(1)?,
+                taxonomy_id: row.get(2)?,
+                taxonomy_name: row.get(3)?,
+                classification_id: row.get(4)?,
+                classification_name: row.get(5)?,
+                color: row.get(6)?,
+                weight: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+// ============================================================================
 // Standard Taxonomies
 // ============================================================================
 

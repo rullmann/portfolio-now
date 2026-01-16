@@ -8,6 +8,7 @@ import type { SecurityData, CreateSecurityRequest, UpdateSecurityRequest } from 
 import { createSecurity, updateSecurity } from '../../lib/api';
 import { useSettingsStore } from '../../store';
 import { useEscapeKey } from '../../lib/hooks';
+import { SecurityAttributesEditor } from '../attributes';
 
 // Key-Value Entry Component for attributes/properties editing
 interface KeyValueEntry {
@@ -114,10 +115,10 @@ const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'SEK', 'NOK
 const BASE_FEED_PROVIDERS = [
   { value: '', label: 'Keine' },
   { value: 'YAHOO', label: 'Yahoo Finance' },
+  { value: 'TRADINGVIEW', label: 'TradingView' },
   { value: 'ALPHAVANTAGE', label: 'Alpha Vantage' },
   { value: 'COINGECKO', label: 'CoinGecko (Krypto)' },
   { value: 'KRAKEN', label: 'Kraken (Krypto)' },
-  { value: 'PORTFOLIO-REPORT', label: 'Portfolio Report' },
   { value: 'MANUAL', label: 'Manuell' },
 ];
 
@@ -146,6 +147,30 @@ const YAHOO_EXCHANGES = [
   { value: '.SS', label: 'Shanghai (.SS)', currency: 'CNY' },
   { value: '.SZ', label: 'Shenzhen (.SZ)', currency: 'CNY' },
   { value: '.KS', label: 'Seoul (.KS)', currency: 'KRW' },
+];
+
+// TradingView exchange prefixes (EXCHANGE:SYMBOL format)
+const TRADINGVIEW_EXCHANGES = [
+  { value: '', label: 'Automatisch', currency: '' },
+  { value: 'NASDAQ', label: 'NASDAQ', currency: 'USD' },
+  { value: 'NYSE', label: 'NYSE', currency: 'USD' },
+  { value: 'AMEX', label: 'AMEX', currency: 'USD' },
+  { value: 'XETR', label: 'XETRA', currency: 'EUR' },
+  { value: 'FWB', label: 'Frankfurt', currency: 'EUR' },
+  { value: 'SIX', label: 'SIX Swiss', currency: 'CHF' },
+  { value: 'LSE', label: 'London', currency: 'GBP' },
+  { value: 'EURONEXT', label: 'Euronext', currency: 'EUR' },
+  { value: 'MIL', label: 'Mailand', currency: 'EUR' },
+  { value: 'BME', label: 'Madrid', currency: 'EUR' },
+  { value: 'TSE', label: 'Tokyo', currency: 'JPY' },
+  { value: 'HKEX', label: 'Hong Kong', currency: 'HKD' },
+  { value: 'SSE', label: 'Shanghai', currency: 'CNY' },
+  { value: 'SZSE', label: 'Shenzhen', currency: 'CNY' },
+  { value: 'TSX', label: 'Toronto', currency: 'CAD' },
+  { value: 'ASX', label: 'Sydney', currency: 'AUD' },
+  { value: 'BINANCE', label: 'Binance (Krypto)', currency: 'USD' },
+  { value: 'COINBASE', label: 'Coinbase (Krypto)', currency: 'USD' },
+  { value: 'KRAKEN', label: 'Kraken (Krypto)', currency: 'USD' },
 ];
 
 // Common crypto symbols for CoinGecko
@@ -186,9 +211,11 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
     feed: '',
     feedUrl: '',
     yahooExchange: '', // Exchange suffix for Yahoo (.DE, .L, etc.)
+    tradingViewExchange: '', // Exchange prefix for TradingView (NASDAQ, XETR, etc.)
     latestFeed: '',         // Provider for current quotes
     latestFeedUrl: '',      // URL/suffix for current quotes
     latestYahooExchange: '', // Exchange suffix for Yahoo (current quotes)
+    latestTradingViewExchange: '', // Exchange prefix for TradingView (current quotes)
     note: '',
     isRetired: false,       // Retired flag
   });
@@ -202,6 +229,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
   const [showProviderHelp, setShowProviderHelp] = useState(false);
   const [showAttributesExpanded, setShowAttributesExpanded] = useState(false);
   const [showPropertiesExpanded, setShowPropertiesExpanded] = useState(false);
+  const [showCustomAttributesExpanded, setShowCustomAttributesExpanded] = useState(false);
 
   // Helper to convert Record to KeyValueEntry array
   const recordToEntries = (record: Record<string, string> | undefined): KeyValueEntry[] => {
@@ -220,6 +248,13 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
         const latestYahooExchange = security.latestFeed === 'YAHOO' && security.latestFeedUrl?.startsWith('.')
           ? security.latestFeedUrl
           : '';
+        // Extract TradingView exchange prefix from feedUrl if present
+        const tradingViewExchange = security.feed === 'TRADINGVIEW' && security.feedUrl && !security.feedUrl.startsWith('.')
+          ? security.feedUrl
+          : '';
+        const latestTradingViewExchange = security.latestFeed === 'TRADINGVIEW' && security.latestFeedUrl && !security.latestFeedUrl.startsWith('.')
+          ? security.latestFeedUrl
+          : '';
         setFormData({
           name: security.name || '',
           currency: security.currency || 'EUR',
@@ -228,11 +263,13 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           wkn: security.wkn || '',
           ticker: security.ticker || '',
           feed: security.feed || '',
-          feedUrl: yahooExchange ? '' : (security.feedUrl || ''),
+          feedUrl: (yahooExchange || tradingViewExchange) ? '' : (security.feedUrl || ''),
           yahooExchange,
+          tradingViewExchange,
           latestFeed: security.latestFeed || '',
-          latestFeedUrl: latestYahooExchange ? '' : (security.latestFeedUrl || ''),
+          latestFeedUrl: (latestYahooExchange || latestTradingViewExchange) ? '' : (security.latestFeedUrl || ''),
           latestYahooExchange,
+          latestTradingViewExchange,
           note: security.note || '',
           isRetired: security.isRetired || false,
         });
@@ -250,9 +287,11 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           feed: '',
           feedUrl: '',
           yahooExchange: '',
+          tradingViewExchange: '',
           latestFeed: '',
           latestFeedUrl: '',
           latestYahooExchange: '',
+          latestTradingViewExchange: '',
           note: '',
           isRetired: false,
         });
@@ -262,6 +301,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
       setError(null);
       setShowAttributesExpanded(false);
       setShowPropertiesExpanded(false);
+      setShowCustomAttributesExpanded(false);
     }
   }, [isOpen, security]);
 
@@ -282,13 +322,20 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
     setError(null);
     setIsSubmitting(true);
 
-    // For Yahoo, use exchange suffix as feedUrl
-    const effectiveFeedUrl = formData.feed === 'YAHOO' && formData.yahooExchange
-      ? formData.yahooExchange
-      : formData.feedUrl;
-    const effectiveLatestFeedUrl = formData.latestFeed === 'YAHOO' && formData.latestYahooExchange
-      ? formData.latestYahooExchange
-      : formData.latestFeedUrl;
+    // For Yahoo, use exchange suffix as feedUrl; for TradingView, use exchange prefix
+    let effectiveFeedUrl = formData.feedUrl;
+    if (formData.feed === 'YAHOO' && formData.yahooExchange) {
+      effectiveFeedUrl = formData.yahooExchange;
+    } else if (formData.feed === 'TRADINGVIEW' && formData.tradingViewExchange) {
+      effectiveFeedUrl = formData.tradingViewExchange;
+    }
+
+    let effectiveLatestFeedUrl = formData.latestFeedUrl;
+    if (formData.latestFeed === 'YAHOO' && formData.latestYahooExchange) {
+      effectiveLatestFeedUrl = formData.latestYahooExchange;
+    } else if (formData.latestFeed === 'TRADINGVIEW' && formData.latestTradingViewExchange) {
+      effectiveLatestFeedUrl = formData.latestTradingViewExchange;
+    }
 
     // Convert attributes and properties to Records
     const attributesRecord = entriesToRecord(attributes);
@@ -508,12 +555,6 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
                     </span>
                   </div>
                   <div className="flex gap-2">
-                    <span className="font-semibold text-blue-500 min-w-[120px]">Portfolio Report</span>
-                    <span className="text-muted-foreground">
-                      Deutsche Fonds, ETFs mit ISIN. Gute Alternative zu Yahoo für DE-Fonds.
-                    </span>
-                  </div>
-                  <div className="flex gap-2">
                     <span className="font-semibold text-purple-500 min-w-[120px]">Alpha Vantage</span>
                     <span className="text-muted-foreground">
                       US-Aktien, Fundamentaldaten. API-Key erforderlich (kostenlos erhältlich).
@@ -589,6 +630,28 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
             </div>
           )}
 
+          {/* TradingView Exchange Selection */}
+          {formData.feed === 'TRADINGVIEW' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Börse (TradingView)</label>
+              <select
+                name="tradingViewExchange"
+                value={formData.tradingViewExchange}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {TRADINGVIEW_EXCHANGES.map((exchange) => (
+                  <option key={exchange.value} value={exchange.value}>
+                    {exchange.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                TradingView nutzt EXCHANGE:SYMBOL Format (z.B. XETR:SAP)
+              </p>
+            </div>
+          )}
+
           {/* CoinGecko hint */}
           {formData.feed === 'COINGECKO' && (
             <div className="p-3 bg-muted rounded-md">
@@ -605,6 +668,30 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
               <p className="text-sm text-muted-foreground">
                 <strong>Kraken:</strong> Ticker als Krypto-Symbol eingeben (z.B. BTC, ETH, XRP).
                 Preise werden direkt von der Kraken-Börse abgerufen (EUR-Paare).
+              </p>
+            </div>
+          )}
+
+          {/* Custom Symbol/ID for non-Yahoo/TradingView providers (Historical) */}
+          {formData.feed && formData.feed !== 'YAHOO' && formData.feed !== 'TRADINGVIEW' && formData.feed !== 'COINGECKO' && formData.feed !== 'KRAKEN' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Custom Symbol/ID (Historisch)
+              </label>
+              <input
+                type="text"
+                name="feedUrl"
+                value={formData.feedUrl}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder={
+                  formData.feed === 'FINNHUB' ? 'z.B. AAPL, MSFT' :
+                  formData.feed === 'ALPHA_VANTAGE' ? 'z.B. IBM, TSLA' :
+                  'Optional: Abweichendes Symbol'
+                }
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Falls leer, wird der Ticker verwendet.
               </p>
             </div>
           )}
@@ -654,6 +741,50 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
             </div>
           )}
 
+          {/* TradingView Exchange Selection for Latest */}
+          {formData.latestFeed === 'TRADINGVIEW' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Börse (TradingView - Aktuell)</label>
+              <select
+                name="latestTradingViewExchange"
+                value={formData.latestTradingViewExchange}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {TRADINGVIEW_EXCHANGES.map((exchange) => (
+                  <option key={exchange.value} value={exchange.value}>
+                    {exchange.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Custom Symbol/ID for non-Yahoo/TradingView providers (Latest) */}
+          {formData.latestFeed && formData.latestFeed !== 'YAHOO' && formData.latestFeed !== 'TRADINGVIEW' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Custom Symbol/ID (Aktuell)
+              </label>
+              <input
+                type="text"
+                name="latestFeedUrl"
+                value={formData.latestFeedUrl}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder={
+                  formData.latestFeed === 'COINGECKO' ? 'z.B. bitcoin, ethereum' :
+                  formData.latestFeed === 'KRAKEN' ? 'z.B. XBTUSD, ETHUSD' :
+                  formData.latestFeed === 'FINNHUB' ? 'z.B. AAPL, MSFT' :
+                  'Optional: Abweichendes Symbol'
+                }
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Falls leer, wird der Ticker verwendet. Hier kann ein abweichendes Symbol eingegeben werden.
+              </p>
+            </div>
+          )}
+
           {/* Note */}
           <div>
             <label className="block text-sm font-medium mb-1">Notiz</label>
@@ -683,6 +814,17 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
               <span className="text-xs text-muted-foreground">
                 (nicht mehr aktiv gehandelt)
               </span>
+            </div>
+          )}
+
+          {/* Custom Attributes (Edit mode only) */}
+          {isEditMode && security && (
+            <div className="border-t border-border pt-4 mt-2">
+              <SecurityAttributesEditor
+                securityId={security.id}
+                expanded={showCustomAttributesExpanded}
+                onToggleExpand={() => setShowCustomAttributesExpanded(!showCustomAttributesExpanded)}
+              />
             </div>
           )}
 

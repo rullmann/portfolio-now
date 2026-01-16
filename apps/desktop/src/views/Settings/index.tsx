@@ -15,6 +15,7 @@ import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
 import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIProviderLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { ApiKeyType } from '../../lib/secureStorage';
+import { AttributeTypeManager } from '../../components/attributes';
 
 // Use VisionModel from store for model type
 
@@ -54,6 +55,8 @@ export function SettingsView() {
     setGeminiApiKey,
     perplexityApiKey,
     setPerplexityApiKey,
+    divvyDiaryApiKey,
+    setDivvyDiaryApiKey,
   } = useSettingsStore();
 
   // SECURITY: Use secure storage for API keys
@@ -105,6 +108,7 @@ export function SettingsView() {
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [attributesExpanded, setAttributesExpanded] = useState(false);
 
   const { scrollTarget, setScrollTarget } = useUIStore();
 
@@ -742,6 +746,45 @@ export function SettingsView() {
         </div>
       </div>
 
+      {/* External Services */}
+      <div className="bg-card rounded-lg border border-border p-6">
+        <h2 className="text-lg font-semibold mb-4">Externe Dienste</h2>
+        <div className="space-y-4">
+          {/* DivvyDiary API Key */}
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <label className="text-sm font-medium">DivvyDiary API-Key</label>
+            </div>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+              Ermöglicht den Export Ihres Portfolios zu DivvyDiary (Dividenden-Kalender).{' '}
+              <button
+                type="button"
+                onClick={() => open('https://divvydiary.com/settings')}
+                className="text-primary hover:underline inline-flex items-center gap-1"
+              >
+                API-Key in DivvyDiary erhalten
+                <ExternalLink size={12} />
+              </button>
+            </p>
+            <div className="relative max-w-md">
+              <input
+                type="password"
+                value={divvyDiaryApiKey}
+                onChange={(e) => setDivvyDiaryApiKey(e.target.value)}
+                placeholder="Ihr DivvyDiary API-Key"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
+              />
+            </div>
+            {divvyDiaryApiKey && (
+              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                <Shield size={12} />
+                API-Key gespeichert. Sie können jetzt Portfolios zu DivvyDiary exportieren (Header &rarr; Exportieren).
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Logo Settings */}
       <div className="bg-card rounded-lg border border-border p-6">
         <h2 className="text-lg font-semibold mb-4">Logos</h2>
@@ -842,6 +885,15 @@ export function SettingsView() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Custom Attributes */}
+      <div className="bg-card rounded-lg border border-border p-6">
+        <h2 className="text-lg font-semibold mb-4">Erweiterte Daten</h2>
+        <AttributeTypeManager
+          expanded={attributesExpanded}
+          onToggleExpand={() => setAttributesExpanded(!attributesExpanded)}
+        />
       </div>
 
       {/* Danger Zone */}

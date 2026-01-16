@@ -61,11 +61,13 @@ import {
   TaxonomiesView,
   InvestmentPlansView,
   RebalancingView,
+  OptimizationView,
   ChartsView,
   ScreenerView,
   BenchmarkView,
   ReportsView,
   SettingsView,
+  ConsortiumView,
 } from './views';
 
 // Types
@@ -315,6 +317,8 @@ function App() {
         return <InvestmentPlansView />;
       case 'rebalancing':
         return <RebalancingView />;
+      case 'optimization':
+        return <OptimizationView />;
       case 'charts':
         return <ChartsView />;
       case 'screener':
@@ -323,6 +327,8 @@ function App() {
         return <BenchmarkView />;
       case 'reports':
         return <ReportsView />;
+      case 'consortium':
+        return <ConsortiumView />;
       case 'settings':
         return <SettingsView />;
       default:
