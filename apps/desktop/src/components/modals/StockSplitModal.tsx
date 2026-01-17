@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { X, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
-import type { SecurityData, StockSplitPreview, ApplyStockSplitRequest } from '../../lib/types';
+import { formatDate, type SecurityData, type StockSplitPreview, type ApplyStockSplitRequest } from '../../lib/types';
 import { getSecurities, previewStockSplit, applyStockSplit } from '../../lib/api';
 import { useEscapeKey } from '../../lib/hooks';
 
@@ -321,7 +321,7 @@ export function StockSplitModal({
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Stichtag:</span>
                   <span className="font-medium">
-                    {new Date(preview.effectiveDate).toLocaleDateString('de-DE')}
+                    {formatDate(preview.effectiveDate)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">

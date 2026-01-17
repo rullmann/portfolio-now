@@ -20,7 +20,7 @@ import {
   getUnconfiguredSecuritiesCount,
 } from '../../lib/api';
 import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, QuoteSuggestionModal, QuoteAuditModal, StockSplitModal, MergerModal } from '../../components/modals';
-import { formatCurrency } from '../../lib/types';
+import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
 // Logo data with source tracking
@@ -278,7 +278,7 @@ export function SecuritiesView() {
 
   // Handle transaction delete
   const handleDeleteTransaction = async (txn: TransactionData) => {
-    if (!confirm(`Buchung vom ${new Date(txn.date).toLocaleDateString('de-DE')} wirklich löschen?`)) {
+    if (!confirm(`Buchung vom ${formatDate(txn.date)} wirklich löschen?`)) {
       return;
     }
 
@@ -892,24 +892,10 @@ export function SecuritiesView() {
                         : '-'}
                     </td>
                     <td className="py-3 px-4 text-muted-foreground text-sm">
-                      {security.latestPriceDate
-                        ? new Date(security.latestPriceDate).toLocaleDateString('de-DE', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric',
-                          })
-                        : '-'}
+                      {formatDate(security.latestPriceDate)}
                     </td>
                     <td className="py-3 px-4 text-muted-foreground text-xs">
-                      {security.updatedAt
-                        ? new Date(security.updatedAt).toLocaleString('de-DE', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
-                        : '-'}
+                      {formatDateTime(security.updatedAt)}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex justify-end gap-1">
@@ -1053,7 +1039,7 @@ export function SecuritiesView() {
                         className="border-b border-border last:border-0 hover:bg-muted/20"
                       >
                         <td className="py-2 px-4 tabular-nums">
-                          {new Date(txn.date).toLocaleDateString('de-DE')}
+                          {formatDate(txn.date)}
                         </td>
                         <td className={`py-2 px-4 font-medium ${typeInfo.color}`}>
                           {typeInfo.label}

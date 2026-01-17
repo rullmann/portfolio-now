@@ -8,7 +8,7 @@ import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, Re
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
-import type { SecurityData, PriceData } from '../../lib/types';
+import { formatDate, type SecurityData, type PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices } from '../../lib/api';
 import { useSettingsStore } from '../../store';
 import { useEscapeKey } from '../../lib/hooks';
@@ -698,12 +698,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                           className="border-b border-border/50 last:border-0 hover:bg-muted/30"
                         >
                           <td className="py-2 px-4 text-muted-foreground">
-                            {new Date(price.date).toLocaleDateString('de-DE', {
-                              weekday: 'short',
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                            })}
+                            {formatDate(price.date)}
                           </td>
                           <td className="py-2 px-4 text-right font-mono tabular-nums">
                             {price.value.toLocaleString('de-DE', {

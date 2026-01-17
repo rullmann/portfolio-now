@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { X, AlertTriangle, CheckCircle2, Loader2, GitMerge } from 'lucide-react';
-import type { SecurityData } from '../../lib/types';
+import { formatDate, type SecurityData } from '../../lib/types';
 import type { MergerPreview, ApplyMergerRequest } from '../../lib/api';
 import { getSecurities, previewMerger, applyMerger } from '../../lib/api';
 import { useEscapeKey } from '../../lib/hooks';
@@ -381,7 +381,7 @@ export function MergerModal({
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Stichtag:</span>
                   <span className="font-medium">
-                    {new Date(preview.effectiveDate).toLocaleDateString('de-DE')}
+                    {formatDate(preview.effectiveDate)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">

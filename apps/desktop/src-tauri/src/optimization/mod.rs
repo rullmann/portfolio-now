@@ -78,7 +78,6 @@ struct SecurityStats {
     id: i64,
     name: String,
     expected_return: f64,
-    volatility: f64,
     returns: Vec<f64>,
 }
 
@@ -417,12 +416,6 @@ fn compute_efficient_frontier(
         }
 
         let mean_return = return_values.iter().sum::<f64>() / return_values.len() as f64;
-        let variance = return_values
-            .iter()
-            .map(|r| (r - mean_return).powi(2))
-            .sum::<f64>()
-            / return_values.len() as f64;
-        let volatility = variance.sqrt() * (252.0_f64).sqrt();
         let annualized_return = mean_return * 252.0;
 
         all_returns.insert(*id, return_values.clone());
@@ -431,7 +424,6 @@ fn compute_efficient_frontier(
             id: *id,
             name: name.clone(),
             expected_return: annualized_return,
-            volatility,
             returns: return_values,
         });
     }

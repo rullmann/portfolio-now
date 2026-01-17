@@ -4,7 +4,6 @@
 
 use crate::commands::csv::CsvColumnMapping;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A broker template with detection patterns and column mapping.
 #[derive(Debug, Clone)]
@@ -339,11 +338,3 @@ pub fn detect_broker(headers: &[String]) -> BrokerDetectionResult {
     }
 }
 
-/// Get type mapping as HashMap for a template
-pub fn get_type_mapping(template: &BrokerTemplate) -> HashMap<String, String> {
-    template
-        .type_mapping
-        .iter()
-        .map(|(k, v)| (k.to_lowercase(), v.to_string()))
-        .collect()
-}

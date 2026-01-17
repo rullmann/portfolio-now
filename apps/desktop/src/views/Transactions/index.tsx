@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText, Pencil, CheckSquare, X } from 'lucide-react';
-import { getTransactionTypeLabel, formatDateTime } from '../../lib/types';
+import { getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { deleteTransaction, deleteTransactionsBulk, getSecurities } from '../../lib/api';
 import { TransactionFormModal, PdfImportModal, BulkDeleteConfirmModal } from '../../components/modals';
 import { TableSkeleton, SecurityLogo } from '../../components/common';
@@ -391,7 +391,7 @@ export function TransactionsView() {
                               />
                             </td>
                           )}
-                          <td className="py-2 whitespace-nowrap">{formatDateTime(tx.date)}</td>
+                          <td className="py-2 whitespace-nowrap">{formatDate(tx.date)}</td>
                           <td className="py-2">
                             <span className={`inline-block px-2 py-0.5 rounded text-xs ${
                               tx.ownerType === 'portfolio' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'

@@ -3,6 +3,68 @@
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
+// =============================================================================
+// Date Parsing (SINGLE SOURCE OF TRUTH)
+// =============================================================================
+
+/// Parse date string flexibly - handles multiple date formats
+///
+/// Supported formats:
+/// - "YYYY-MM-DD" (e.g., "2024-01-15")
+/// - "YYYY-MM-DD HH:MM:SS" (e.g., "2024-01-15 00:00:00")
+/// - "YYYY-MM-DDTHH:MM:SS" (ISO8601, e.g., "2024-01-15T00:00:00")
+///
+/// # Example
+/// ```
+/// use crate::pp::common::parse_date_flexible;
+/// let date = parse_date_flexible("2024-01-15").unwrap();
+/// ```
+pub fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {
+    // Try date-only format first: "2024-01-15"
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .ok()
+        // Then try with time: "2024-01-15 00:00:00"
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
+        // Then try ISO8601: "2024-01-15T00:00:00"
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|dt| dt.date())
+        })
+}
+
+// =============================================================================
+// Holdings SQL (SINGLE SOURCE OF TRUTH)
+// =============================================================================
+
+/// SQL fragment for calculating net shares from portfolio transactions.
+///
+/// Use this constant in SQL queries to ensure consistent holdings calculation.
+/// BUY/TRANSFER_IN/DELIVERY_INBOUND add shares, SELL/TRANSFER_OUT/DELIVERY_OUTBOUND subtract.
+///
+/// # Usage
+/// ```sql
+/// SELECT security_id, {HOLDINGS_SUM_SQL} as net_shares
+/// FROM pp_txn t
+/// WHERE t.owner_type = 'portfolio'
+/// GROUP BY security_id
+/// ```
+pub const HOLDINGS_SUM_SQL: &str = r#"SUM(CASE
+    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+    ELSE 0
+END)"#;
+
+/// List of transaction types that ADD shares to holdings
+pub const HOLDINGS_ADD_TYPES: &[&str] = &["BUY", "TRANSFER_IN", "DELIVERY_INBOUND"];
+
+/// List of transaction types that REMOVE shares from holdings
+pub const HOLDINGS_REMOVE_TYPES: &[&str] = &["SELL", "TRANSFER_OUT", "DELIVERY_OUTBOUND"];
+
 /// Factor for converting shares (PP stores shares * 10^8)
 pub const SHARES_FACTOR: i64 = 100_000_000;
 

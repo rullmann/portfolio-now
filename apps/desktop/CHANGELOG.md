@@ -5,6 +5,44 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.1.3] - 2026-01-17
+
+### Hinzugefügt
+
+#### PDF-Export Verbesserungen
+- **Professionelles Design**: Komplette Neugestaltung der PDF-Dokumente
+  - Farbige Header mit Akzentlinie
+  - Fußzeile mit App-Name und Seitenzahlen
+  - Zebra-Streifen für bessere Lesbarkeit
+  - Farbcodierte Werte (grün=positiv, rot=negativ)
+  - Summary-Boxen mit Hintergrund
+- **Deutsche Zahlenformatierung**: Tausender-Trennzeichen mit Punkt, Dezimal mit Komma
+- **Pfadvalidierung**: Alle PDF-Export-Funktionen nutzen jetzt `validate_file_path_with_extension()`
+
+#### Datumsformat-Standardisierung
+- **dd.MM.yyyy Format**: Einheitliches deutsches Datumsformat in der gesamten App
+- Neue Funktionen: `formatDate()`, `formatDateTime()`, `formatDateShort()`
+- Uhrzeiten nur wo relevant (Alerts, Pattern-Trigger)
+
+### Behoben
+
+- **PDF-Export Dividenden**: Falscher Command-Name (`export_dividend_report_pdf` → `export_dividend_pdf`) und Parameter (`startDate/endDate` → `year`) korrigiert
+- **Analyse löschen**: Button löscht jetzt auch Analysetext, Trendinfo, Alerts und Risk/Reward (nicht nur Marker)
+- **Button-Beschriftung**: "Marker löschen" → "Analyse löschen" umbenannt
+
+### Geändert
+
+- **AIAnalysisPanel**: `clearAllAnnotations()` → `clearAnalysis()` refactored
+- **pdf_export.rs**: Komplett neu geschrieben mit Farbkonstanten, Layout-Helpern
+- **types.ts**: Erweiterte Datums-Formatierungsfunktionen
+- Dateien mit aktualisiertem Datumsformat: Securities, Transactions, Benchmark, SignalsPanel, AlertsPanel, MergerModal, StockSplitModal, SecurityPriceModal
+
+### Entfernt
+
+- Unnötige Dateien: `.DS_Store`, leere `portfolio.db` Dateien, `react.svg`
+
+---
+
 ## [0.1.2] - 2026-01-16
 
 ### Hinzugefügt

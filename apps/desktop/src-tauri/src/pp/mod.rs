@@ -14,7 +14,11 @@ pub mod transaction;
 // Re-export main types for convenience
 pub use account::Account;
 pub use client::{Client, Dashboard, DashboardColumn, DashboardWidget, InvestmentPlan, Watchlist, CURRENT_VERSION};
-pub use common::{ForexInfo, LatestPrice, Money, PriceEntry, UpdatedAt, AMOUNT_FACTOR, PRICE_FACTOR, SHARES_FACTOR};
+pub use common::{
+    parse_date_flexible, ForexInfo, LatestPrice, Money, PriceEntry, UpdatedAt,
+    AMOUNT_FACTOR, HOLDINGS_ADD_TYPES, HOLDINGS_REMOVE_TYPES, HOLDINGS_SUM_SQL,
+    PRICE_FACTOR, SHARES_FACTOR,
+};
 pub use portfolio::Portfolio;
 pub use security::{DividendEvent, Security, SecurityEvent, SecurityEventKind, SecurityEventType, SecurityType};
 pub use taxonomy::{Classification, ClassificationAssignment, Taxonomy};

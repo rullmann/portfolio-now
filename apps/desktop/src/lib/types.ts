@@ -273,24 +273,58 @@ export function formatNumber(value: number, decimals: number = 2): string {
   }).format(value);
 }
 
-export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return new Intl.DateTimeFormat('de-DE', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date);
+/**
+ * Format date as dd.MM.yyyy
+ * @example formatDate('2024-01-15') => '15.01.2024'
+ */
+export function formatDate(dateStr: string | Date | null | undefined): string {
+  if (!dateStr) return '-';
+  const date = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  if (isNaN(date.getTime())) return '-';
+
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+
+  return `${day}.${month}.${year}`;
 }
 
-export function formatDateTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  return new Intl.DateTimeFormat('de-DE', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
+/**
+ * Format date with time as dd.MM.yyyy HH:mm
+ * Use only when time is relevant (e.g., last sync, alerts)
+ * @example formatDateTime('2024-01-15T14:30:00') => '15.01.2024 14:30'
+ */
+export function formatDateTime(dateStr: string | Date | null | undefined): string {
+  if (!dateStr) return '-';
+  const date = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  if (isNaN(date.getTime())) return '-';
+
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+
+  return `${day}.${month}.${year} ${hours}:${minutes}`;
+}
+
+/**
+ * Format date for chart axis labels (short format)
+ * @example formatDateShort('2024-01-15', 'month') => 'Jan 24'
+ * @example formatDateShort('2024-01-15', 'day') => '15. Jan'
+ */
+export function formatDateShort(
+  dateStr: string | Date | null | undefined,
+  format: 'month' | 'day' = 'day'
+): string {
+  if (!dateStr) return '';
+  const date = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  if (isNaN(date.getTime())) return '';
+
+  if (format === 'month') {
+    return date.toLocaleDateString('de-DE', { month: 'short', year: '2-digit' });
+  }
+  return date.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
 }
 
 /**

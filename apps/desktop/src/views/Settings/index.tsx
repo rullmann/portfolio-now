@@ -63,6 +63,7 @@ export function SettingsView() {
   const {
     keys: secureKeys,
     isSecureStorageAvailable: secureStorageAvailable,
+    isUsingInsecureFallback,
     setApiKey,
   } = useSecureApiKeys();
 
@@ -235,6 +236,27 @@ export function SettingsView() {
 
   return (
     <div className="space-y-6">
+      {/* SECURITY WARNING: localStorage fallback active */}
+      {isUsingInsecureFallback && (
+        <div className="bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-amber-800 dark:text-amber-200">
+                Sichere Speicherung nicht verfügbar
+              </h3>
+              <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                API-Schlüssel werden im Browser-Speicher (localStorage) abgelegt. Dies ist weniger sicher als die normale Tauri-Speicherung.
+                Bei Sicherheitsbedenken können Sie die Schlüssel nur für die aktuelle Sitzung eingeben und danach wieder löschen.
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                Mögliche Ursachen: Ausführung im Browser statt als Desktop-App, fehlende Dateiberechtigungen.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Profile Settings */}
       <div className="bg-card rounded-lg border border-border p-6">
         <div className="flex items-center gap-2 mb-4">

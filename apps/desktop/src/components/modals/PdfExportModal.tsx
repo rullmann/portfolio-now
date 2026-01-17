@@ -106,24 +106,23 @@ export function PdfExportModal({ isOpen, onClose }: PdfExportModalProps) {
       switch (selectedType) {
         case 'summary':
           command = 'export_portfolio_summary_pdf';
-          params.portfolioId = selectedPortfolio;
+          params.portfolioId = selectedPortfolio ?? null;
           break;
         case 'holdings':
           command = 'export_holdings_pdf';
           params.date = endDate;
-          params.portfolioId = selectedPortfolio;
+          params.portfolioId = selectedPortfolio ?? null;
           break;
         case 'performance':
           command = 'export_performance_pdf';
-          params.portfolioId = selectedPortfolio;
+          params.portfolioId = selectedPortfolio ?? null;
           params.startDate = startDate;
           params.endDate = endDate;
           break;
         case 'dividends':
-          command = 'export_dividend_report_pdf';
-          params.startDate = startDate;
-          params.endDate = endDate;
-          params.portfolioId = selectedPortfolio;
+          command = 'export_dividend_pdf';
+          params.year = year;
+          params.portfolioId = selectedPortfolio ?? null;
           break;
         case 'tax':
           command = 'export_tax_report_pdf';
@@ -142,8 +141,8 @@ export function PdfExportModal({ isOpen, onClose }: PdfExportModalProps) {
     }
   };
 
-  const needsDateRange = ['performance', 'dividends'].includes(selectedType);
-  const needsYear = selectedType === 'tax';
+  const needsDateRange = selectedType === 'performance';
+  const needsYear = ['tax', 'dividends'].includes(selectedType);
   const needsPortfolio = ['summary', 'holdings', 'performance', 'dividends'].includes(selectedType);
 
   if (!isOpen) return null;
@@ -255,7 +254,7 @@ export function PdfExportModal({ isOpen, onClose }: PdfExportModalProps) {
           {/* Year Selection */}
           {needsYear && (
             <div>
-              <label className="block text-sm font-medium mb-1">Steuerjahr</label>
+              <label className="block text-sm font-medium mb-1">Jahr</label>
               <select
                 value={year}
                 onChange={(e) => setYear(Number(e.target.value))}

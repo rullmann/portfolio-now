@@ -103,6 +103,8 @@ interface UseSecureApiKeysReturn {
   keys: SecureApiKeys;
   isLoading: boolean;
   isSecureStorageAvailable: boolean;
+  /** True when secure storage is unavailable and localStorage fallback is active */
+  isUsingInsecureFallback: boolean;
   setApiKey: (keyType: ApiKeyType, value: string) => Promise<void>;
   refreshKeys: () => Promise<void>;
 }
@@ -184,16 +186,17 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
         setFallbackMode(true);
 
         // In fallback mode, read keys from localStorage and update Zustand
+        // SECURITY FIX: Always set all keys (including empty) to clear stale values
         const legacyKeys = readLegacyKeysFromLocalStorage();
-        if (legacyKeys.brandfetch) setBrandfetchApiKey(legacyKeys.brandfetch);
-        if (legacyKeys.finnhub) setFinnhubApiKey(legacyKeys.finnhub);
-        if (legacyKeys.coingecko) setCoingeckoApiKey(legacyKeys.coingecko);
-        if (legacyKeys.alphaVantage) setAlphaVantageApiKey(legacyKeys.alphaVantage);
-        if (legacyKeys.twelveData) setTwelveDataApiKey(legacyKeys.twelveData);
-        if (legacyKeys.anthropic) setAnthropicApiKey(legacyKeys.anthropic);
-        if (legacyKeys.openai) setOpenaiApiKey(legacyKeys.openai);
-        if (legacyKeys.gemini) setGeminiApiKey(legacyKeys.gemini);
-        if (legacyKeys.perplexity) setPerplexityApiKey(legacyKeys.perplexity);
+        setBrandfetchApiKey(legacyKeys.brandfetch || '');
+        setFinnhubApiKey(legacyKeys.finnhub || '');
+        setCoingeckoApiKey(legacyKeys.coingecko || '');
+        setAlphaVantageApiKey(legacyKeys.alphaVantage || '');
+        setTwelveDataApiKey(legacyKeys.twelveData || '');
+        setAnthropicApiKey(legacyKeys.anthropic || '');
+        setOpenaiApiKey(legacyKeys.openai || '');
+        setGeminiApiKey(legacyKeys.gemini || '');
+        setPerplexityApiKey(legacyKeys.perplexity || '');
 
         setIsLoading(false);
         return;
@@ -219,15 +222,17 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
       const secureKeys = await getAllApiKeys();
 
       // Update Zustand store with secure keys
-      if (secureKeys.brandfetch) setBrandfetchApiKey(secureKeys.brandfetch);
-      if (secureKeys.finnhub) setFinnhubApiKey(secureKeys.finnhub);
-      if (secureKeys.coingecko) setCoingeckoApiKey(secureKeys.coingecko);
-      if (secureKeys.alphaVantage) setAlphaVantageApiKey(secureKeys.alphaVantage);
-      if (secureKeys.twelveData) setTwelveDataApiKey(secureKeys.twelveData);
-      if (secureKeys.anthropic) setAnthropicApiKey(secureKeys.anthropic);
-      if (secureKeys.openai) setOpenaiApiKey(secureKeys.openai);
-      if (secureKeys.gemini) setGeminiApiKey(secureKeys.gemini);
-      if (secureKeys.perplexity) setPerplexityApiKey(secureKeys.perplexity);
+      // SECURITY FIX: Always set all keys (including empty) to clear stale values
+      // This ensures deleted keys in secure storage are reflected in the UI
+      setBrandfetchApiKey(secureKeys.brandfetch);
+      setFinnhubApiKey(secureKeys.finnhub);
+      setCoingeckoApiKey(secureKeys.coingecko);
+      setAlphaVantageApiKey(secureKeys.alphaVantage);
+      setTwelveDataApiKey(secureKeys.twelveData);
+      setAnthropicApiKey(secureKeys.anthropic);
+      setOpenaiApiKey(secureKeys.openai);
+      setGeminiApiKey(secureKeys.gemini);
+      setPerplexityApiKey(secureKeys.perplexity);
     } catch (error) {
       console.error('Failed to load API keys from secure storage:', error);
     } finally {
@@ -297,6 +302,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     keys,
     isLoading,
     isSecureStorageAvailable: secureAvailable,
+    isUsingInsecureFallback: fallbackMode,
     setApiKey,
     refreshKeys: loadKeys,
   };

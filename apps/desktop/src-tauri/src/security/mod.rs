@@ -332,48 +332,47 @@ pub mod limits {
 }
 
 // ============================================================================
-// Secure Storage (TODO: Full implementation)
+// Secure Storage
 // ============================================================================
 
-/// SECURITY TODO: API keys are currently stored in browser localStorage.
-/// This module provides the infrastructure for secure storage that should
-/// be used in a future migration:
+/// SECURITY NOTE: API keys are managed by the frontend using tauri-plugin-store.
 ///
-/// 1. Use tauri-plugin-store for encrypted storage
-/// 2. Or implement OS keychain integration (macOS Keychain, Windows Credential Manager)
-/// 3. Or encrypt with a key derived from the user's password
+/// Current implementation (as of 2026-01):
+/// - Frontend stores API keys in `app_data_dir/secure-keys.json` via @tauri-apps/plugin-store
+/// - The store file is NOT encrypted, but is isolated from the WebView
+/// - If tauri-plugin-store is unavailable, a localStorage fallback is used (with user warning)
 ///
-/// For now, API keys are passed directly to commands from the frontend.
-/// The keys are not logged and are only held in memory during API calls.
+/// The backend does NOT store API keys. Keys are passed from frontend to backend
+/// commands as needed and are only held in memory during API calls.
+///
+/// Future improvements to consider:
+/// - Use tauri-plugin-stronghold for encryption at rest
+/// - Or implement OS keychain integration (macOS Keychain, Windows Credential Manager)
+///
+/// See: apps/desktop/src/lib/secureStorage.ts for the frontend implementation.
 
-/// Placeholder for secure credential storage
-/// TODO: Implement with tauri-plugin-store or OS keychain
-#[allow(dead_code)] // Planned API: Backend secure storage (frontend uses tauri-plugin-store)
+/// Backend secure storage module (currently unused - frontend handles storage)
+#[allow(dead_code)]
 pub mod secure_storage {
     use std::path::PathBuf;
 
     /// Store a sensitive value securely
     ///
-    /// SECURITY: Currently a no-op placeholder. In production, this should:
-    /// - Encrypt the value before storage
-    /// - Use OS keychain if available
-    /// - Store in app_data_dir with restricted permissions
+    /// NOTE: API keys are currently managed by the frontend via tauri-plugin-store.
+    /// This backend module is reserved for future use cases that require
+    /// backend-side secret storage.
     pub fn store_secret(_key: &str, _value: &str, _app_data_dir: &PathBuf) -> Result<(), String> {
-        // TODO: Implement secure storage
-        // For now, we don't store secrets at all - they're managed by the frontend
-        Err("Secure storage not yet implemented - use frontend settings".to_string())
+        Err("Use frontend secure storage (tauri-plugin-store) for API keys".to_string())
     }
 
     /// Retrieve a sensitive value
     pub fn get_secret(_key: &str, _app_data_dir: &PathBuf) -> Result<Option<String>, String> {
-        // TODO: Implement secure retrieval
-        Err("Secure storage not yet implemented".to_string())
+        Err("Use frontend secure storage (tauri-plugin-store) for API keys".to_string())
     }
 
     /// Delete a sensitive value
     pub fn delete_secret(_key: &str, _app_data_dir: &PathBuf) -> Result<(), String> {
-        // TODO: Implement secure deletion
-        Err("Secure storage not yet implemented".to_string())
+        Err("Use frontend secure storage (tauri-plugin-store) for API keys".to_string())
     }
 }
 

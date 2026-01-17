@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import { Target, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { getBenchmarks, compareToBenchmark, getBenchmarkComparisonData, removeBenchmark } from '../../lib/api';
 import { TradingViewBenchmarkChart } from '../../components/charts';
-import type { BenchmarkData, BenchmarkComparison, BenchmarkDataPoint } from '../../lib/types';
+import { formatDate, type BenchmarkData, type BenchmarkComparison, type BenchmarkDataPoint } from '../../lib/types';
 
 export function BenchmarkView() {
   const [benchmarks, setBenchmarks] = useState<BenchmarkData[]>([]);
@@ -257,7 +257,7 @@ export function BenchmarkView() {
                   <div className="text-xs text-muted-foreground">
                     {b.isin || 'Keine ISIN'}
                     <span className="mx-2">·</span>
-                    Start: {new Date(b.startDate).toLocaleDateString('de-DE')}
+                    Start: {formatDate(b.startDate)}
                   </div>
                 </div>
                 <button

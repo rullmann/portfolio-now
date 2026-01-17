@@ -132,12 +132,16 @@ pub fn get_supported_banks() -> Vec<SupportedBank> {
 /// Preview PDF import without making changes
 #[command]
 pub async fn preview_pdf_import(pdf_path: String) -> Result<PdfImportPreview, String> {
-    log::info!("PDF Import: Starting preview for {}", pdf_path);
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    let validated_path_str = validated_path.to_string_lossy().to_string();
+
+    log::info!("PDF Import: Starting preview for {}", validated_path_str);
 
     // Run blocking PDF parsing in a separate thread to not block the main thread
-    let path = pdf_path.clone();
     let result = tokio::task::spawn_blocking(move || {
-        preview_pdf_import_sync(&path)
+        preview_pdf_import_sync(&validated_path_str)
     })
     .await
     .map_err(|e| format!("PDF preview task failed: {}", e))?;
@@ -231,7 +235,7 @@ fn preview_pdf_import_sync(pdf_path: &str) -> Result<PdfImportPreview, String> {
                 .ok();
 
             if let Some(sec_id) = security_id {
-                let amount_cents = (txn.net_amount * 100.0) as i64;
+                let amount_cents = (txn.net_amount * 100.0).round() as i64;
                 // Get all possible DB types (original + delivery mode variant)
                 let txn_types = get_duplicate_check_types(txn.txn_type);
                 if txn_types.is_empty() {
@@ -307,6 +311,11 @@ pub async fn import_pdf_transactions(
     type_overrides: Option<std::collections::HashMap<usize, String>>,
     fee_overrides: Option<std::collections::HashMap<usize, f64>>,
 ) -> Result<PdfImportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    let validated_path_str = validated_path.to_string_lossy().to_string();
+
     let skip_duplicates = skip_duplicates.unwrap_or(true);
     let type_overrides = type_overrides.unwrap_or_default();
     let fee_overrides = fee_overrides.unwrap_or_default();
@@ -314,7 +323,7 @@ pub async fn import_pdf_transactions(
     // Run blocking import in a separate thread
     let result = tokio::task::spawn_blocking(move || {
         import_pdf_transactions_sync(
-            &pdf_path,
+            &validated_path_str,
             portfolio_id,
             account_id,
             create_missing_securities,
@@ -438,7 +447,7 @@ fn import_pdf_transactions_sync(
         // Check for duplicate if skip_duplicates is enabled
         if skip_duplicates {
             if let Some(sec_id) = security_id {
-                let amount_cents = (txn.net_amount * 100.0) as i64;
+                let amount_cents = (txn.net_amount * 100.0).round() as i64;
                 // Get all possible DB types (original + delivery mode variant)
                 // This handles the case where the same PDF was previously imported with deliveryMode
                 let txn_types = get_duplicate_check_types(effective_type);
@@ -503,7 +512,7 @@ fn import_pdf_transactions_sync(
 
         // Create transaction
         let uuid = uuid::Uuid::new_v4().to_string();
-        let amount_cents = (txn.net_amount * 100.0) as i64;
+        let amount_cents = (txn.net_amount * 100.0).round() as i64;
         let shares_scaled = txn.shares.map(|s| (s * 100_000_000.0) as i64);
 
         if is_portfolio_txn {
@@ -585,7 +594,7 @@ fn import_pdf_transactions_sync(
             // Add fee unit if present (use override if available)
             let effective_fee = fee_overrides.get(&idx).copied().unwrap_or(txn.fees);
             if effective_fee > 0.0 {
-                let fee_cents = (effective_fee * 100.0) as i64;
+                let fee_cents = (effective_fee * 100.0).round() as i64;
                 conn.execute(
                     "INSERT INTO pp_txn_unit (txn_id, unit_type, amount, currency)
                      VALUES (?1, 'FEE', ?2, ?3)",
@@ -595,7 +604,7 @@ fn import_pdf_transactions_sync(
 
             // Add tax unit if present
             if txn.taxes > 0.0 {
-                let tax_cents = (txn.taxes * 100.0) as i64;
+                let tax_cents = (txn.taxes * 100.0).round() as i64;
                 conn.execute(
                     "INSERT INTO pp_txn_unit (txn_id, unit_type, amount, currency)
                      VALUES (?1, 'TAX', ?2, ?3)",
@@ -630,7 +639,7 @@ fn import_pdf_transactions_sync(
 
             // Add tax unit for dividends
             if txn.taxes > 0.0 {
-                let tax_cents = (txn.taxes * 100.0) as i64;
+                let tax_cents = (txn.taxes * 100.0).round() as i64;
                 conn.execute(
                     "INSERT INTO pp_txn_unit (txn_id, unit_type, amount, currency)
                      VALUES (?1, 'TAX', ?2, ?3)",
@@ -670,7 +679,10 @@ fn import_pdf_transactions_sync(
 /// Extract raw text from PDF for debugging/custom parsing
 #[command]
 pub fn extract_pdf_raw_text(pdf_path: String) -> Result<String, String> {
-    extract_pdf_text(&pdf_path)
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    extract_pdf_text(&validated_path.to_string_lossy())
 }
 
 /// Parse PDF content that was already extracted
@@ -682,7 +694,10 @@ pub fn parse_pdf_text(content: String) -> Result<ParseResult, String> {
 /// Detect which bank a PDF is from
 #[command]
 pub fn detect_pdf_bank(pdf_path: String) -> Result<Option<String>, String> {
-    let content = extract_pdf_text(&pdf_path)?;
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    let content = extract_pdf_text(&validated_path.to_string_lossy())?;
 
     let parsers = crate::pdf_import::get_parsers();
     for parser in parsers {
@@ -732,13 +747,18 @@ pub fn is_ocr_available() -> bool {
 pub async fn extract_pdf_with_ocr(request: OcrExtractRequest) -> Result<OcrExtractResult, String> {
     use crate::pdf_import::ocr::{ocr_pdf, OcrOptions};
 
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&request.pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    let validated_path_str = validated_path.to_string_lossy().to_string();
+
     let options = OcrOptions {
         provider: request.provider.clone(),
         model: request.model.clone(),
         api_key: request.api_key,
     };
 
-    let result = ocr_pdf(&request.pdf_path, options, None)
+    let result = ocr_pdf(&validated_path_str, options, None)
         .await
         .map_err(|e| e)?;
 
@@ -775,10 +795,15 @@ pub async fn preview_pdf_import_with_ocr(
 ) -> Result<PdfImportPreview, String> {
     use crate::pdf_import::ocr::{ocr_pdf, should_use_ocr_fallback, OcrOptions};
 
-    log::info!("PDF Import: Starting preview for {} (OCR: {})", pdf_path, use_ocr);
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = crate::security::validate_file_path_with_extension(&pdf_path, Some(&["pdf"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    let validated_path_str = validated_path.to_string_lossy().to_string();
+
+    log::info!("PDF Import: Starting preview for {} (OCR: {})", validated_path_str, use_ocr);
 
     // First try regular text extraction
-    let extracted_text = extract_pdf_text(&pdf_path)?;
+    let extracted_text = extract_pdf_text(&validated_path_str)?;
 
     // Check if we should use OCR fallback
     let content = if use_ocr && should_use_ocr_fallback(&extracted_text, 100) {
@@ -810,7 +835,7 @@ pub async fn preview_pdf_import_with_ocr(
             api_key,
         };
 
-        let ocr_result = ocr_pdf(&pdf_path, options, None).await?;
+        let ocr_result = ocr_pdf(&validated_path_str, options, None).await?;
         ocr_result.full_text
     } else {
         extracted_text
@@ -885,7 +910,7 @@ pub async fn preview_pdf_import_with_ocr(
                 .ok();
 
             if let Some(sec_id) = security_id {
-                let amount_cents = (txn.net_amount * 100.0) as i64;
+                let amount_cents = (txn.net_amount * 100.0).round() as i64;
                 // Get all possible DB types (original + delivery mode variant)
                 let txn_types = get_duplicate_check_types(txn.txn_type);
                 if txn_types.is_empty() {

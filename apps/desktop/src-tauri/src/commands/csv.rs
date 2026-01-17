@@ -3,6 +3,7 @@
 use crate::db;
 use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pp::common::{prices, shares};
+use crate::security;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -67,6 +68,10 @@ pub fn export_transactions_csv(
     owner_type: Option<String>,
     owner_id: Option<i64>,
 ) -> Result<CsvExportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -130,7 +135,7 @@ pub fn export_transactions_csv(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut file = File::create(&path).map_err(|e| e.to_string())?;
+    let mut file = File::create(&validated_path).map_err(|e| e.to_string())?;
 
     // Write header
     writeln!(
@@ -154,16 +159,16 @@ pub fn export_transactions_csv(
         writeln!(
             file,
             "{};{};{};{};{};{};{};{};{};{};{};{}",
-            date,
-            txn_type,
-            security,
-            isin,
+            escape_csv_field(&date, ';'),
+            escape_csv_field(&txn_type, ';'),
+            escape_csv_field(&security, ';'),
+            escape_csv_field(&isin, ';'),
             shares_str,
             amount_str,
-            currency,
-            owner.unwrap_or_default(),
-            owner_type,
-            note.replace(';', ","),
+            escape_csv_field(&currency, ';'),
+            escape_csv_field(&owner.unwrap_or_default(), ';'),
+            escape_csv_field(&owner_type, ';'),
+            escape_csv_field(&note, ';'),
             fees_str,
             taxes_str
         )
@@ -173,7 +178,7 @@ pub fn export_transactions_csv(
     }
 
     Ok(CsvExportResult {
-        path,
+        path: validated_path.to_string_lossy().to_string(),
         rows_exported: count,
     })
 }
@@ -181,6 +186,10 @@ pub fn export_transactions_csv(
 /// Export holdings to CSV
 #[command]
 pub fn export_holdings_csv(path: String) -> Result<CsvExportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -223,7 +232,7 @@ pub fn export_holdings_csv(path: String) -> Result<CsvExportResult, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut file = File::create(&path).map_err(|e| e.to_string())?;
+    let mut file = File::create(&validated_path).map_err(|e| e.to_string())?;
 
     // Write header
     writeln!(
@@ -243,7 +252,14 @@ pub fn export_holdings_csv(path: String) -> Result<CsvExportResult, String> {
         writeln!(
             file,
             "{};{};{};{};{:.6};{:.4};{:.2};{}",
-            name, isin, ticker, currency, shares_decimal, price_decimal, value, portfolio
+            escape_csv_field(&name, ';'),
+            escape_csv_field(&isin, ';'),
+            escape_csv_field(&ticker, ';'),
+            escape_csv_field(&currency, ';'),
+            shares_decimal,
+            price_decimal,
+            value,
+            escape_csv_field(&portfolio, ';')
         )
         .map_err(|e| e.to_string())?;
 
@@ -251,7 +267,7 @@ pub fn export_holdings_csv(path: String) -> Result<CsvExportResult, String> {
     }
 
     Ok(CsvExportResult {
-        path,
+        path: validated_path.to_string_lossy().to_string(),
         rows_exported: count,
     })
 }
@@ -259,6 +275,10 @@ pub fn export_holdings_csv(path: String) -> Result<CsvExportResult, String> {
 /// Export securities to CSV
 #[command]
 pub fn export_securities_csv(path: String) -> Result<CsvExportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -298,7 +318,7 @@ pub fn export_securities_csv(path: String) -> Result<CsvExportResult, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut file = File::create(&path).map_err(|e| e.to_string())?;
+    let mut file = File::create(&validated_path).map_err(|e| e.to_string())?;
 
     // Write header
     writeln!(
@@ -318,12 +338,12 @@ pub fn export_securities_csv(path: String) -> Result<CsvExportResult, String> {
         writeln!(
             file,
             "{};{};{};{};{};{};{};{};{};{}",
-            name,
-            isin,
-            wkn,
-            ticker,
-            currency,
-            feed,
+            escape_csv_field(&name, ';'),
+            escape_csv_field(&isin, ';'),
+            escape_csv_field(&wkn, ';'),
+            escape_csv_field(&ticker, ';'),
+            escape_csv_field(&currency, ';'),
+            escape_csv_field(&feed, ';'),
             if is_retired { "Ja" } else { "Nein" },
             price_count,
             price_str,
@@ -335,7 +355,7 @@ pub fn export_securities_csv(path: String) -> Result<CsvExportResult, String> {
     }
 
     Ok(CsvExportResult {
-        path,
+        path: validated_path.to_string_lossy().to_string(),
         rows_exported: count,
     })
 }
@@ -343,6 +363,10 @@ pub fn export_securities_csv(path: String) -> Result<CsvExportResult, String> {
 /// Export account balances to CSV
 #[command]
 pub fn export_accounts_csv(path: String) -> Result<CsvExportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -380,7 +404,7 @@ pub fn export_accounts_csv(path: String) -> Result<CsvExportResult, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut file = File::create(&path).map_err(|e| e.to_string())?;
+    let mut file = File::create(&validated_path).map_err(|e| e.to_string())?;
 
     // Write header
     writeln!(file, "Konto;Währung;Inaktiv;Buchungen;Saldo")
@@ -393,8 +417,8 @@ pub fn export_accounts_csv(path: String) -> Result<CsvExportResult, String> {
         writeln!(
             file,
             "{};{};{};{};{:.2}",
-            name,
-            currency,
+            escape_csv_field(&name, ';'),
+            escape_csv_field(&currency, ';'),
             if is_retired { "Ja" } else { "Nein" },
             txn_count,
             balance as f64 / 100.0
@@ -405,7 +429,7 @@ pub fn export_accounts_csv(path: String) -> Result<CsvExportResult, String> {
     }
 
     Ok(CsvExportResult {
-        path,
+        path: validated_path.to_string_lossy().to_string(),
         rows_exported: count,
     })
 }
@@ -461,7 +485,11 @@ pub struct CsvImportResult {
 /// Preview a CSV file for import
 #[command]
 pub fn preview_csv(path: String) -> Result<CsvPreview, String> {
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv", "txt"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
+    let file = File::open(&validated_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
 
     // Try to detect delimiter
@@ -499,7 +527,7 @@ pub fn preview_csv(path: String) -> Result<CsvPreview, String> {
     }
 
     // Count total rows
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    let file = File::open(&validated_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
     let row_count = reader.lines().count().saturating_sub(1); // Exclude header
 
@@ -519,12 +547,16 @@ pub fn import_transactions_csv(
     portfolio_id: i64,
     delimiter: Option<char>,
 ) -> Result<CsvImportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv", "txt"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    let file = File::open(&validated_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
     let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
 
@@ -715,12 +747,16 @@ pub fn import_prices_csv(
     price_column: usize,
     delimiter: Option<char>,
 ) -> Result<CsvImportResult, String> {
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv", "txt"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    let file = File::open(&validated_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
     let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
 
@@ -790,6 +826,23 @@ pub fn import_prices_csv(
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Escape a string for CSV output (RFC 4180 compliant)
+/// - If the value contains delimiter, quotes, or newlines, wrap in quotes
+/// - Double any existing quotes
+fn escape_csv_field(value: &str, delimiter: char) -> String {
+    let needs_escaping = value.contains(delimiter)
+        || value.contains('"')
+        || value.contains('\n')
+        || value.contains('\r');
+
+    if needs_escaping {
+        // Double any existing quotes and wrap in quotes
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
 
 fn detect_delimiter(line: &str) -> char {
     let semicolons = line.matches(';').count();
@@ -913,7 +966,11 @@ fn find_or_create_security(
 /// Detect broker format from CSV file headers
 #[command]
 pub fn detect_csv_broker(path: String) -> Result<crate::csv_import::BrokerDetectionResult, String> {
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    // SECURITY: Validate path (defense-in-depth)
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["csv", "txt"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
+    let file = File::open(&validated_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
 
     let first_line = reader

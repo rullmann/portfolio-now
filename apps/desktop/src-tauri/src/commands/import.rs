@@ -15,7 +15,6 @@ use crate::quotes::ExchangeRate;
 use anyhow::Result;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tauri::{command, AppHandle, Emitter};
 
 /// Progress information during import
@@ -48,6 +47,10 @@ pub struct ImportResult {
 /// Import a Portfolio Performance XML file into the database
 #[command]
 pub async fn import_pp_file(path: String, app: AppHandle) -> Result<ImportResult, String> {
+    // SECURITY: Validate path before processing (defense-in-depth)
+    let path_buf = crate::security::validate_file_path_with_extension(&path, Some(&["portfolio"]))
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+
     // Emit progress: starting
     let _ = app.emit(
         "import-progress",
@@ -60,7 +63,6 @@ pub async fn import_pp_file(path: String, app: AppHandle) -> Result<ImportResult
         },
     );
 
-    let path_buf = PathBuf::from(&path);
     if !path_buf.exists() {
         return Err("File does not exist".to_string());
     }

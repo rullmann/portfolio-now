@@ -2,25 +2,10 @@
 
 use crate::db;
 use crate::performance;
-use chrono::{NaiveDate, NaiveDateTime};
+use crate::pp::parse_date_flexible; // SSOT: centralized date parsing
+use chrono::NaiveDate;
 use serde::Serialize;
 use tauri::command;
-
-/// Parse date string flexibly - handles both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
-fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .ok()
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|dt| dt.date())
-        })
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
-                .ok()
-                .map(|dt| dt.date())
-        })
-}
 
 /// Performance result for frontend
 #[derive(Debug, Clone, Serialize)]

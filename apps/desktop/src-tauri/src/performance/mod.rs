@@ -79,27 +79,11 @@
 //! - Compare sum(cash_flows) vs current_value
 
 use anyhow::Result;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use rusqlite::{params, Connection};
 
-/// Parse date string flexibly - handles both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
-fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {
-    // Try date-only format first: "2024-01-15"
-    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .ok()
-        // Then try with time: "2024-01-15 00:00:00"
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|dt| dt.date())
-        })
-        // Then try ISO8601: "2024-01-15T00:00:00"
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
-                .ok()
-                .map(|dt| dt.date())
-        })
-}
+// Use centralized date parsing from pp::common (SSOT)
+use crate::pp::parse_date_flexible;
 
 /// Scale factors
 const SHARES_SCALE: f64 = 100_000_000.0;

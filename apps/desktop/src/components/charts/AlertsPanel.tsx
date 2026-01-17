@@ -23,6 +23,7 @@ import {
   togglePriceAlert,
   resetAlertTrigger,
 } from '../../lib/api';
+import { formatDateTime } from '../../lib/types';
 import type { PriceAlert, AlertType, CreateAlertRequest } from '../../lib/types';
 
 // ============================================================================
@@ -133,7 +134,7 @@ function AlertItem({
 
           {alert.isTriggered && alert.lastTriggeredAt && (
             <div className="text-[10px] text-amber-600 dark:text-amber-400 mb-1">
-              Ausgelöst: {new Date(alert.lastTriggeredAt).toLocaleString('de-DE')}
+              Ausgelöst: {formatDateTime(alert.lastTriggeredAt)}
               {alert.lastTriggeredPrice && ` bei ${currency} ${alert.lastTriggeredPrice.toFixed(2)}`}
             </div>
           )}

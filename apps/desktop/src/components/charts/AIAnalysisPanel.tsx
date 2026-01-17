@@ -183,20 +183,29 @@ export function AIAnalysisPanel({
     toast.info(`Modell gewechselt zu: ${fallbackModel}`);
   }, [setAiModel]);
 
-  // Clear all annotations
-  const clearAllAnnotations = useCallback(async () => {
-    if (!security?.id) return;
+  // Clear all annotations AND analysis text
+  const clearAnalysis = useCallback(async () => {
+    // Clear analysis text and related state
+    setAnalysis(null);
+    setAnalysisInfo(null);
+    setTrendInfo(null);
+    setAlerts([]);
+    setRiskReward(null);
 
+    // Clear annotations
     setAnnotations([]);
     onAnnotationsChange?.([]);
 
     // Also clear from database
-    try {
-      await saveAnnotations(security.id, [], true);
-      toast.success('Alle Marker gelöscht');
-    } catch (err) {
-      console.warn('Failed to clear annotations from database:', err);
+    if (security?.id) {
+      try {
+        await saveAnnotations(security.id, [], true);
+      } catch (err) {
+        console.warn('Failed to clear annotations from database:', err);
+      }
     }
+
+    toast.success('Analyse gelöscht');
   }, [security?.id, onAnnotationsChange]);
 
   // Remove a single annotation
@@ -846,15 +855,15 @@ export function AIAnalysisPanel({
           {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </button>
         <div className="flex items-center gap-2">
-          {/* Clear annotations button - always visible when there are annotations */}
-          {annotations.length > 0 && (
+          {/* Clear analysis button - visible when there is analysis or annotations */}
+          {(analysis || annotations.length > 0) && (
             <button
-              onClick={clearAllAnnotations}
+              onClick={clearAnalysis}
               className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors"
-              title="Alle Marker löschen"
+              title="Analyse und Marker löschen"
             >
               <Trash2 size={12} />
-              <span>Marker löschen</span>
+              <span>Analyse löschen</span>
             </button>
           )}
           {/* Enhanced analysis toggle */}
@@ -979,14 +988,6 @@ export function AIAnalysisPanel({
                   <div className="space-y-1.5 pt-2 border-t border-border">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-muted-foreground">Chart-Marker:</span>
-                      <button
-                        onClick={clearAllAnnotations}
-                        className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                        title="Alle Marker löschen"
-                      >
-                        <Trash2 size={12} />
-                        <span>Alle löschen</span>
-                      </button>
                     </div>
                     {annotations.map(annotation => (
                       <div

@@ -18,6 +18,7 @@ import {
 import type { OHLCData } from '../../lib/indicators';
 import { getAllSignals, type TechnicalSignal, type SignalDirection, type SignalStrength } from '../../lib/signals';
 import { detectCandlestickPatterns, type PatternMatch } from '../../lib/patterns';
+import { formatDate } from '../../lib/types';
 
 // ============================================================================
 // Types
@@ -119,7 +120,7 @@ function SignalItem({
           </p>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-[10px] text-muted-foreground">
-              {new Date(signal.date).toLocaleDateString('de-DE')}
+              {formatDate(signal.date)}
             </span>
             {signal.value !== undefined && (
               <span className="text-[10px] font-mono text-muted-foreground">
@@ -185,7 +186,7 @@ function PatternItem({
             {pattern.description}
           </p>
           <span className="text-[10px] text-muted-foreground">
-            {endDate ? new Date(endDate).toLocaleDateString('de-DE') : ''}
+            {endDate ? formatDate(endDate) : ''}
           </span>
         </div>
       </div>

@@ -1,8 +1,20 @@
 //! Data query commands for accessing imported Portfolio Performance data.
+//!
+//! ## Holdings Calculation (SSOT Reference)
+//!
+//! Holdings are calculated by summing transaction shares:
+//! - ADD: BUY, TRANSFER_IN, DELIVERY_INBOUND
+//! - REMOVE: SELL, TRANSFER_OUT, DELIVERY_OUTBOUND
+//!
+//! The canonical definition is in `pp::common::HOLDINGS_SUM_SQL`.
+//! SQL queries in this file use the same logic inline for performance.
 
 use crate::currency;
 use crate::db;
 use crate::pp::common::{prices, shares};
+// SSOT reference: These constants define the canonical holdings calculation logic
+#[allow(unused_imports)]
+use crate::pp::{HOLDINGS_ADD_TYPES, HOLDINGS_REMOVE_TYPES, HOLDINGS_SUM_SQL};
 use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};

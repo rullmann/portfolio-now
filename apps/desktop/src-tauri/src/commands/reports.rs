@@ -668,7 +668,7 @@ pub struct YearlyReturn {
 /// Get monthly returns for heatmap visualization
 #[command]
 pub fn get_monthly_returns(
-    portfolio_id: Option<i64>,
+    _portfolio_id: Option<i64>, // TODO: Filter by portfolio when pp_portfolio_value_history supports it
     years: Option<Vec<i32>>,
 ) -> Result<Vec<MonthlyReturn>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
@@ -758,7 +758,7 @@ pub fn get_monthly_returns(
 
 /// Get yearly returns for year returns widget
 #[command]
-pub fn get_yearly_returns(portfolio_id: Option<i64>) -> Result<Vec<YearlyReturn>, String> {
+pub fn get_yearly_returns(_portfolio_id: Option<i64>) -> Result<Vec<YearlyReturn>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
