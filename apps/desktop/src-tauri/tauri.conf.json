@@ -43,9 +43,6 @@
     "longDescription": "A comprehensive application for tracking and analyzing investment portfolios",
     "macOS": {
       "minimumSystemVersion": "10.15"
-    },
-    "externalBin": [
-      "binaries/pp-import"
-    ]
+    }
   }
 }
