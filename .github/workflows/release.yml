@@ -37,10 +37,10 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri build
 
-      - name: Upload DMG (Apple Silicon)
+      - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: Portfolio-Now-macOS-AppleSilicon
+          name: Portfolio-Now-macOS-ARM
           path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
 
   build-windows:
@@ -69,20 +69,63 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri build
 
-      - name: Upload Windows Installer
+      - name: Upload MSI Installer
         uses: actions/upload-artifact@v4
         with:
-          name: Portfolio-Now-Windows-Installer
+          name: Portfolio-Now-Windows-MSI
           path: apps/desktop/src-tauri/target/release/bundle/msi/*.msi
 
-      - name: Upload Windows Executable
+      - name: Upload Portable EXE
         uses: actions/upload-artifact@v4
         with:
-          name: Portfolio-Now-Windows-Portable
+          name: Portfolio-Now-Windows-EXE
           path: apps/desktop/src-tauri/target/release/portfolio-now.exe
 
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build Tauri App (Linux)
+        working-directory: apps/desktop
+        run: pnpm tauri build
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Portfolio-Now-Linux-AppImage
+          path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Portfolio-Now-Linux-DEB
+          path: apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+
   create-release:
-    needs: [build-macos-arm, build-windows]
+    needs: [build-macos-arm, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -100,9 +143,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/Portfolio-Now-macOS-AppleSilicon/*.dmg
-            artifacts/Portfolio-Now-Windows-Installer/*.msi
-            artifacts/Portfolio-Now-Windows-Portable/*.exe
+            artifacts/Portfolio-Now-macOS-ARM/*.dmg
+            artifacts/Portfolio-Now-Windows-MSI/*.msi
+            artifacts/Portfolio-Now-Windows-EXE/*.exe
+            artifacts/Portfolio-Now-Linux-AppImage/*.AppImage
+            artifacts/Portfolio-Now-Linux-DEB/*.deb
           draft: true
           generate_release_notes: true
         env:
