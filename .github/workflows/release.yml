@@ -16,7 +16,7 @@ env:
 
 jobs:
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-15-large
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
           version: 9
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
 
@@ -66,7 +66,7 @@ jobs:
           version: 9
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
@@ -100,7 +100,7 @@ jobs:
           version: 9
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
         run: pnpm install
