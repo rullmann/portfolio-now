@@ -62,5 +62,7 @@ Cargo.lock
 # Claude Code
 .claude/
 
-# Claude Code
-CLAUDE.md
+# Documentation (except README and CHANGELOG)
+*.md
+!README.md
+!CHANGELOG.md
