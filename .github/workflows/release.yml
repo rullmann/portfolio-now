@@ -148,7 +148,7 @@ jobs:
             artifacts/Portfolio-Now-Windows-EXE/*.exe
             artifacts/Portfolio-Now-Linux-AppImage/*.AppImage
             artifacts/Portfolio-Now-Linux-DEB/*.deb
-          draft: true
+          draft: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
