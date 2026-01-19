@@ -5,6 +5,87 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.1.4] - 2026-01-19
+
+### Hinzugefügt
+
+#### 29 neue Bank-Parser für PDF-Import
+Erweiterte Unterstützung für Bank-Dokumente aus Deutschland, Schweiz, Österreich und international.
+
+**Deutschland (16):**
+- Baader Bank, Commerzbank, DAB, Deutsche Bank, DZ Bank
+- ebase, flatex, GenoBroker, MLP Bank, OLB
+- OnVista, Postbank, Quirion, S Broker, Santander, Targobank
+
+**Schweiz (6):**
+- Credit Suisse, LGT, PostFinance, Swissquote, UBS, ZKB
+
+**Österreich (2):**
+- Erste Bank, Raiffeisen
+
+**International (5):**
+- DEGIRO, Merkur, Revolut, Saxo Bank, 1822direkt
+
+#### AI Feature Matrix
+- **Feature-spezifische KI-Konfiguration**: Jedes KI-Feature kann einen eigenen Provider und Modell haben
+- Konfigurierbare Features: Chart-Analyse, Portfolio Insights, Chat, PDF OCR, CSV-Import
+- Neue Komponente: `AiFeatureMatrix.tsx` in Settings
+- Store-Erweiterung: `aiFeatureSettings` mit per-Feature Provider/Model
+
+#### AI Migration Modal
+- **Automatische Modell-Migration**: Erkennt deprecated Modelle beim App-Start
+- User-Benachrichtigung mit altem und neuem Modell
+- Manuelles Bestätigen oder Ablehnen der Migration
+- Info-Toast bei neuen verfügbaren Modellen
+
+#### Header KI-Dropdown erweitert
+Alle 5 KI-Features jetzt im Header-Dropdown verfügbar:
+- Portfolio Insights
+- Nachkauf-Chancen
+- Chat öffnen
+- **Chart-Analyse** (navigiert zur Charts-View)
+- **PDF OCR** (öffnet Modal)
+- **CSV-Import** (öffnet Modal)
+
+#### PDF OCR Aktivitätsanzeige
+Verbesserte visuelle Rückmeldung während KI-OCR:
+- **Provider-Logo** mit pulsierendem Indikator
+- Anzeige von Provider-Name und Modell
+- **Fortschrittsbalken** bei mehreren Dateien (X von Y)
+- Provider-spezifischer Hinweis:
+  - Claude/Gemini: "Direkter PDF-Upload (schneller)"
+  - OpenAI/Perplexity: "PDF → Bilder → Vision API"
+
+#### E2E-Tests
+- **Playwright-Konfiguration** für Tauri App Testing
+- **WebDriverIO-Setup** als Alternative
+- 20+ E2E-Test-Specs für alle Views
+- Page Object Models für Dashboard
+- Test-Utilities und Tauri-Mocks
+
+### Behoben
+
+- **Dashboard AiFeaturesCard**: Nur 3 von 5 Features sichtbar
+  - CSS-Fix: `max-h-[140px] overflow-y-auto` für scrollbare Feature-Liste
+
+### Geändert
+
+- **Secure API Keys Hook**: Refactored für besseres Error Handling
+- **AIAnalysisPanel**: Verbesserte Analyse-Darstellung
+- **ChatPanel**: Optimiertes Message Handling
+- **CsvImportModal**: Bessere AI-Integration
+- **PortfolioInsightsModal**: Verfeinerte Insights-Anzeige
+
+### Dokumentation
+
+- CHANGELOG.md aktualisiert mit Version 0.1.4
+- CLAUDE.md erweitert um:
+  - AI Feature Matrix Dokumentation
+  - Erweiterte Bank-Parser Liste
+  - Header KI-Dropdown Beschreibung
+
+---
+
 ## [0.1.3] - 2026-01-17
 
 ### Hinzugefügt
