@@ -8,6 +8,35 @@ pub mod comdirect;
 pub mod consorsbank;
 pub mod trade_republic;
 pub mod scalable;
+pub mod commerzbank;
+pub mod deutschebank;
+pub mod postbank;
+pub mod onvista;
+pub mod sbroker;
+pub mod targobank;
+pub mod direkt1822;
+pub mod dab;
+pub mod baaderbank;
+pub mod genobroker;
+pub mod swissquote;
+pub mod ubs;
+pub mod saxobank;
+pub mod degiro;
+pub mod flatex;
+pub mod revolut;
+pub mod ebase;
+pub mod dzbank;
+pub mod postfinance;
+pub mod zkb;
+pub mod creditsuisse;
+pub mod lgt;
+pub mod erstebank;
+pub mod mlpbank;
+pub mod merkur;
+pub mod olb;
+pub mod santander;
+pub mod raiffeisen;
+pub mod quirinbank;
 pub mod ocr;
 
 use chrono::NaiveDate;
@@ -217,12 +246,45 @@ pub trait BankParser: Send + Sync {
 /// All available bank parsers
 pub fn get_parsers() -> Vec<Box<dyn BankParser>> {
     vec![
+        // German Banks
         Box::new(dkb::DkbParser::new()),
         Box::new(ing::IngParser::new()),
         Box::new(comdirect::ComdirectParser::new()),
         Box::new(consorsbank::ConsorsbankParser::new()),
         Box::new(trade_republic::TradeRepublicParser::new()),
         Box::new(scalable::ScalableParser::new()),
+        Box::new(commerzbank::CommerzbankParser::new()),
+        Box::new(deutschebank::DeutscheBankParser::new()),
+        Box::new(postbank::PostbankParser::new()),
+        Box::new(onvista::OnvistaParser::new()),
+        Box::new(sbroker::SBrokerParser::new()),
+        Box::new(targobank::TargobankParser::new()),
+        Box::new(direkt1822::Direkt1822Parser::new()),
+        Box::new(dab::DabParser::new()),
+        Box::new(baaderbank::BaaderBankParser::new()),
+        Box::new(genobroker::GenoBrokerParser::new()),
+        Box::new(flatex::FlatexParser::new()),
+        Box::new(ebase::EbaseParser::new()),
+        Box::new(dzbank::DzBankParser::new()),
+        Box::new(mlpbank::MlpBankParser::new()),
+        Box::new(merkur::MerkurParser::new()),
+        Box::new(olb::OlbParser::new()),
+        Box::new(santander::SantanderParser::new()),
+        Box::new(quirinbank::QuirinBankParser::new()),
+        // Swiss Banks
+        Box::new(swissquote::SwissquoteParser::new()),
+        Box::new(ubs::UbsParser::new()),
+        Box::new(saxobank::SaxoBankParser::new()),
+        Box::new(postfinance::PostFinanceParser::new()),
+        Box::new(zkb::ZkbParser::new()),
+        Box::new(creditsuisse::CreditSuisseParser::new()),
+        Box::new(lgt::LgtParser::new()),
+        // Austrian Banks
+        Box::new(erstebank::ErsteBankParser::new()),
+        Box::new(raiffeisen::RaiffeisenParser::new()),
+        // International Brokers
+        Box::new(degiro::DegiroParser::new()),
+        Box::new(revolut::RevolutParser::new()),
     ]
 }
 
@@ -338,7 +400,7 @@ pub fn parse_pdf_content(content: &str) -> Result<ParseResult, String> {
         }
     }
 
-    Err("Could not detect bank from PDF content. Supported banks: DKB, ING, Comdirect, Consorsbank, Trade Republic, Scalable Capital".to_string())
+    Err("Could not detect bank from PDF content. Supported banks: DKB, ING, Comdirect, Consorsbank, Trade Republic, Scalable Capital, Commerzbank, Deutsche Bank, Postbank, Onvista, S-Broker, Targobank, 1822direkt, DAB BNP Paribas, Baader Bank, GENO Broker, flatex, ebase, DZ Bank, MLP Bank, Merkur Privatbank, OLB, Santander, Quirin Privatbank, Swissquote, UBS, Saxo Bank, DEGIRO, Revolut, PostFinance, ZKB, Credit Suisse, LGT Bank, Erste Bank, Raiffeisen".to_string())
 }
 
 /// Parse a German decimal number (1.234,56 -> 1234.56)
