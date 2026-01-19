@@ -96,36 +96,45 @@ pub struct SupportedBank {
 #[command]
 pub fn get_supported_banks() -> Vec<SupportedBank> {
     vec![
-        SupportedBank {
-            id: "dkb".to_string(),
-            name: "DKB".to_string(),
-            description: "Deutsche Kreditbank AG".to_string(),
-        },
-        SupportedBank {
-            id: "ing".to_string(),
-            name: "ING".to_string(),
-            description: "ING-DiBa AG".to_string(),
-        },
-        SupportedBank {
-            id: "comdirect".to_string(),
-            name: "Comdirect".to_string(),
-            description: "Comdirect Bank AG".to_string(),
-        },
-        SupportedBank {
-            id: "consorsbank".to_string(),
-            name: "Consorsbank".to_string(),
-            description: "Consorsbank (BNP Paribas)".to_string(),
-        },
-        SupportedBank {
-            id: "trade_republic".to_string(),
-            name: "Trade Republic".to_string(),
-            description: "Trade Republic Bank GmbH".to_string(),
-        },
-        SupportedBank {
-            id: "scalable".to_string(),
-            name: "Scalable Capital".to_string(),
-            description: "Scalable Capital GmbH".to_string(),
-        },
+        // German Banks & Brokers
+        SupportedBank { id: "dkb".into(), name: "DKB".into(), description: "Deutsche Kreditbank AG".into() },
+        SupportedBank { id: "ing".into(), name: "ING".into(), description: "ING-DiBa AG".into() },
+        SupportedBank { id: "comdirect".into(), name: "Comdirect".into(), description: "Comdirect Bank AG".into() },
+        SupportedBank { id: "consorsbank".into(), name: "Consorsbank".into(), description: "BNP Paribas".into() },
+        SupportedBank { id: "trade_republic".into(), name: "Trade Republic".into(), description: "Trade Republic Bank GmbH".into() },
+        SupportedBank { id: "scalable".into(), name: "Scalable Capital".into(), description: "Scalable Capital GmbH".into() },
+        SupportedBank { id: "commerzbank".into(), name: "Commerzbank".into(), description: "Commerzbank AG".into() },
+        SupportedBank { id: "deutschebank".into(), name: "Deutsche Bank".into(), description: "Deutsche Bank AG".into() },
+        SupportedBank { id: "postbank".into(), name: "Postbank".into(), description: "Postbank (Deutsche Bank)".into() },
+        SupportedBank { id: "onvista".into(), name: "Onvista".into(), description: "Onvista Bank".into() },
+        SupportedBank { id: "sbroker".into(), name: "S-Broker".into(), description: "Sparkassen Broker".into() },
+        SupportedBank { id: "targobank".into(), name: "Targobank".into(), description: "Targobank AG".into() },
+        SupportedBank { id: "direkt1822".into(), name: "1822direkt".into(), description: "Frankfurter Sparkasse".into() },
+        SupportedBank { id: "dab".into(), name: "DAB".into(), description: "DAB BNP Paribas".into() },
+        SupportedBank { id: "baaderbank".into(), name: "Baader Bank".into(), description: "Baader Bank AG".into() },
+        SupportedBank { id: "genobroker".into(), name: "GENO Broker".into(), description: "Genossenschaftsbanken".into() },
+        SupportedBank { id: "flatex".into(), name: "flatex".into(), description: "FinTech Group Bank".into() },
+        SupportedBank { id: "ebase".into(), name: "ebase".into(), description: "European Bank for Financial Services".into() },
+        SupportedBank { id: "dzbank".into(), name: "DZ Bank".into(), description: "Volksbanken, Raiffeisenbanken".into() },
+        SupportedBank { id: "mlpbank".into(), name: "MLP Bank".into(), description: "MLP Banking AG".into() },
+        SupportedBank { id: "merkur".into(), name: "Merkur Privatbank".into(), description: "Merkur Privatbank AG".into() },
+        SupportedBank { id: "olb".into(), name: "OLB".into(), description: "Oldenburgische Landesbank".into() },
+        SupportedBank { id: "santander".into(), name: "Santander".into(), description: "Santander Consumer Bank".into() },
+        SupportedBank { id: "quirinbank".into(), name: "Quirin Privatbank".into(), description: "quirin bank AG".into() },
+        // Swiss Banks
+        SupportedBank { id: "swissquote".into(), name: "Swissquote".into(), description: "Swissquote Bank SA".into() },
+        SupportedBank { id: "ubs".into(), name: "UBS".into(), description: "UBS Switzerland AG".into() },
+        SupportedBank { id: "postfinance".into(), name: "PostFinance".into(), description: "PostFinance AG".into() },
+        SupportedBank { id: "zkb".into(), name: "ZKB".into(), description: "Zürcher Kantonalbank".into() },
+        SupportedBank { id: "creditsuisse".into(), name: "Credit Suisse".into(), description: "Credit Suisse (Schweiz) AG".into() },
+        SupportedBank { id: "lgt".into(), name: "LGT Bank".into(), description: "LGT Bank AG (Liechtenstein)".into() },
+        // Austrian Banks
+        SupportedBank { id: "erstebank".into(), name: "Erste Bank".into(), description: "Erste Bank Österreich".into() },
+        SupportedBank { id: "raiffeisen".into(), name: "Raiffeisen".into(), description: "Raiffeisen Bank Gruppe".into() },
+        // International Brokers
+        SupportedBank { id: "saxobank".into(), name: "Saxo Bank".into(), description: "Saxo Bank A/S".into() },
+        SupportedBank { id: "degiro".into(), name: "DEGIRO".into(), description: "DEGIRO B.V.".into() },
+        SupportedBank { id: "revolut".into(), name: "Revolut".into(), description: "Revolut Trading Ltd".into() },
     ]
 }
 

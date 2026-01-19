@@ -3,14 +3,12 @@
 //! Uses AI Vision models (Claude, GPT-4, Gemini) to extract text
 //! from scanned PDF documents when regular text extraction fails.
 //!
-//! **Claude and Gemini support direct PDF upload** (no poppler needed!)
-//! OpenAI/Perplexity still require image conversion via poppler.
+//! **Claude and Gemini support direct PDF upload** (no conversion needed!)
+//! OpenAI/Perplexity require poppler (pdftoppm) for PDF-to-image conversion.
 
 use crate::ai::{claude, gemini, openai, perplexity, AiError};
 use base64::{engine::general_purpose, Engine as _};
-use std::path::Path;
 use std::process::Command;
-use tempfile::TempDir;
 
 /// OCR request options
 #[derive(Debug, Clone)]
@@ -53,7 +51,7 @@ pub fn supports_direct_pdf(provider: &str) -> bool {
     matches!(provider.to_lowercase().as_str(), "claude" | "gemini")
 }
 
-/// Check if pdftoppm (poppler-utils) is available
+/// Check if pdftoppm (poppler) is available for PDF-to-image conversion
 pub fn is_pdftoppm_available() -> bool {
     Command::new("pdftoppm")
         .arg("-v")
@@ -62,63 +60,68 @@ pub fn is_pdftoppm_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Convert PDF to PNG images using pdftoppm
-fn pdf_to_images(pdf_path: &str, output_dir: &Path) -> Result<Vec<String>, String> {
-    let pdf_path = Path::new(pdf_path);
-    let stem = pdf_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("page");
+/// Convert PDF to PNG images using pdftoppm (poppler)
+fn pdf_to_images(pdf_path: &str) -> Result<Vec<Vec<u8>>, String> {
+    let temp_dir = std::env::temp_dir().join(format!("ocr_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Temporäres Verzeichnis konnte nicht erstellt werden: {}", e))?;
 
-    let output_prefix = output_dir.join(stem);
+    let output_prefix = temp_dir.join("page");
 
     // Run pdftoppm to convert PDF to PNG images
     let output = Command::new("pdftoppm")
         .args([
             "-png",
             "-r",
-            "150", // 150 DPI is sufficient for OCR
-            pdf_path.to_str().ok_or("Invalid PDF path")?,
-            output_prefix.to_str().ok_or("Invalid output path")?,
+            "150", // 150 DPI - good balance between quality and size
+            pdf_path,
+            output_prefix.to_str().unwrap(),
         ])
         .output()
         .map_err(|e| format!("pdftoppm konnte nicht ausgeführt werden: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("PDF-Konvertierung fehlgeschlagen: {}", stderr));
+        return Err(format!("pdftoppm fehlgeschlagen: {}", stderr));
     }
 
-    // Find all generated PNG files
-    let mut image_paths: Vec<String> = std::fs::read_dir(output_dir)
-        .map_err(|e| format!("Ausgabeverzeichnis konnte nicht gelesen werden: {}", e))?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .map(|ext| ext == "png")
-                .unwrap_or(false)
-        })
-        .map(|entry| entry.path().to_string_lossy().to_string())
-        .collect();
+    // Collect all generated PNG files
+    let mut images = Vec::new();
+    let mut page_num = 1;
 
-    // Sort by filename to maintain page order
-    image_paths.sort();
-
-    if image_paths.is_empty() {
-        return Err("Keine Bilder aus PDF extrahiert".to_string());
+    loop {
+        // pdftoppm generates files like page-1.png, page-2.png, etc.
+        let png_path = temp_dir.join(format!("page-{}.png", page_num));
+        if !png_path.exists() {
+            // Also try page-01.png format for documents with >9 pages
+            let png_path_padded = temp_dir.join(format!("page-{:02}.png", page_num));
+            if !png_path_padded.exists() {
+                break;
+            }
+            let bytes = std::fs::read(&png_path_padded)
+                .map_err(|e| format!("PNG konnte nicht gelesen werden: {}", e))?;
+            images.push(bytes);
+        } else {
+            let bytes = std::fs::read(&png_path)
+                .map_err(|e| format!("PNG konnte nicht gelesen werden: {}", e))?;
+            images.push(bytes);
+        }
+        page_num += 1;
     }
 
-    Ok(image_paths)
+    // Cleanup temp directory
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    if images.is_empty() {
+        return Err("Keine Seiten im PDF gefunden".to_string());
+    }
+
+    Ok(images)
 }
 
-/// Read image file and convert to base64
-fn image_to_base64(image_path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(image_path)
-        .map_err(|e| format!("Bild konnte nicht gelesen werden: {}", e))?;
-
-    Ok(general_purpose::STANDARD.encode(&bytes))
+/// Convert image bytes to base64
+fn image_to_base64(image_bytes: &[u8]) -> String {
+    general_purpose::STANDARD.encode(image_bytes)
 }
 
 /// Read PDF file and convert to base64
@@ -134,7 +137,6 @@ async fn ocr_image(
     image_base64: &str,
     options: &OcrOptions,
 ) -> Result<String, AiError> {
-    // Use the analyze_with_custom_prompt function with OCR prompt
     let result = match options.provider.as_str() {
         "claude" => {
             claude::analyze_with_custom_prompt(
@@ -219,7 +221,7 @@ async fn ocr_pdf_direct(
     })
 }
 
-/// Perform OCR using image conversion (requires poppler)
+/// Perform OCR using pdftoppm image conversion (OpenAI/Perplexity)
 async fn ocr_pdf_via_images(
     pdf_path: &str,
     options: OcrOptions,
@@ -228,32 +230,27 @@ async fn ocr_pdf_via_images(
     // Check if pdftoppm is available
     if !is_pdftoppm_available() {
         return Err(
-            "OCR mit OpenAI/Perplexity benötigt poppler-utils. \
-             Alternativen:\n\
-             1. Wechsle zu Claude oder Gemini (unterstützt PDF direkt)\n\
-             2. Installiere poppler:\n   \
-                macOS: brew install poppler\n   \
-                Ubuntu: sudo apt install poppler-utils\n   \
-                Windows: choco install poppler"
+            "pdftoppm (poppler) nicht gefunden.\n\
+             Bitte installiere poppler:\n\n\
+             macOS: brew install poppler\n\
+             Ubuntu/Debian: sudo apt install poppler-utils\n\
+             Windows: choco install poppler\n\n\
+             Alternativ: Wechsle zu Claude oder Gemini (unterstützt PDF direkt)"
                 .to_string(),
         );
     }
 
-    // Create temporary directory for images
-    let temp_dir = TempDir::new()
-        .map_err(|e| format!("Temporäres Verzeichnis konnte nicht erstellt werden: {}", e))?;
-
-    // Convert PDF to images
-    log::info!("OCR: Converting PDF to images (using poppler)...");
-    let image_paths = pdf_to_images(pdf_path, temp_dir.path())?;
-    let total_pages = image_paths.len();
+    // Convert PDF to images using pdftoppm
+    log::info!("OCR: Converting PDF to images using pdftoppm...");
+    let image_bytes_list = pdf_to_images(pdf_path)?;
+    let total_pages = image_bytes_list.len();
     log::info!("OCR: Converted {} pages", total_pages);
 
     // Process each page
     let mut pages = Vec::new();
     let mut all_text = String::new();
 
-    for (i, image_path) in image_paths.iter().enumerate() {
+    for (i, image_bytes) in image_bytes_list.iter().enumerate() {
         let page_num = i + 1;
         log::info!("OCR: Processing page {}/{}", page_num, total_pages);
 
@@ -262,8 +259,8 @@ async fn ocr_pdf_via_images(
             callback(page_num, total_pages);
         }
 
-        // Read and encode image
-        let image_base64 = image_to_base64(image_path)?;
+        // Convert to base64
+        let image_base64 = image_to_base64(image_bytes);
 
         // Perform OCR
         let text = ocr_image(&image_base64, &options)
@@ -293,8 +290,8 @@ async fn ocr_pdf_via_images(
 
 /// Perform OCR on a PDF file using Vision API
 ///
-/// - Claude and Gemini: Send PDF directly (no poppler needed!)
-/// - OpenAI and Perplexity: Convert to images first (requires poppler)
+/// - Claude and Gemini: Send PDF directly (no conversion needed!)
+/// - OpenAI and Perplexity: Convert to images using pdftoppm (requires poppler)
 pub async fn ocr_pdf(
     pdf_path: &str,
     options: OcrOptions,
@@ -302,10 +299,10 @@ pub async fn ocr_pdf(
 ) -> Result<OcrResult, String> {
     // Check if provider supports direct PDF upload
     if supports_direct_pdf(&options.provider) {
-        // Direct PDF upload - no poppler needed!
+        // Direct PDF upload - no conversion needed!
         ocr_pdf_direct(pdf_path, &options).await
     } else {
-        // Need to convert PDF to images first
+        // Need to convert PDF to images first using pdftoppm
         ocr_pdf_via_images(pdf_path, options, progress_callback).await
     }
 }

@@ -7,6 +7,7 @@ import { X, Upload, FileText, AlertCircle, CheckCircle, Loader2, ScanText, Alert
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { ErrorBoundary } from '../common/ErrorBoundary';
+import { AIProviderLogo } from '../common/AIProviderLogo';
 import {
   getSupportedBanks,
   previewPdfImport,
@@ -15,7 +16,7 @@ import {
   getAccounts,
 } from '../../lib/api';
 import { useEscapeKey } from '../../lib/hooks';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, getVisionModels, type AiProvider } from '../../store';
 import type {
   SupportedBank,
   PdfImportPreview,
@@ -48,13 +49,16 @@ const TXN_TYPE_OPTIONS = [
 export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalProps) {
   const {
     deliveryMode,
-    aiProvider,
-    aiModel,
+    aiEnabled,
+    aiFeatureSettings,
     anthropicApiKey,
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
   } = useSettingsStore();
+
+  // Get feature-specific provider and model for PDF OCR
+  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.pdfOcr;
 
   // ESC key to close
   useEscapeKey(isOpen, onClose);
@@ -93,6 +97,15 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
   const [showOcrConsentDialog, setShowOcrConsentDialog] = useState(false);
   const [ocrConsentGiven, setOcrConsentGiven] = useState(false);
+  const [modelHasVision, setModelHasVision] = useState(true);
+  const [isCheckingVision, setIsCheckingVision] = useState(false);
+  const [isOcrActive, setIsOcrActive] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // Check if provider supports direct PDF upload (no Poppler needed)
+  const providerSupportsDirectPdf = aiProvider === 'claude' || aiProvider === 'gemini';
+  // Poppler only required for OpenAI/Perplexity
+  const needsPoppler = !providerSupportsDirectPdf;
 
   // Get the current AI API key based on provider
   const getOcrApiKey = () => {
@@ -122,6 +135,33 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
       resetState();
     }
   }, [isOpen]);
+
+  // Check if configured model supports vision when provider/model changes
+  useEffect(() => {
+    const checkVision = async () => {
+      if (!aiProvider || !aiModel) {
+        setModelHasVision(false);
+        return;
+      }
+
+      setIsCheckingVision(true);
+      try {
+        const visionModels = await getVisionModels(aiProvider);
+        const hasVision = visionModels.some(m => m.id === aiModel);
+        setModelHasVision(hasVision);
+      } catch (err) {
+        console.warn('Failed to check vision support:', err);
+        // Assume vision is supported if check fails
+        setModelHasVision(true);
+      } finally {
+        setIsCheckingVision(false);
+      }
+    };
+
+    if (isOpen && aiEnabled) {
+      checkVision();
+    }
+  }, [isOpen, aiProvider, aiModel, aiEnabled]);
 
   const loadInitialData = async () => {
     try {
@@ -159,6 +199,10 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     setOcrStatus(null);
     setShowOcrConsentDialog(false);
     setOcrConsentGiven(false);
+    setModelHasVision(true);
+    setIsCheckingVision(false);
+    setIsOcrActive(false);
+    setOcrProgress(null);
   };
 
   // Handle OCR checkbox change - show consent dialog if enabling
@@ -259,6 +303,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
             // Use OCR-enabled preview if option is selected and consent given
             if (useOcrFallback && hasOcrApiKey() && ocrConsentGiven) {
               console.log(`[PDF Import] Using OCR for ${fileName}`);
+              setIsOcrActive(true);
+              setOcrProgress({ current: i + 1, total: files.length });
               previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
                 pdfPath: filePath,
                 useOcr: true,
@@ -299,6 +345,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
         }
 
         setOcrStatus(null);
+        setIsOcrActive(false);
+        setOcrProgress(null);
         setPreviews(allPreviews);
 
         // Initialize portfolio selection per file with first available portfolio
@@ -358,6 +406,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setOcrStatus(null);
+      setIsOcrActive(false);
+      setOcrProgress(null);
     } finally {
       setIsLoading(false);
     }
@@ -531,9 +581,55 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                 }`}
               >
                 {isLoading ? (
-                  <div className="flex items-center justify-center gap-3">
-                    <Loader2 className="w-5 h-5 text-primary animate-spin" />
-                    <span className="text-sm font-medium">{ocrStatus || 'PDF wird analysiert...'}</span>
+                  <div className="flex flex-col items-center justify-center gap-2 py-2">
+                    {isOcrActive ? (
+                      <>
+                        {/* KI-Aktivitätsanzeige */}
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <AIProviderLogo provider={aiProvider as AiProvider} size={24} />
+                            <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-primary rounded-full animate-pulse" />
+                          </div>
+                          <div className="text-left">
+                            <div className="text-sm font-medium flex items-center gap-2">
+                              <span>KI analysiert PDF</span>
+                              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {aiProvider === 'claude' ? 'Claude' :
+                               aiProvider === 'openai' ? 'OpenAI' :
+                               aiProvider === 'gemini' ? 'Gemini' : 'Perplexity'} • {aiModel}
+                            </div>
+                          </div>
+                        </div>
+                        {/* Fortschrittsanzeige */}
+                        {ocrProgress && ocrProgress.total > 1 && (
+                          <div className="w-full max-w-xs">
+                            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                              <span>Datei {ocrProgress.current} von {ocrProgress.total}</span>
+                              <span>{Math.round((ocrProgress.current / ocrProgress.total) * 100)}%</span>
+                            </div>
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary rounded-full transition-all duration-300"
+                                style={{ width: `${(ocrProgress.current / ocrProgress.total) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {/* Provider-spezifischer Hinweis */}
+                        <div className="text-xs text-muted-foreground">
+                          {providerSupportsDirectPdf
+                            ? 'Direkter PDF-Upload (schneller)'
+                            : 'PDF → Bilder → Vision API'}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+                        <span className="text-sm font-medium">{ocrStatus || 'PDF wird analysiert...'}</span>
+                      </div>
+                    )}
                   </div>
                 ) : combinedPreview ? (
                   <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -560,35 +656,129 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                   </summary>
                   <div className="px-4 pb-4 space-y-4">
                     {/* OCR Option */}
-                    <label className="flex items-center justify-between cursor-pointer text-sm">
-                      <div>
-                        <span className="font-medium">OCR für gescannte PDFs</span>
-                        <span className="text-xs text-muted-foreground ml-2">
-                          (KI-Texterkennung)
-                        </span>
-                        {ocrConsentGiven && (
-                          <span className="text-xs text-green-600 ml-2">
-                            ✓ Zustimmung erteilt
+                    <div className="space-y-2">
+                      <label className="flex items-center justify-between cursor-pointer text-sm">
+                        <div className="flex-1">
+                          <span className="font-medium">OCR für gescannte PDFs</span>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            (KI-Texterkennung)
                           </span>
-                        )}
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={useOcrFallback}
-                        onChange={(e) => handleOcrToggle(e.target.checked)}
-                        disabled={!isOcrAvailable || !hasOcrApiKey()}
-                        className="rounded border-border"
-                      />
-                    </label>
-                    {/* Supported Banks */}
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={useOcrFallback}
+                          onChange={(e) => handleOcrToggle(e.target.checked)}
+                          disabled={!aiEnabled || !hasOcrApiKey() || (needsPoppler && !isOcrAvailable) || !modelHasVision}
+                          className="rounded border-border"
+                        />
+                      </label>
+
+                      {/* OCR Status & Warnings */}
+                      {aiEnabled && hasOcrApiKey() && (
+                        <div className="pl-0 space-y-1.5">
+                          {/* Current Configuration */}
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <AIProviderLogo provider={aiProvider as AiProvider} size={14} />
+                            <span>{aiModel}</span>
+                            {ocrConsentGiven && (
+                              <span className="text-green-600 font-medium">✓ Zustimmung erteilt</span>
+                            )}
+                          </div>
+
+                          {/* Vision Warning */}
+                          {!modelHasVision && !isCheckingVision && (
+                            <div className="flex items-start gap-2 p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded text-xs">
+                              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <span className="font-medium text-amber-800 dark:text-amber-200">
+                                  Modell unterstützt keine Bilder
+                                </span>
+                                <p className="text-amber-700 dark:text-amber-300 mt-0.5">
+                                  {aiModel} hat keine Vision-Unterstützung. Wähle in den Einstellungen ein Vision-fähiges Modell für PDF OCR.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Poppler Warning for OpenAI/Perplexity */}
+                          {needsPoppler && !isOcrAvailable && modelHasVision && (
+                            <div className="flex items-start gap-2 p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded text-xs">
+                              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <span className="font-medium text-amber-800 dark:text-amber-200">
+                                  Poppler nicht installiert
+                                </span>
+                                <p className="text-amber-700 dark:text-amber-300 mt-0.5">
+                                  {aiProvider === 'openai' ? 'OpenAI' : 'Perplexity'} benötigt Poppler für PDF-zu-Bild-Konvertierung:
+                                </p>
+                                <code className="block mt-1 p-1.5 bg-amber-100 dark:bg-amber-900/50 rounded text-amber-800 dark:text-amber-200 font-mono">
+                                  {navigator.platform.includes('Mac') ? 'brew install poppler' :
+                                   navigator.platform.includes('Win') ? 'choco install poppler' :
+                                   'sudo apt install poppler-utils'}
+                                </code>
+                                <p className="text-amber-700 dark:text-amber-300 mt-1">
+                                  <strong>Tipp:</strong> Claude oder Gemini unterstützen direkten PDF-Upload ohne Poppler.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Direct PDF Upload Info for Claude/Gemini */}
+                          {providerSupportsDirectPdf && modelHasVision && (
+                            <div className="flex items-center gap-2 text-xs text-green-600">
+                              <CheckCircle size={12} />
+                              <span>Direkter PDF-Upload (kein Poppler nötig)</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* KI Disabled Warning */}
+                      {!aiEnabled && (
+                        <div className="text-xs text-amber-600">
+                          KI ist deaktiviert. Aktiviere KI in den Einstellungen.
+                        </div>
+                      )}
+
+                      {/* No API Key Warning */}
+                      {aiEnabled && !hasOcrApiKey() && (
+                        <div className="text-xs text-amber-600">
+                          Kein API-Key für {aiProvider} hinterlegt. Konfiguriere den Key in den Einstellungen.
+                        </div>
+                      )}
+                    </div>
+                    {/* Supported Banks - Grouped by Region */}
                     <div>
-                      <div className="text-xs text-muted-foreground mb-2">Unterstützte Banken:</div>
-                      <div className="flex flex-wrap gap-2">
-                        {supportedBanks.map((bank) => (
-                          <span key={bank.id} className="px-2 py-1 bg-muted rounded text-xs">
-                            {bank.name}
-                          </span>
-                        ))}
+                      <div className="text-xs text-muted-foreground mb-2">
+                        {supportedBanks.length} unterstützte Banken & Broker:
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">🇩🇪 Deutschland</div>
+                          <div className="text-muted-foreground leading-relaxed">
+                            {supportedBanks.slice(0, 24).map(b => b.name).join(', ')}
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div>
+                            <div className="font-medium text-muted-foreground mb-1">🇨🇭 Schweiz</div>
+                            <div className="text-muted-foreground">
+                              {supportedBanks.slice(24, 30).map(b => b.name).join(', ')}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="font-medium text-muted-foreground mb-1">🇦🇹 Österreich</div>
+                            <div className="text-muted-foreground">
+                              {supportedBanks.slice(30, 32).map(b => b.name).join(', ')}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="font-medium text-muted-foreground mb-1">🌍 International</div>
+                            <div className="text-muted-foreground">
+                              {supportedBanks.slice(32).map(b => b.name).join(', ')}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
