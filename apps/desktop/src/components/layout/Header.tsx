@@ -12,13 +12,13 @@ import {
   FileUp,
   FileText,
   FileSpreadsheet,
-  Globe,
   Sparkles,
   MessageSquare,
   ShoppingCart,
   PieChart,
   TrendingUp,
   ChevronDown,
+  BarChart3,
 } from 'lucide-react';
 import {
   useUIStore,
@@ -27,7 +27,6 @@ import {
   getViewLabel,
 } from '../../store';
 import { DropdownMenu, DropdownItem } from '../common';
-import { AIProviderLogo } from '../common/AIProviderLogo';
 import { TransactionFormModal } from '../modals/TransactionFormModal';
 import { PdfImportModal } from '../modals/PdfImportModal';
 import { CsvImportModal } from '../modals/CsvImportModal';
@@ -41,23 +40,6 @@ interface HeaderProps {
   onRefresh: () => void;
   onOpenChat?: () => void;
 }
-
-// Provider display names
-const PROVIDER_NAMES: Record<string, string> = {
-  claude: 'Claude',
-  openai: 'OpenAI',
-  gemini: 'Gemini',
-  perplexity: 'Perplexity',
-};
-
-// Check if model supports live web search
-const supportsWebSearch = (provider: string, model: string): boolean => {
-  // Perplexity always has web search
-  if (provider === 'perplexity') return true;
-  // OpenAI o3, o4 models have web search
-  if (provider === 'openai' && (model.startsWith('o3') || model.startsWith('o4'))) return true;
-  return false;
-};
 
 // Get context-specific AI actions based on current view
 const getContextActions = (view: string): { label: string; icon: React.ReactNode; action: string }[] => {
@@ -80,11 +62,10 @@ export function Header({
   onRefresh,
   onOpenChat,
 }: HeaderProps) {
-  const { currentView } = useUIStore();
+  const { currentView, setCurrentView } = useUIStore();
   const { isLoading } = useAppStore();
   const {
-    aiProvider,
-    aiModel,
+    aiEnabled,
     anthropicApiKey,
     openaiApiKey,
     geminiApiKey,
@@ -100,18 +81,9 @@ export function Header({
   const [insightsMode, setInsightsMode] = useState<'insights' | 'opportunities'>('insights');
   const [showAiMenu, setShowAiMenu] = useState(false);
 
-  // Check if AI is configured (has API key for selected provider)
-  const hasAiApiKey = () => {
-    switch (aiProvider) {
-      case 'claude': return !!anthropicApiKey;
-      case 'openai': return !!openaiApiKey;
-      case 'gemini': return !!geminiApiKey;
-      case 'perplexity': return !!perplexityApiKey;
-      default: return false;
-    }
-  };
-
-  const aiConfigured = hasAiApiKey();
+  // Check if AI is configured (has at least one API key)
+  const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey);
+  const aiConfigured = aiEnabled && hasAnyAiApiKey;
 
   return (
     <>
@@ -122,24 +94,17 @@ export function Header({
             {getViewLabel(currentView)}
           </h1>
 
-          {/* AI Provider Indicator - Clickable */}
+          {/* AI Indicator - Simple "KI" badge with dropdown */}
           {aiConfigured && (
             <div className="relative">
               <button
                 onClick={() => setShowAiMenu(!showAiMenu)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded-full border border-border/50 hover:bg-muted hover:border-border transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 text-primary rounded-full border border-primary/20 hover:bg-primary/20 hover:border-primary/30 transition-colors"
+                title="KI-Funktionen"
               >
-                <AIProviderLogo provider={aiProvider} size={16} />
-                <span className="text-xs text-muted-foreground">
-                  {PROVIDER_NAMES[aiProvider] || aiProvider}
-                </span>
-                <span className="text-xs text-muted-foreground/60">
-                  {aiModel.split('-').slice(0, 2).join('-')}
-                </span>
-                {supportsWebSearch(aiProvider, aiModel) && (
-                  <span title="Live Web-Suche"><Globe className="w-3.5 h-3.5 text-blue-500" /></span>
-                )}
-                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showAiMenu ? 'rotate-180' : ''}`} />
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium">KI</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${showAiMenu ? 'rotate-180' : ''}`} />
               </button>
 
               {/* AI Dropdown Menu */}
@@ -192,6 +157,44 @@ export function Header({
                         <span>Chat öffnen</span>
                       </button>
                     )}
+
+                    <div className="border-t border-border my-1" />
+
+                    {/* Chart Analysis */}
+                    <button
+                      onClick={() => {
+                        setCurrentView('charts');
+                        setShowAiMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    >
+                      <BarChart3 className="w-4 h-4 text-purple-600" />
+                      <span>Chart-Analyse</span>
+                    </button>
+
+                    {/* PDF OCR */}
+                    <button
+                      onClick={() => {
+                        setShowPdfImportModal(true);
+                        setShowAiMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-orange-600" />
+                      <span>PDF OCR</span>
+                    </button>
+
+                    {/* CSV Import */}
+                    <button
+                      onClick={() => {
+                        setShowCsvImportModal(true);
+                        setShowAiMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-teal-600" />
+                      <span>CSV-Import</span>
+                    </button>
 
                     {/* Context-specific actions */}
                     {getContextActions(currentView).length > 0 && (
