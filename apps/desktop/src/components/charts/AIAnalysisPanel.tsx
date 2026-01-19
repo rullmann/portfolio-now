@@ -96,7 +96,25 @@ export function AIAnalysisPanel({
   const retryTimerRef = useRef<number | null>(null);
   const rateLimiterRef = useRef<RateLimiter>(new RateLimiter(5000)); // 5 second minimum between calls
 
-  const { aiProvider, aiModel, setAiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
+  const {
+    aiEnabled,
+    aiFeatureSettings,
+    setAiFeatureSetting,
+    anthropicApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    perplexityApiKey,
+  } = useSettingsStore();
+
+  // Get feature-specific provider and model for Chart Analysis
+  const chartAnalysisConfig = aiFeatureSettings.chartAnalysis;
+  const aiProvider = chartAnalysisConfig.provider as 'claude' | 'openai' | 'gemini' | 'perplexity';
+  const aiModel = chartAnalysisConfig.model;
+
+  // Update the feature-specific model
+  const setAiModel = (model: string) => {
+    setAiFeatureSetting('chartAnalysis', { provider: aiProvider, model });
+  };
 
   // Portfolio analysis store for trend indicators in Dashboard
   const { setAnalysis: setPortfolioAnalysis } = usePortfolioAnalysisStore();
@@ -809,6 +827,11 @@ export function AIAnalysisPanel({
       </div>
     );
   };
+
+  // AI is globally disabled
+  if (!aiEnabled) {
+    return null;
+  }
 
   // No API key configured
   if (!apiKey) {

@@ -68,7 +68,10 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
   useEscapeKey(isOpen, onClose);
 
   // AI settings from store
-  const { aiProvider, aiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
+  const { aiFeatureSettings, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
+
+  // Get feature-specific provider and model for CSV Import
+  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.csvImport;
 
   const [step, setStep] = useState<Step>('select');
   const [filePath, setFilePath] = useState<string | null>(null);

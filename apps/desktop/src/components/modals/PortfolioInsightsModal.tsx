@@ -182,14 +182,17 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
   }, [result?.analysis]);
 
   const {
-    aiProvider,
-    aiModel,
+    aiEnabled,
+    aiFeatureSettings,
     anthropicApiKey,
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
     baseCurrency,
   } = useSettingsStore();
+
+  // Get feature-specific provider and model for Portfolio Insights
+  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.portfolioInsights;
 
   const getApiKey = () => {
     switch (aiProvider) {
@@ -303,7 +306,8 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
     }
   }, [isOpen, initialMode, hasAutoStarted, isLoading, result]);
 
-  if (!isOpen) return null;
+  // Don't show modal if AI is globally disabled or not open
+  if (!isOpen || !aiEnabled) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">

@@ -77,8 +77,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const {
-    aiProvider,
-    aiModel,
+    aiFeatureSettings,
     anthropicApiKey,
     openaiApiKey,
     geminiApiKey,
@@ -87,6 +86,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     alphaVantageApiKey,
     userName,
   } = useSettingsStore();
+
+  // Get feature-specific provider and model for Chat Assistant
+  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.chatAssistant;
 
   const getApiKey = () => {
     switch (aiProvider) {
