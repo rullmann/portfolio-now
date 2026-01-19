@@ -109,6 +109,19 @@ interface UseSecureApiKeysReturn {
   refreshKeys: () => Promise<void>;
 }
 
+// Default empty keys
+const EMPTY_KEYS: SecureApiKeys = {
+  brandfetchApiKey: '',
+  finnhubApiKey: '',
+  coingeckoApiKey: '',
+  alphaVantageApiKey: '',
+  twelveDataApiKey: '',
+  anthropicApiKey: '',
+  openaiApiKey: '',
+  geminiApiKey: '',
+  perplexityApiKey: '',
+};
+
 /**
  * Hook to manage API keys with secure storage
  *
@@ -119,7 +132,10 @@ interface UseSecureApiKeysReturn {
  *
  * When setting a key, it will:
  * 1. Store in secure storage
- * 2. Update the Zustand store for immediate UI access
+ * 2. Update local state AND Zustand store for immediate UI access
+ *
+ * IMPORTANT: Keys are stored in local state (not just Zustand) to prevent
+ * race conditions between secure storage loading and React rendering.
  */
 export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const [isLoading, setIsLoading] = useState(true);
@@ -127,18 +143,11 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const [fallbackMode, setFallbackMode] = useState(false);
   const migrationAttempted = useRef(false);
 
-  // Get current keys from Zustand store
-  const brandfetchApiKey = useSettingsStore((s) => s.brandfetchApiKey);
-  const finnhubApiKey = useSettingsStore((s) => s.finnhubApiKey);
-  const coingeckoApiKey = useSettingsStore((s) => s.coingeckoApiKey);
-  const alphaVantageApiKey = useSettingsStore((s) => s.alphaVantageApiKey);
-  const twelveDataApiKey = useSettingsStore((s) => s.twelveDataApiKey);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
-  const openaiApiKey = useSettingsStore((s) => s.openaiApiKey);
-  const geminiApiKey = useSettingsStore((s) => s.geminiApiKey);
-  const perplexityApiKey = useSettingsStore((s) => s.perplexityApiKey);
+  // Store keys in local state to prevent race conditions
+  // This is the source of truth for this hook - Zustand is synced for other components
+  const [keys, setKeys] = useState<SecureApiKeys>(EMPTY_KEYS);
 
-  // Get setters from Zustand store
+  // Get setters from Zustand store (to sync with other components)
   const setBrandfetchApiKey = useSettingsStore((s) => s.setBrandfetchApiKey);
   const setFinnhubApiKey = useSettingsStore((s) => s.setFinnhubApiKey);
   const setCoingeckoApiKey = useSettingsStore((s) => s.setCoingeckoApiKey);
@@ -148,18 +157,6 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const setOpenaiApiKey = useSettingsStore((s) => s.setOpenaiApiKey);
   const setGeminiApiKey = useSettingsStore((s) => s.setGeminiApiKey);
   const setPerplexityApiKey = useSettingsStore((s) => s.setPerplexityApiKey);
-
-  const keys: SecureApiKeys = {
-    brandfetchApiKey,
-    finnhubApiKey,
-    coingeckoApiKey,
-    alphaVantageApiKey,
-    twelveDataApiKey,
-    anthropicApiKey,
-    openaiApiKey,
-    geminiApiKey,
-    perplexityApiKey,
-  };
 
   // Map key types to Zustand setters
   const setterMap: Record<ApiKeyType, (key: string) => void> = {
@@ -174,7 +171,34 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     perplexity: setPerplexityApiKey,
   };
 
-  // Load keys from secure storage and sync with Zustand
+  // Helper to update both local state and Zustand store
+  const syncKeysToState = useCallback((newKeys: SecureApiKeys) => {
+    // Update local state first (this is the source of truth)
+    setKeys(newKeys);
+
+    // Then sync to Zustand for other components
+    setBrandfetchApiKey(newKeys.brandfetchApiKey);
+    setFinnhubApiKey(newKeys.finnhubApiKey);
+    setCoingeckoApiKey(newKeys.coingeckoApiKey);
+    setAlphaVantageApiKey(newKeys.alphaVantageApiKey);
+    setTwelveDataApiKey(newKeys.twelveDataApiKey);
+    setAnthropicApiKey(newKeys.anthropicApiKey);
+    setOpenaiApiKey(newKeys.openaiApiKey);
+    setGeminiApiKey(newKeys.geminiApiKey);
+    setPerplexityApiKey(newKeys.perplexityApiKey);
+  }, [
+    setBrandfetchApiKey,
+    setFinnhubApiKey,
+    setCoingeckoApiKey,
+    setAlphaVantageApiKey,
+    setTwelveDataApiKey,
+    setAnthropicApiKey,
+    setOpenaiApiKey,
+    setGeminiApiKey,
+    setPerplexityApiKey,
+  ]);
+
+  // Load keys from secure storage and sync with local state + Zustand
   const loadKeys = useCallback(async () => {
     try {
       const available = await isSecureStorageAvailable();
@@ -185,19 +209,22 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
         console.warn('Secure storage not available, using localStorage fallback mode');
         setFallbackMode(true);
 
-        // In fallback mode, read keys from localStorage and update Zustand
-        // SECURITY FIX: Always set all keys (including empty) to clear stale values
+        // In fallback mode, read keys from localStorage
         const legacyKeys = readLegacyKeysFromLocalStorage();
-        setBrandfetchApiKey(legacyKeys.brandfetch || '');
-        setFinnhubApiKey(legacyKeys.finnhub || '');
-        setCoingeckoApiKey(legacyKeys.coingecko || '');
-        setAlphaVantageApiKey(legacyKeys.alphaVantage || '');
-        setTwelveDataApiKey(legacyKeys.twelveData || '');
-        setAnthropicApiKey(legacyKeys.anthropic || '');
-        setOpenaiApiKey(legacyKeys.openai || '');
-        setGeminiApiKey(legacyKeys.gemini || '');
-        setPerplexityApiKey(legacyKeys.perplexity || '');
+        const newKeys: SecureApiKeys = {
+          brandfetchApiKey: legacyKeys.brandfetch || '',
+          finnhubApiKey: legacyKeys.finnhub || '',
+          coingeckoApiKey: legacyKeys.coingecko || '',
+          alphaVantageApiKey: legacyKeys.alphaVantage || '',
+          twelveDataApiKey: legacyKeys.twelveData || '',
+          anthropicApiKey: legacyKeys.anthropic || '',
+          openaiApiKey: legacyKeys.openai || '',
+          geminiApiKey: legacyKeys.gemini || '',
+          perplexityApiKey: legacyKeys.perplexity || '',
+        };
 
+        // Update local state and Zustand atomically
+        syncKeysToState(newKeys);
         setIsLoading(false);
         return;
       }
@@ -221,34 +248,53 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
       // Load keys from secure storage
       const secureKeys = await getAllApiKeys();
 
-      // Update Zustand store with secure keys
-      // SECURITY FIX: Always set all keys (including empty) to clear stale values
-      // This ensures deleted keys in secure storage are reflected in the UI
-      setBrandfetchApiKey(secureKeys.brandfetch);
-      setFinnhubApiKey(secureKeys.finnhub);
-      setCoingeckoApiKey(secureKeys.coingecko);
-      setAlphaVantageApiKey(secureKeys.alphaVantage);
-      setTwelveDataApiKey(secureKeys.twelveData);
-      setAnthropicApiKey(secureKeys.anthropic);
-      setOpenaiApiKey(secureKeys.openai);
-      setGeminiApiKey(secureKeys.gemini);
-      setPerplexityApiKey(secureKeys.perplexity);
+      // Convert to our format and update local state + Zustand atomically
+      const newKeys: SecureApiKeys = {
+        brandfetchApiKey: secureKeys.brandfetch,
+        finnhubApiKey: secureKeys.finnhub,
+        coingeckoApiKey: secureKeys.coingecko,
+        alphaVantageApiKey: secureKeys.alphaVantage,
+        twelveDataApiKey: secureKeys.twelveData,
+        anthropicApiKey: secureKeys.anthropic,
+        openaiApiKey: secureKeys.openai,
+        geminiApiKey: secureKeys.gemini,
+        perplexityApiKey: secureKeys.perplexity,
+      };
+
+      syncKeysToState(newKeys);
     } catch (error) {
       console.error('Failed to load API keys from secure storage:', error);
     } finally {
       setIsLoading(false);
     }
-  }, []); // Empty deps - only run once on mount
+  }, [syncKeysToState]);
 
   // Load keys on mount
   useEffect(() => {
     loadKeys();
   }, [loadKeys]);
 
-  // Set a single API key (stores in secure storage and updates Zustand)
+  // Map ApiKeyType to SecureApiKeys field name
+  const keyTypeToField: Record<ApiKeyType, keyof SecureApiKeys> = {
+    brandfetch: 'brandfetchApiKey',
+    finnhub: 'finnhubApiKey',
+    coingecko: 'coingeckoApiKey',
+    alphaVantage: 'alphaVantageApiKey',
+    twelveData: 'twelveDataApiKey',
+    anthropic: 'anthropicApiKey',
+    openai: 'openaiApiKey',
+    gemini: 'geminiApiKey',
+    perplexity: 'perplexityApiKey',
+  };
+
+  // Set a single API key (stores in secure storage and updates local state + Zustand)
   const setApiKey = useCallback(
     async (keyType: ApiKeyType, value: string) => {
-      // Update Zustand immediately for UI responsiveness
+      // Update local state immediately for UI responsiveness
+      const fieldName = keyTypeToField[keyType];
+      setKeys(prev => ({ ...prev, [fieldName]: value }));
+
+      // Also update Zustand for other components
       const setter = setterMap[keyType];
       if (setter) {
         setter(value);
@@ -260,7 +306,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
           await storeApiKey(keyType, value);
         } catch (error) {
           console.error(`Failed to store ${keyType} key securely:`, error);
-          // Key is still in Zustand, so UI will work
+          // Key is still in local state + Zustand, so UI will work
         }
       } else if (fallbackMode) {
         // Fallback: persist to localStorage via Zustand's storage key
@@ -269,20 +315,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
           const parsed = raw ? JSON.parse(raw) : { state: {} };
           const state = parsed?.state || parsed;
 
-          // Map ApiKeyType to Zustand field name
-          const fieldMap: Record<ApiKeyType, string> = {
-            brandfetch: 'brandfetchApiKey',
-            finnhub: 'finnhubApiKey',
-            coingecko: 'coingeckoApiKey',
-            alphaVantage: 'alphaVantageApiKey',
-            twelveData: 'twelveDataApiKey',
-            anthropic: 'anthropicApiKey',
-            openai: 'openaiApiKey',
-            gemini: 'geminiApiKey',
-            perplexity: 'perplexityApiKey',
-          };
-
-          state[fieldMap[keyType]] = value;
+          state[fieldName] = value;
 
           if (parsed?.state) {
             parsed.state = state;

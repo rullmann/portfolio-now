@@ -183,6 +183,40 @@ export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251
 export type OpenAIModel = 'gpt-5-mini' | 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
 export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-3-flash-preview' | 'gemini-3-pro-preview';
 
+// AI Feature Types for individual configuration
+export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport';
+export type AiProvider = 'claude' | 'openai' | 'gemini' | 'perplexity';
+
+export interface AiFeatureConfig {
+  provider: AiProvider;
+  model: string;
+}
+
+// Default model per provider
+export const DEFAULT_MODELS: Record<AiProvider, string> = {
+  claude: 'claude-sonnet-4-5-20250514',
+  openai: 'gpt-4o',
+  gemini: 'gemini-2.5-flash',
+  perplexity: 'sonar-pro',
+};
+
+// Feature definitions with metadata
+export interface AiFeatureDefinition {
+  id: AiFeatureId;
+  name: string;
+  description: string;
+  icon: string;
+  requiresVision: boolean;
+}
+
+export const AI_FEATURES: AiFeatureDefinition[] = [
+  { id: 'chartAnalysis', name: 'Chart-Analyse', description: 'Technische Analyse von Chart-Bildern mit KI', icon: 'BarChart3', requiresVision: true },
+  { id: 'portfolioInsights', name: 'Portfolio Insights', description: 'Analyse von Stärken, Risiken und Empfehlungen', icon: 'Lightbulb', requiresVision: false },
+  { id: 'chatAssistant', name: 'Chat-Assistent', description: 'Fragen zu deinem Portfolio beantworten', icon: 'MessageSquare', requiresVision: false },
+  { id: 'pdfOcr', name: 'PDF OCR', description: 'Text aus gescannten Bank-PDFs extrahieren', icon: 'FileText', requiresVision: true },
+  { id: 'csvImport', name: 'CSV-Import', description: 'Unbekannte Broker-Formate analysieren', icon: 'FileSpreadsheet', requiresVision: false },
+];
+
 // AI Models - Updated January 2026 (Vision-only)
 // Sources:
 // - Claude: https://platform.claude.com/docs/en/about-claude/models/overview
@@ -340,6 +374,8 @@ interface SettingsState {
   setTwelveDataApiKey: (key: string) => void;
 
   // AI Analysis Settings
+  aiEnabled: boolean; // Global toggle to disable all AI features (keeps API keys)
+  setAiEnabled: (enabled: boolean) => void;
   aiProvider: 'claude' | 'openai' | 'gemini' | 'perplexity';
   setAiProvider: (provider: 'claude' | 'openai' | 'gemini' | 'perplexity') => void;
   aiModel: string;
@@ -360,6 +396,24 @@ interface SettingsState {
   // Model migration tracking (not persisted)
   pendingModelMigration: { from: string; to: string; provider: string } | null;
   clearPendingModelMigration: () => void;
+
+  // AI Feature-specific settings (per-feature provider/model configuration)
+  aiFeatureSettings: Record<AiFeatureId, AiFeatureConfig>;
+  setAiFeatureSetting: (featureId: AiFeatureId, config: AiFeatureConfig) => void;
+
+  // Feature provider migration tracking (not persisted)
+  // Used when an API key is removed and features need to migrate to another provider
+  pendingFeatureMigration: {
+    features: AiFeatureId[];
+    fromProvider: AiProvider;
+    availableProviders: AiProvider[];
+  } | null;
+  setPendingFeatureMigration: (migration: {
+    features: AiFeatureId[];
+    fromProvider: AiProvider;
+    availableProviders: AiProvider[];
+  } | null) => void;
+  clearPendingFeatureMigration: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -402,6 +456,8 @@ export const useSettingsStore = create<SettingsState>()(
       setTwelveDataApiKey: (key) => set({ twelveDataApiKey: key }),
 
       // AI Analysis Settings (Vision-only models, January 2026)
+      aiEnabled: true, // Default: AI is enabled
+      setAiEnabled: (enabled) => set({ aiEnabled: enabled }),
       aiProvider: 'claude',
       setAiProvider: (provider) => set({
         aiProvider: provider,
@@ -429,10 +485,30 @@ export const useSettingsStore = create<SettingsState>()(
       // Model migration tracking (transient, not persisted)
       pendingModelMigration: null,
       clearPendingModelMigration: () => set({ pendingModelMigration: null }),
+
+      // AI Feature-specific settings - default all to global aiProvider/aiModel
+      aiFeatureSettings: {
+        chartAnalysis: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+        portfolioInsights: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+        chatAssistant: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+        pdfOcr: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+        csvImport: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+      },
+      setAiFeatureSetting: (featureId, config) => set((state) => ({
+        aiFeatureSettings: {
+          ...state.aiFeatureSettings,
+          [featureId]: config,
+        },
+      })),
+
+      // Feature provider migration tracking (transient, not persisted)
+      pendingFeatureMigration: null,
+      setPendingFeatureMigration: (migration) => set({ pendingFeatureMigration: migration }),
+      clearPendingFeatureMigration: () => set({ pendingFeatureMigration: null }),
     }),
     {
       name: 'portfolio-settings',
-      version: 4, // v4: Added userName
+      version: 5, // v5: Added aiFeatureSettings
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -452,6 +528,20 @@ export const useSettingsStore = create<SettingsState>()(
           if (state.aiModel && !validModels.includes(state.aiModel)) {
             state.aiModel = AI_MODELS[provider][0].id;
           }
+        }
+
+        // Migration v5: Initialize aiFeatureSettings from global aiProvider/aiModel
+        if (version < 5) {
+          const globalProvider = (state.aiProvider || 'claude') as AiProvider;
+          const globalModel = state.aiModel || DEFAULT_MODELS[globalProvider];
+
+          state.aiFeatureSettings = {
+            chartAnalysis: { provider: globalProvider, model: globalModel },
+            portfolioInsights: { provider: globalProvider, model: globalModel },
+            chatAssistant: { provider: globalProvider, model: globalModel },
+            pdfOcr: { provider: globalProvider, model: globalModel },
+            csvImport: { provider: globalProvider, model: globalModel },
+          };
         }
 
         return state as SettingsState;
@@ -502,6 +592,9 @@ export const useSettingsStore = create<SettingsState>()(
           // Transient state
           pendingModelMigration,
           clearPendingModelMigration,
+          pendingFeatureMigration,
+          setPendingFeatureMigration,
+          clearPendingFeatureMigration,
           // API keys (stored in Secure Storage, not localStorage)
           brandfetchApiKey,
           setBrandfetchApiKey,
@@ -538,6 +631,7 @@ export const useSettingsStore = create<SettingsState>()(
         void perplexityApiKey; void setPerplexityApiKey;
         void divvyDiaryApiKey; void setDivvyDiaryApiKey;
         void pendingModelMigration; void clearPendingModelMigration;
+        void pendingFeatureMigration; void setPendingFeatureMigration; void clearPendingFeatureMigration;
         return persisted as SettingsState;
       },
     }

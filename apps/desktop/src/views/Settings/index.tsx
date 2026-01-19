@@ -6,16 +6,16 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, Loader2, CheckCircle2, User, AlertTriangle, Shield } from 'lucide-react';
+import { Eye, EyeOff, ExternalLink, Trash2, RefreshCw, Sparkles, User, AlertTriangle, Shield, CheckCircle2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSettingsStore, useUIStore, toast, AI_MODELS, getVisionModels } from '../../store';
-import type { VisionModel } from '../../store';
+import { useSettingsStore, useUIStore, toast } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots } from '../../lib/api';
-import { AIProviderLogo, AI_PROVIDER_NAMES } from '../../components/common/AIProviderLogo';
+import { AIProviderLogo } from '../../components/common/AIProviderLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { ApiKeyType } from '../../lib/secureStorage';
 import { AttributeTypeManager } from '../../components/attributes';
+import { AiFeatureMatrix } from '../../components/settings';
 
 // Use VisionModel from store for model type
 
@@ -43,10 +43,8 @@ export function SettingsView() {
     setAlphaVantageApiKey,
     twelveDataApiKey,
     setTwelveDataApiKey,
-    aiProvider,
-    setAiProvider,
-    aiModel,
-    setAiModel,
+    aiEnabled,
+    setAiEnabled,
     anthropicApiKey,
     setAnthropicApiKey,
     openaiApiKey,
@@ -100,9 +98,7 @@ export function SettingsView() {
   const [showCoingeckoKey, setShowCoingeckoKey] = useState(false);
   const [showAlphaVantageKey, setShowAlphaVantageKey] = useState(false);
   const [showTwelveDataKey, setShowTwelveDataKey] = useState(false);
-  const [showAiKey, setShowAiKey] = useState(false);
-  const [dynamicModels, setDynamicModels] = useState<VisionModel[] | null>(null);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [showAiKeys, setShowAiKeys] = useState<Record<string, boolean>>({});
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -183,56 +179,13 @@ export function SettingsView() {
     }
   };
 
-  // Get current API key for selected provider (use effective keys from secure storage)
-  const currentApiKey = aiProvider === 'claude' ? effectiveAnthropicApiKey
-    : aiProvider === 'openai' ? effectiveOpenaiApiKey
-    : aiProvider === 'gemini' ? effectiveGeminiApiKey
-    : effectivePerplexityApiKey;
+  // Toggle visibility of AI provider API key
+  const toggleShowAiKey = (provider: string) => {
+    setShowAiKeys(prev => ({ ...prev, [provider]: !prev[provider] }));
+  };
 
-  // Fetch available vision models from backend registry
-  const fetchAiModels = useCallback(async () => {
-    setIsLoadingModels(true);
-    try {
-      const models = await getVisionModels(aiProvider);
-      setDynamicModels(models);
-
-      // Check if current model is in the list
-      const currentModelExists = models.some(m => m.id === aiModel);
-
-      if (!currentModelExists && models.length > 0) {
-        // Model is deprecated/invalid - migrate to first available model
-        const recommendedModel = models[0];
-        setAiModel(recommendedModel.id);
-        toast.warning(
-          `Modell "${aiModel}" nicht mehr verfügbar. Automatisch auf "${recommendedModel.name}" gewechselt.`,
-        );
-      }
-    } catch (err) {
-      console.error('Failed to fetch vision models:', err);
-      toast.error(`Modelle laden fehlgeschlagen: ${err}`);
-      setDynamicModels(null);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  }, [aiProvider, aiModel, setAiModel]);
-
-  // Load models when provider changes
-  useEffect(() => {
-    setDynamicModels(null);
-    fetchAiModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiProvider]);
-
-  // Auto-load models on mount (from backend registry, no API key needed)
-  useEffect(() => {
-    if (!dynamicModels && !isLoadingModels) {
-      fetchAiModels();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only on mount
-
-  // Check if current model might be outdated (not in static list)
-  const modelMightBeOutdated = !AI_MODELS[aiProvider].some(m => m.id === aiModel) && !dynamicModels;
+  // Check if any AI provider has an API key
+  const hasAnyAiKey = !!(effectiveAnthropicApiKey || effectiveOpenaiApiKey || effectiveGeminiApiKey || effectivePerplexityApiKey);
 
   return (
     <div className="space-y-6">
@@ -549,223 +502,194 @@ export function SettingsView() {
 
       {/* AI Analysis Settings */}
       <div id="ai-analysis" className="bg-card rounded-lg border border-border p-6 scroll-mt-4">
-        <div className="flex items-center gap-2 mb-4">
-          <Sparkles size={20} className="text-primary" />
-          <h2 className="text-lg font-semibold">KI-Analyse</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Sparkles size={20} className="text-primary" />
+            <h2 className="text-lg font-semibold">KI-Analyse</h2>
+          </div>
+          {/* Global AI Enable Toggle */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={aiEnabled}
+            onClick={() => setAiEnabled(!aiEnabled)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+              aiEnabled ? 'bg-primary' : 'bg-muted'
+            }`}
+            title={aiEnabled ? 'KI-Features deaktivieren' : 'KI-Features aktivieren'}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                aiEnabled ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
         </div>
-        <p className="text-sm text-muted-foreground mb-4">
-          Nutze KI zur technischen Analyse deiner Charts. Die KI analysiert das Chartbild und gibt eine strukturierte Einschätzung.
-        </p>
 
-        {/* Active Provider Display */}
-        {currentApiKey && (
-          <div className="mb-6 p-4 rounded-lg bg-muted/50 border border-border">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-background border border-border shadow-sm">
-                <AIProviderLogo provider={aiProvider} size={28} />
+        {!aiEnabled ? (
+          <div className="rounded-lg border border-dashed border-amber-500/30 bg-amber-500/5 p-4 text-center">
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              KI-Features sind deaktiviert. Aktiviere den Schalter oben, um Chat, Chart-Analyse und mehr zu nutzen.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {/* API Keys - Compact 2-column Grid */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium">API-Keys</h3>
+                {hasAnyAiKey && secureStorageAvailable && (
+                  <span className="text-xs text-green-600 flex items-center gap-1">
+                    <Shield size={10} />
+                    Sicher gespeichert
+                  </span>
+                )}
               </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-lg">{AI_PROVIDER_NAMES[aiProvider]}</span>
-                  <CheckCircle2 size={16} className="text-green-600" />
+              <div className="grid grid-cols-2 gap-3">
+                {/* Claude */}
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-background">
+                  <AIProviderLogo provider="claude" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <input
+                      type={showAiKeys.claude ? 'text' : 'password'}
+                      value={effectiveAnthropicApiKey}
+                      onChange={(e) => handleSetApiKey('anthropic', e.target.value)}
+                      placeholder="Claude API Key"
+                      className="w-full bg-transparent text-xs font-mono focus:outline-none"
+                    />
+                  </div>
+                  {effectiveAnthropicApiKey ? (
+                    <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => open('https://console.anthropic.com/')}
+                      className="text-xs text-primary hover:underline shrink-0"
+                    >
+                      Holen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleShowAiKey('claude')}
+                    className="p-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {showAiKeys.claude ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
                 </div>
-                <div className="text-sm text-muted-foreground">
-                  {(dynamicModels || AI_MODELS[aiProvider]).find(m => m.id === aiModel)?.name || aiModel}
+
+                {/* OpenAI */}
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-background">
+                  <AIProviderLogo provider="openai" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <input
+                      type={showAiKeys.openai ? 'text' : 'password'}
+                      value={effectiveOpenaiApiKey}
+                      onChange={(e) => handleSetApiKey('openai', e.target.value)}
+                      placeholder="OpenAI API Key"
+                      className="w-full bg-transparent text-xs font-mono focus:outline-none"
+                    />
+                  </div>
+                  {effectiveOpenaiApiKey ? (
+                    <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => open('https://platform.openai.com/api-keys')}
+                      className="text-xs text-primary hover:underline shrink-0"
+                    >
+                      Holen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleShowAiKey('openai')}
+                    className="p-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {showAiKeys.openai ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+
+                {/* Gemini */}
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-background">
+                  <AIProviderLogo provider="gemini" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <input
+                      type={showAiKeys.gemini ? 'text' : 'password'}
+                      value={effectiveGeminiApiKey}
+                      onChange={(e) => handleSetApiKey('gemini', e.target.value)}
+                      placeholder="Gemini API Key (Free)"
+                      className="w-full bg-transparent text-xs font-mono focus:outline-none"
+                    />
+                  </div>
+                  {effectiveGeminiApiKey ? (
+                    <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => open('https://aistudio.google.com/app/apikey')}
+                      className="text-xs text-primary hover:underline shrink-0"
+                    >
+                      Holen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleShowAiKey('gemini')}
+                    className="p-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {showAiKeys.gemini ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+
+                {/* Perplexity */}
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-background">
+                  <AIProviderLogo provider="perplexity" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <input
+                      type={showAiKeys.perplexity ? 'text' : 'password'}
+                      value={effectivePerplexityApiKey}
+                      onChange={(e) => handleSetApiKey('perplexity', e.target.value)}
+                      placeholder="Perplexity API Key"
+                      className="w-full bg-transparent text-xs font-mono focus:outline-none"
+                    />
+                  </div>
+                  {effectivePerplexityApiKey ? (
+                    <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => open('https://www.perplexity.ai/settings/api')}
+                      className="text-xs text-primary hover:underline shrink-0"
+                    >
+                      Holen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleShowAiKey('perplexity')}
+                    className="p-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {showAiKeys.perplexity ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
                 </div>
               </div>
-              <div className="text-right text-xs text-muted-foreground">
-                <div>Aktiver Provider</div>
-                <div className="font-mono">{aiModel.split('-').slice(-1)[0]}</div>
-              </div>
+            </div>
+
+            {/* Feature Matrix */}
+            <div>
+              <h3 className="text-sm font-medium mb-3">Funktionen konfigurieren</h3>
+              <AiFeatureMatrix
+                apiKeys={{
+                  anthropicApiKey: effectiveAnthropicApiKey,
+                  openaiApiKey: effectiveOpenaiApiKey,
+                  geminiApiKey: effectiveGeminiApiKey,
+                  perplexityApiKey: effectivePerplexityApiKey,
+                }}
+              />
             </div>
           </div>
         )}
-        <div className="space-y-4">
-          {/* Provider Selection with Logos */}
-          <div>
-            <label className="text-sm font-medium mb-2 block">KI-Anbieter</label>
-            <div className="flex flex-wrap gap-2">
-              {(['claude', 'openai', 'gemini', 'perplexity'] as const).map((provider) => {
-                const isActive = aiProvider === provider;
-                const hasKey = provider === 'claude' ? !!effectiveAnthropicApiKey
-                  : provider === 'openai' ? !!effectiveOpenaiApiKey
-                  : provider === 'gemini' ? !!effectiveGeminiApiKey
-                  : !!effectivePerplexityApiKey;
-                return (
-                  <button
-                    key={provider}
-                    type="button"
-                    onClick={() => {
-                      setAiProvider(provider);
-                      setShowAiKey(false);
-                    }}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
-                      isActive
-                        ? 'border-primary bg-primary/5 shadow-sm'
-                        : 'border-border hover:border-muted-foreground/30 hover:bg-muted/50'
-                    }`}
-                  >
-                    <AIProviderLogo provider={provider} size={20} />
-                    <span className={`font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}>
-                      {AI_PROVIDER_NAMES[provider]}
-                    </span>
-                    {hasKey && (
-                      <CheckCircle2 size={14} className="text-green-600 ml-1" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Model Selection */}
-          <div className="max-w-lg">
-            <label className="text-sm font-medium flex items-center gap-2">
-              Modell
-              {dynamicModels && (
-                <span className="text-xs text-green-600 dark:text-green-400">
-                  (Live von API)
-                </span>
-              )}
-              {modelMightBeOutdated && (
-                <span className="text-xs text-amber-600 dark:text-amber-400" title="Modell nicht in Standard-Liste - prüfen empfohlen">
-                  (Prüfen empfohlen)
-                </span>
-              )}
-            </label>
-            <div className="flex gap-2 mt-1">
-              <select
-                value={aiModel}
-                onChange={(e) => setAiModel(e.target.value)}
-                className="flex-1 rounded-md border border-input bg-background px-3 py-2"
-              >
-                {(dynamicModels || AI_MODELS[aiProvider]).map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name} ({model.description})
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={fetchAiModels}
-                disabled={isLoadingModels || !currentApiKey}
-                title={currentApiKey ? 'Modelle von API laden' : 'API Key erforderlich'}
-                className="px-3 py-2 rounded-md border border-input bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoadingModels ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <RefreshCw size={16} />
-                )}
-              </button>
-            </div>
-            {!dynamicModels && currentApiKey && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Klicke ↻ um aktuelle Modelle zu laden
-              </p>
-            )}
-          </div>
-
-          {/* Dynamic API Key Field */}
-          <div className="pt-4 border-t border-border">
-            <label className="text-sm font-medium">
-              {aiProvider === 'claude' && 'Anthropic API Key'}
-              {aiProvider === 'openai' && 'OpenAI API Key'}
-              {aiProvider === 'gemini' && 'Google Gemini API Key'}
-            </label>
-            <p className="text-sm text-muted-foreground mt-0.5 mb-2">
-              {aiProvider === 'claude' && (
-                <>
-                  Für Claude. Sehr gute Chart-Analyse und strukturierte Antworten.{' '}
-                  <button
-                    type="button"
-                    onClick={() => open('https://console.anthropic.com/')}
-                    className="text-primary hover:underline inline-flex items-center gap-1"
-                  >
-                    API Key erhalten
-                    <ExternalLink size={12} />
-                  </button>
-                </>
-              )}
-              {aiProvider === 'openai' && (
-                <>
-                  Für GPT-4 Vision. Gute visuelle Analyse-Fähigkeiten.{' '}
-                  <button
-                    type="button"
-                    onClick={() => open('https://platform.openai.com/api-keys')}
-                    className="text-primary hover:underline inline-flex items-center gap-1"
-                  >
-                    API Key erhalten
-                    <ExternalLink size={12} />
-                  </button>
-                </>
-              )}
-              {aiProvider === 'gemini' && (
-                <>
-                  Für Gemini. Kostenloser Tier verfügbar.{' '}
-                  <button
-                    type="button"
-                    onClick={() => open('https://aistudio.google.com/app/apikey')}
-                    className="text-primary hover:underline inline-flex items-center gap-1"
-                  >
-                    API Key erhalten
-                    <ExternalLink size={12} />
-                  </button>
-                </>
-              )}
-            </p>
-            <div className="relative max-w-md">
-              <input
-                type={showAiKey ? 'text' : 'password'}
-                value={
-                  aiProvider === 'claude'
-                    ? effectiveAnthropicApiKey
-                    : aiProvider === 'openai'
-                      ? effectiveOpenaiApiKey
-                      : aiProvider === 'gemini'
-                        ? effectiveGeminiApiKey
-                        : effectivePerplexityApiKey
-                }
-                onChange={(e) => {
-                  if (aiProvider === 'claude') handleSetApiKey('anthropic', e.target.value);
-                  else if (aiProvider === 'openai') handleSetApiKey('openai', e.target.value);
-                  else if (aiProvider === 'gemini') handleSetApiKey('gemini', e.target.value);
-                  else handleSetApiKey('perplexity', e.target.value);
-                }}
-                placeholder={
-                  aiProvider === 'claude'
-                    ? 'sk-ant-...'
-                    : aiProvider === 'openai'
-                      ? 'sk-...'
-                      : aiProvider === 'gemini'
-                        ? 'AI...'
-                        : 'pplx-...'
-                }
-                className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setShowAiKey(!showAiKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-              >
-                {showAiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            {((aiProvider === 'claude' && effectiveAnthropicApiKey) ||
-              (aiProvider === 'openai' && effectiveOpenaiApiKey) ||
-              (aiProvider === 'gemini' && effectiveGeminiApiKey) ||
-              (aiProvider === 'perplexity' && effectivePerplexityApiKey)) && (
-              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                {secureStorageAvailable && <Shield size={12} />}
-                API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.{' '}
-                {aiProvider === 'claude' && 'Claude'}
-                {aiProvider === 'openai' && 'GPT-4'}
-                {aiProvider === 'gemini' && 'Gemini'}
-                {aiProvider === 'perplexity' && 'Perplexity'} ist als KI-Anbieter verfügbar.
-              </p>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* External Services */}

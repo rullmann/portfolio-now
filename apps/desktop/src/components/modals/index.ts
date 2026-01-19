@@ -20,3 +20,4 @@ export { AllocationTargetModal } from './AllocationTargetModal';
 export { PortfolioInsightsModal } from './PortfolioInsightsModal';
 export { DivvyDiaryExportModal } from './DivvyDiaryExportModal';
 export { CsvImportModal } from './CsvImportModal';
+export { AiMigrationModal } from './AiMigrationModal';

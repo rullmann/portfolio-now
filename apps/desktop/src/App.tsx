@@ -27,6 +27,11 @@ import {
   useUIStore,
   useAppStore,
   useSettingsStore,
+  AI_FEATURES,
+  AI_MODELS,
+  DEFAULT_MODELS,
+  type AiFeatureId,
+  type AiProvider,
 } from './store';
 
 // Layout components
@@ -42,7 +47,7 @@ import {
 import { ChatButton, ChatPanel } from './components/chat';
 
 // Modals
-import { WelcomeModal } from './components/modals';
+import { WelcomeModal, AiMigrationModal } from './components/modals';
 
 // Secure Storage
 import { useSecureApiKeys } from './hooks/useSecureApiKeys';
@@ -77,14 +82,24 @@ import type { AggregatedHolding, PortfolioData } from './views';
 // Main App Component
 // ============================================================================
 
+// Provider names for display
+const PROVIDER_NAMES: Record<AiProvider, string> = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  perplexity: 'Perplexity',
+};
+
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { theme, userName } = useSettingsStore();
+  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration } = useSettingsStore();
 
   // Load API keys from secure storage on app start
   // This syncs secure storage with the Zustand store for component access
-  useSecureApiKeys();
+  // NOTE: The hook now stores keys in local state first (not just Zustand) to prevent
+  // race conditions. When isLoading becomes false, keys are guaranteed to be available.
+  const { keys: apiKeys, isLoading: apiKeysLoading } = useSecureApiKeys();
 
   // Welcome modal state - show only on first launch when no userName is set
   const [showWelcome, setShowWelcome] = useState<boolean | null>(null);
@@ -109,6 +124,83 @@ function App() {
     setShowWelcome(false);
     localStorage.setItem('portfolio-welcome-seen', 'true');
   };
+
+  // ============================================================================
+  // AI Feature Provider Migration Check
+  // ============================================================================
+
+  // Check for AI features that need migration when API keys change
+  useEffect(() => {
+    // Wait for API keys to be loaded
+    if (apiKeysLoading || !aiEnabled) return;
+
+    // Determine which providers have API keys configured
+    const availableProviders: AiProvider[] = [];
+    if (apiKeys.anthropicApiKey?.trim()) availableProviders.push('claude');
+    if (apiKeys.openaiApiKey?.trim()) availableProviders.push('openai');
+    if (apiKeys.geminiApiKey?.trim()) availableProviders.push('gemini');
+    if (apiKeys.perplexityApiKey?.trim()) availableProviders.push('perplexity');
+
+    // No providers available - nothing to migrate to
+    if (availableProviders.length === 0) return;
+
+    // Check which features need migration (provider no longer available)
+    const featuresToMigrate: { featureId: AiFeatureId; fromProvider: AiProvider }[] = [];
+
+    AI_FEATURES.forEach((feature) => {
+      const config = aiFeatureSettings[feature.id];
+      if (config && !availableProviders.includes(config.provider)) {
+        featuresToMigrate.push({
+          featureId: feature.id,
+          fromProvider: config.provider,
+        });
+      }
+    });
+
+    // No features need migration
+    if (featuresToMigrate.length === 0) return;
+
+    // Group features by their current (unavailable) provider
+    const byProvider = featuresToMigrate.reduce((acc, item) => {
+      if (!acc[item.fromProvider]) acc[item.fromProvider] = [];
+      acc[item.fromProvider].push(item.featureId);
+      return acc;
+    }, {} as Record<AiProvider, AiFeatureId[]>);
+
+    // Handle migration for each provider group
+    Object.entries(byProvider).forEach(([fromProviderStr, features]) => {
+      const fromProvider = fromProviderStr as AiProvider;
+
+      if (availableProviders.length === 1) {
+        // Only one provider available - auto-migrate silently
+        const targetProvider = availableProviders[0];
+        const models = AI_MODELS[targetProvider] || [];
+        const defaultModel = models[0]?.id || DEFAULT_MODELS[targetProvider];
+
+        features.forEach((featureId) => {
+          setAiFeatureSetting(featureId, {
+            provider: targetProvider,
+            model: defaultModel,
+          });
+        });
+
+        // Show toast notification
+        const featureNames = features
+          .map((id) => AI_FEATURES.find((f) => f.id === id)?.name || id)
+          .join(', ');
+        toast.info(
+          `KI-Funktionen migriert: ${featureNames} von ${PROVIDER_NAMES[fromProvider]} zu ${PROVIDER_NAMES[targetProvider]}`
+        );
+      } else {
+        // Multiple providers available - show migration dialog
+        setPendingFeatureMigration({
+          features,
+          fromProvider,
+          availableProviders,
+        });
+      }
+    });
+  }, [apiKeysLoading, apiKeys, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration]);
 
   // ============================================================================
   // Theme Management
@@ -293,6 +385,7 @@ function App() {
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
+            onOpenChat={() => setIsChatOpen(true)}
           />
         );
       case 'portfolio':
@@ -340,6 +433,7 @@ function App() {
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
+            onOpenChat={() => setIsChatOpen(true)}
           />
         );
     }
@@ -384,12 +478,19 @@ function App() {
         {/* Toast notifications */}
         <ToastContainer />
 
-        {/* Chat interface */}
-        <ChatButton onClick={() => setIsChatOpen(true)} />
-        <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+        {/* Chat interface - only visible when AI is enabled */}
+        {aiEnabled && (
+          <>
+            <ChatButton onClick={() => setIsChatOpen(true)} />
+            <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+          </>
+        )}
 
         {/* Welcome modal for first-time users */}
         <WelcomeModal isOpen={showWelcome === true} onClose={handleWelcomeClose} />
+
+        {/* AI feature migration modal - shown when API keys are removed */}
+        <AiMigrationModal />
       </div>
     </QueryClientProvider>
   );
