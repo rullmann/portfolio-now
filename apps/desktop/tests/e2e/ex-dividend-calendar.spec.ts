@@ -295,7 +295,7 @@ test.describe('Ex-Dividend Calendar', () => {
     await page.screenshot({ path: 'playwright-report/screenshots/ex-div-legend.png' });
 
     // Soft assertion - legend should exist in enhanced mode
-    expect(hasExDiv || hasRecordDate || hasZahlung || true).toBeTruthy();
+    expect(hasExDiv || hasRecordDate || hasZahlung).toBeTruthy();
   });
 
   test('Calendar shows ex-dividend button', async ({ page }) => {
@@ -393,7 +393,7 @@ test.describe('Ex-Dividend Calendar', () => {
     await page.screenshot({ path: 'playwright-report/screenshots/ex-div-summary.png' });
 
     // Soft assertion - at least calendar is showing
-    expect(hasExDividends || hasRecordDates || hasZahlungen || true).toBeTruthy();
+    expect(hasExDividends || hasRecordDates || hasZahlungen).toBeTruthy();
   });
 
   test('Form modal can be closed with cancel button', async ({ page }) => {

@@ -320,7 +320,7 @@ test.describe('Portfolio Insights - Nachkauf-Chancen (KI)', () => {
           fullPage: true,
         });
 
-        expect(hasColors || true).toBeTruthy();
+        expect(hasColors).toBeTruthy();
       }
     }
   });
@@ -451,7 +451,7 @@ test.describe('Portfolio Insights - Loading States', () => {
         });
 
         // Loading indicator may be too fast to catch with mocks
-        expect(hasLoading || true).toBeTruthy();
+        expect(hasLoading).toBeTruthy();
       }
     }
   });

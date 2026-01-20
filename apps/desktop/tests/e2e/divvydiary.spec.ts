@@ -211,7 +211,7 @@ test.describe('DivvyDiary Export', () => {
         const modalTitle = page.locator('text=DivvyDiary Export');
         const modalClosed = await modalTitle.count() === 0;
 
-        expect(modalClosed || true).toBeTruthy();
+        expect(modalClosed).toBeTruthy();
       }
     }
   });

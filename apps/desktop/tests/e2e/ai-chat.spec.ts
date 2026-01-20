@@ -86,7 +86,7 @@ test.describe('AI Chat Panel', () => {
       fullPage: true,
     });
 
-    expect(hasChatButton || true).toBeTruthy();
+    expect(hasChatButton).toBeTruthy();
   });
 
   test('Chat Panel öffnet sich bei Klick', async ({ page }) => {
@@ -122,7 +122,7 @@ test.describe('AI Chat Panel', () => {
       fullPage: true,
     });
 
-    expect(chatButtonFound || hasChatPanel || true).toBeTruthy();
+    expect(chatButtonFound || hasChatPanel).toBeTruthy();
   });
 
   test('Chat Panel hat Eingabefeld', async ({ page }) => {
@@ -150,7 +150,7 @@ test.describe('AI Chat Panel', () => {
       fullPage: true,
     });
 
-    expect(hasInput || true).toBeTruthy();
+    expect(hasInput).toBeTruthy();
   });
 
   test('Chat Panel kann geschlossen werden', async ({ page }) => {
@@ -207,7 +207,7 @@ test.describe('AI Chat Panel', () => {
       fullPage: true,
     });
 
-    expect(hasWelcome || true).toBeTruthy();
+    expect(hasWelcome).toBeTruthy();
   });
 });
 
@@ -267,6 +267,6 @@ test.describe('AI Chat Interaction', () => {
       fullPage: true,
     });
 
-    expect(hasProviderInHeader || true).toBeTruthy();
+    expect(hasProviderInHeader).toBeTruthy();
   });
 });

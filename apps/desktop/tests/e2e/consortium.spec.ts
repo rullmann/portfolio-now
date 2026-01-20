@@ -220,7 +220,7 @@ test.describe('Konsortium / Portfolio-Gruppen', () => {
     });
 
     // Soft check - navigation worked if button has active state
-    expect(isActive || true).toBeTruthy();
+    expect(isActive).toBeTruthy();
   });
 
   test('Konsortium-Liste wird angezeigt', async ({ page }) => {
@@ -273,7 +273,7 @@ test.describe('Konsortium / Portfolio-Gruppen', () => {
     });
 
     // Soft check
-    expect(foundPerformance || true).toBeTruthy();
+    expect(foundPerformance).toBeTruthy();
   });
 
   test('Konsortium erstellen Dialog öffnet sich', async ({ page }) => {
@@ -338,7 +338,7 @@ test.describe('Konsortium / Portfolio-Gruppen', () => {
     });
 
     // Soft check
-    expect(foundRiskMetric || true).toBeTruthy();
+    expect(foundRiskMetric).toBeTruthy();
   });
 
   test('Performance-Chart wird gerendert', async ({ page }) => {
@@ -371,7 +371,7 @@ test.describe('Konsortium / Portfolio-Gruppen', () => {
     });
 
     // Soft check
-    expect(foundChart || true).toBeTruthy();
+    expect(foundChart).toBeTruthy();
   });
 
   test('Portfolio-Aufteilung wird angezeigt', async ({ page }) => {
@@ -404,7 +404,7 @@ test.describe('Konsortium / Portfolio-Gruppen', () => {
     });
 
     // Soft check
-    expect(foundBreakdown || true).toBeTruthy();
+    expect(foundBreakdown).toBeTruthy();
   });
 });
 

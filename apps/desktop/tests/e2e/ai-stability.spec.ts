@@ -266,7 +266,7 @@ test.describe('AI Error Handling - Authentication', () => {
         fullPage: true,
       });
 
-      expect(hasError || hasErrorAlert || true).toBeTruthy();
+      expect(hasError || hasErrorAlert).toBeTruthy();
     }
   });
 });
@@ -302,7 +302,7 @@ test.describe('AI Error Handling - Rate Limiting', () => {
         fullPage: true,
       });
 
-      expect(hasRateLimit || true).toBeTruthy();
+      expect(hasRateLimit).toBeTruthy();
     }
   });
 });
@@ -337,7 +337,7 @@ test.describe('AI Error Handling - Server Errors', () => {
         fullPage: true,
       });
 
-      expect(hasServerError || true).toBeTruthy();
+      expect(hasServerError).toBeTruthy();
     }
   });
 });
@@ -372,7 +372,7 @@ test.describe('AI Error Handling - Network', () => {
         fullPage: true,
       });
 
-      expect(hasNetworkError || true).toBeTruthy();
+      expect(hasNetworkError).toBeTruthy();
     }
   });
 });
@@ -407,7 +407,7 @@ test.describe('AI Error Handling - Timeout', () => {
         fullPage: true,
       });
 
-      expect(hasTimeout || true).toBeTruthy();
+      expect(hasTimeout).toBeTruthy();
     }
   });
 });
@@ -454,7 +454,7 @@ test.describe('AI Recovery - After Error', () => {
           fullPage: true,
         });
 
-        expect(hasSuccess || true).toBeTruthy();
+        expect(hasSuccess).toBeTruthy();
       }
     }
   });
@@ -495,7 +495,7 @@ test.describe('OpenAI Provider Tests', () => {
       fullPage: true,
     });
 
-    expect(hasGpt4o || hasO3 || true).toBeTruthy();
+    expect(hasGpt4o || hasO3).toBeTruthy();
   });
 
   test('OpenAI API-Key Feld existiert', async ({ page }) => {
@@ -517,7 +517,7 @@ test.describe('OpenAI Provider Tests', () => {
       fullPage: true,
     });
 
-    expect(hasApiKeyField || true).toBeTruthy();
+    expect(hasApiKeyField).toBeTruthy();
   });
 });
 
@@ -587,7 +587,7 @@ test.describe('Portfolio Insights - Stability', () => {
 
     // If no modal found, that's okay - UI might be configured differently
     // The test passes if we got here without freezing
-    expect(hasOptions || hasModal || hasAnyContent || true).toBeTruthy();
+    expect(hasOptions || hasModal || hasAnyContent).toBeTruthy();
   });
 
   test('Nachkauf-Chancen lädt ohne Freeze', async ({ page }) => {

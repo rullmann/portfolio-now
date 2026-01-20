@@ -95,7 +95,7 @@ test.describe('Optimization View (Portfolio-Optimierung)', () => {
       fullPage: true,
     });
 
-    expect(hasCorrelation || true).toBeTruthy();
+    expect(hasCorrelation).toBeTruthy();
   });
 
   test('Efficient Frontier Chart wird angezeigt', async ({ page }) => {
@@ -124,7 +124,7 @@ test.describe('Optimization View (Portfolio-Optimierung)', () => {
       fullPage: true,
     });
 
-    expect(foundChart || true).toBeTruthy();
+    expect(foundChart).toBeTruthy();
   });
 
   test('Optimale Portfolios werden angezeigt', async ({ page }) => {
@@ -140,7 +140,7 @@ test.describe('Optimization View (Portfolio-Optimierung)', () => {
       fullPage: true,
     });
 
-    expect(hasOptimal || true).toBeTruthy();
+    expect(hasOptimal).toBeTruthy();
   });
 
   test('Risikofreier Zinssatz kann eingestellt werden', async ({ page }) => {
@@ -158,6 +158,6 @@ test.describe('Optimization View (Portfolio-Optimierung)', () => {
       fullPage: true,
     });
 
-    expect(hasRiskFree || true).toBeTruthy();
+    expect(hasRiskFree).toBeTruthy();
   });
 });

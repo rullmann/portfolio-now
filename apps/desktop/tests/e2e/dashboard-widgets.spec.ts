@@ -101,7 +101,7 @@ test.describe('Dashboard Widget System', () => {
 
     // Look for dashboard content (metric cards, charts, etc.)
     const hasMetricContent = await page.locator('text=/Depot|Portfolio|Wert/i').count() > 0;
-    expect(hasMetricContent || true).toBeTruthy(); // Flexible check
+    expect(hasMetricContent).toBeTruthy();
   });
 
   test('Widget-Komponenten werden gerendert', async ({ page }) => {
@@ -216,6 +216,6 @@ test.describe('Heatmap Widget', () => {
     }
 
     // This is a soft check since heatmap widget may not be on default dashboard
-    expect(foundHeatmap || true).toBeTruthy();
+    expect(foundHeatmap).toBeTruthy();
   });
 });

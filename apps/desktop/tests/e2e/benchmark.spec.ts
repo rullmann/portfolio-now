@@ -92,7 +92,7 @@ test.describe('Benchmark View', () => {
       fullPage: true,
     });
 
-    expect(hasSelect || true).toBeTruthy();
+    expect(hasSelect).toBeTruthy();
   });
 
   test('Performance-Vergleich wird angezeigt', async ({ page }) => {
@@ -108,7 +108,7 @@ test.describe('Benchmark View', () => {
       fullPage: true,
     });
 
-    expect(hasComparison || true).toBeTruthy();
+    expect(hasComparison).toBeTruthy();
   });
 
   test('Vergleichs-Chart wird angezeigt', async ({ page }) => {
@@ -136,6 +136,6 @@ test.describe('Benchmark View', () => {
       fullPage: true,
     });
 
-    expect(foundChart || true).toBeTruthy();
+    expect(foundChart).toBeTruthy();
   });
 });

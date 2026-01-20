@@ -64,7 +64,7 @@ test.describe('Dashboard', () => {
 
     // Chart may or may not be visible depending on data
     // This is a soft check
-    expect(chartFound || true).toBeTruthy();
+    expect(chartFound).toBeTruthy();
   });
 
   test('Zeitraum-Buttons sind vorhanden', async ({ page }) => {

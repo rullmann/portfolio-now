@@ -71,7 +71,7 @@ test.describe('Settings View', () => {
       fullPage: true,
     });
 
-    expect(hasTheme || true).toBeTruthy();
+    expect(hasTheme).toBeTruthy();
   });
 
   test('Sprach-Auswahl wird angezeigt', async ({ page }) => {
@@ -86,7 +86,7 @@ test.describe('Settings View', () => {
       fullPage: true,
     });
 
-    expect(hasLanguage || true).toBeTruthy();
+    expect(hasLanguage).toBeTruthy();
   });
 
   test('API-Key Eingabefelder existieren', async ({ page }) => {
@@ -104,7 +104,7 @@ test.describe('Settings View', () => {
       fullPage: true,
     });
 
-    expect(hasApiKeyFields || true).toBeTruthy();
+    expect(hasApiKeyFields).toBeTruthy();
   });
 
   test('KI-Provider Auswahl existiert', async ({ page }) => {
@@ -119,7 +119,7 @@ test.describe('Settings View', () => {
       fullPage: true,
     });
 
-    expect(hasProviders || true).toBeTruthy();
+    expect(hasProviders).toBeTruthy();
   });
 
   test('Basiswährung kann ausgewählt werden', async ({ page }) => {
@@ -134,6 +134,6 @@ test.describe('Settings View', () => {
       fullPage: true,
     });
 
-    expect(hasCurrency || true).toBeTruthy();
+    expect(hasCurrency).toBeTruthy();
   });
 });

@@ -84,7 +84,7 @@ test.describe('Accounts View', () => {
       fullPage: true,
     });
 
-    expect(hasGirokonto || hasTagesgeld || true).toBeTruthy();
+    expect(hasGirokonto || hasTagesgeld).toBeTruthy();
   });
 
   test('Neues Konto Button existiert', async ({ page }) => {
@@ -99,7 +99,7 @@ test.describe('Accounts View', () => {
       path: 'playwright-report/screenshots/accounts-create-btn.png',
     });
 
-    expect(hasCreateBtn || true).toBeTruthy();
+    expect(hasCreateBtn).toBeTruthy();
   });
 
   test('Währungen werden angezeigt', async ({ page }) => {
@@ -115,6 +115,6 @@ test.describe('Accounts View', () => {
       fullPage: true,
     });
 
-    expect(hasEUR || hasUSD || true).toBeTruthy();
+    expect(hasEUR || hasUSD).toBeTruthy();
   });
 });

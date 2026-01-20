@@ -144,10 +144,12 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
     if (monthData) {
       monthData.dividends.forEach(d => {
         const day = parseInt(d.date.split('-')[2], 10);
-        if (!map.has(day)) {
-          map.set(day, []);
+        const existing = map.get(day);
+        if (existing) {
+          existing.push(d);
+        } else {
+          map.set(day, [d]);
         }
-        map.get(day)!.push(d);
       });
     }
     return map;
@@ -159,10 +161,12 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
     if (enhancedMonthData) {
       enhancedMonthData.events.forEach(e => {
         const day = parseInt(e.date.split('-')[2], 10);
-        if (!map.has(day)) {
-          map.set(day, []);
+        const existing = map.get(day);
+        if (existing) {
+          existing.push(e);
+        } else {
+          map.set(day, [e]);
         }
-        map.get(day)!.push(e);
       });
     }
     return map;
@@ -436,9 +440,9 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                           }`}>
                             {day}
                           </div>
-                          {hasPayment && (
+                          {hasPayment && dividends && (
                             <div className="space-y-1">
-                              {dividends!.slice(0, 3).map((d, idx) => (
+                              {dividends.slice(0, 3).map((d, idx) => (
                                 <div
                                   key={idx}
                                   className="flex items-center gap-1 bg-green-100 dark:bg-green-900/30 rounded px-1 py-0.5 text-xs"
@@ -450,9 +454,9 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                                   </span>
                                 </div>
                               ))}
-                              {dividends!.length > 3 && (
+                              {dividends.length > 3 && (
                                 <div className="text-xs text-muted-foreground text-center">
-                                  +{dividends!.length - 3} weitere
+                                  +{dividends.length - 3} weitere
                                 </div>
                               )}
                             </div>
@@ -479,11 +483,11 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
 
                   // Determine day number color based on events
                   let dayColor = 'text-muted-foreground';
-                  if (hasEvents) {
-                    const hasExDiv = events!.some(e => e.eventType === 'ex_dividend');
-                    const hasPayment = events!.some(e => e.eventType === 'payment');
+                  if (hasEvents && events) {
+                    const hasExDiv = events.some(e => e.eventType === 'ex_dividend');
+                    const hasPaymentEvent = events.some(e => e.eventType === 'payment');
                     if (hasExDiv) dayColor = 'text-amber-600';
-                    else if (hasPayment) dayColor = 'text-green-600';
+                    else if (hasPaymentEvent) dayColor = 'text-green-600';
                   }
 
                   return (
@@ -498,9 +502,9 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                           <div className={`text-xs font-medium mb-1 ${dayColor}`}>
                             {day}
                           </div>
-                          {hasEvents && (
+                          {hasEvents && events && (
                             <div className="space-y-1">
-                              {events!.slice(0, 3).map((e, idx) => {
+                              {events.slice(0, 3).map((e, idx) => {
                                 const colors = EVENT_COLORS[e.eventType as keyof typeof EVENT_COLORS] || EVENT_COLORS.payment;
                                 return (
                                   <div
@@ -516,9 +520,9 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                                   </div>
                                 );
                               })}
-                              {events!.length > 3 && (
+                              {events.length > 3 && (
                                 <div className="text-xs text-muted-foreground text-center">
-                                  +{events!.length - 3} weitere
+                                  +{events.length - 3} weitere
                                 </div>
                               )}
                             </div>

@@ -98,7 +98,7 @@ test.describe('Watchlist View', () => {
       fullPage: true,
     });
 
-    expect(hasTechStocks || hasDividenden || true).toBeTruthy();
+    expect(hasTechStocks || hasDividenden).toBeTruthy();
   });
 
   test('Neue Watchlist Button existiert', async ({ page }) => {
@@ -113,7 +113,7 @@ test.describe('Watchlist View', () => {
       path: 'playwright-report/screenshots/watchlist-create-btn.png',
     });
 
-    expect(hasCreateBtn || true).toBeTruthy();
+    expect(hasCreateBtn).toBeTruthy();
   });
 
   test('Securities in Watchlist werden angezeigt', async ({ page }) => {
@@ -129,6 +129,6 @@ test.describe('Watchlist View', () => {
       fullPage: true,
     });
 
-    expect(hasApple || hasMicrosoft || true).toBeTruthy();
+    expect(hasApple || hasMicrosoft).toBeTruthy();
   });
 });

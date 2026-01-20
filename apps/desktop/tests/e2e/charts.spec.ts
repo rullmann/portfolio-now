@@ -86,7 +86,7 @@ test.describe('Charts View (Technische Analyse)', () => {
       fullPage: true,
     });
 
-    expect(hasSelect || true).toBeTruthy();
+    expect(hasSelect).toBeTruthy();
   });
 
   test('Chart-Container wird angezeigt', async ({ page }) => {
@@ -115,7 +115,7 @@ test.describe('Charts View (Technische Analyse)', () => {
       fullPage: true,
     });
 
-    expect(foundChart || true).toBeTruthy();
+    expect(foundChart).toBeTruthy();
   });
 
   test('Indikator-Optionen existieren', async ({ page }) => {
@@ -131,7 +131,7 @@ test.describe('Charts View (Technische Analyse)', () => {
       fullPage: true,
     });
 
-    expect(hasIndicators || true).toBeTruthy();
+    expect(hasIndicators).toBeTruthy();
   });
 
   test('Zeichenwerkzeuge existieren', async ({ page }) => {
@@ -150,6 +150,6 @@ test.describe('Charts View (Technische Analyse)', () => {
       fullPage: true,
     });
 
-    expect(hasDrawingTools || true).toBeTruthy();
+    expect(hasDrawingTools).toBeTruthy();
   });
 });

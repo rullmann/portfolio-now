@@ -115,7 +115,7 @@ test.describe('Investment Plans View (Sparpläne)', () => {
       fullPage: true,
     });
 
-    expect(hasETFSparplan || hasAktienSparplan || true).toBeTruthy();
+    expect(hasETFSparplan || hasAktienSparplan).toBeTruthy();
   });
 
   test('Neuer Sparplan Button existiert', async ({ page }) => {
@@ -130,7 +130,7 @@ test.describe('Investment Plans View (Sparpläne)', () => {
       path: 'playwright-report/screenshots/investment-plans-create-btn.png',
     });
 
-    expect(hasCreateBtn || true).toBeTruthy();
+    expect(hasCreateBtn).toBeTruthy();
   });
 
   test('Intervall wird angezeigt', async ({ page }) => {
@@ -145,7 +145,7 @@ test.describe('Investment Plans View (Sparpläne)', () => {
       fullPage: true,
     });
 
-    expect(hasInterval || true).toBeTruthy();
+    expect(hasInterval).toBeTruthy();
   });
 
   test('Ausführen Button existiert', async ({ page }) => {
@@ -160,6 +160,6 @@ test.describe('Investment Plans View (Sparpläne)', () => {
       path: 'playwright-report/screenshots/investment-plans-execute.png',
     });
 
-    expect(hasExecuteBtn || true).toBeTruthy();
+    expect(hasExecuteBtn).toBeTruthy();
   });
 });

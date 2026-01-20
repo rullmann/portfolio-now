@@ -100,7 +100,7 @@ test.describe('Screener View', () => {
       fullPage: true,
     });
 
-    expect(hasSearch || true).toBeTruthy();
+    expect(hasSearch).toBeTruthy();
   });
 
   test('Filter-Optionen existieren', async ({ page }) => {
@@ -116,7 +116,7 @@ test.describe('Screener View', () => {
       fullPage: true,
     });
 
-    expect(hasFilters || true).toBeTruthy();
+    expect(hasFilters).toBeTruthy();
   });
 
   test('Ergebnistabelle wird angezeigt', async ({ page }) => {
@@ -132,7 +132,7 @@ test.describe('Screener View', () => {
       fullPage: true,
     });
 
-    expect(hasTable || true).toBeTruthy();
+    expect(hasTable).toBeTruthy();
   });
 
   test('Sortierung kann geändert werden', async ({ page }) => {
@@ -148,6 +148,6 @@ test.describe('Screener View', () => {
       fullPage: true,
     });
 
-    expect(hasSortable || true).toBeTruthy();
+    expect(hasSortable).toBeTruthy();
   });
 });

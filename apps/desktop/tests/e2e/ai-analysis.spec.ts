@@ -115,7 +115,7 @@ test.describe('AI Chart Analysis', () => {
       fullPage: true,
     });
 
-    expect(hasAIButton || true).toBeTruthy();
+    expect(hasAIButton).toBeTruthy();
   });
 
   test('Indikator-Panel wird angezeigt', async ({ page }) => {
@@ -133,7 +133,7 @@ test.describe('AI Chart Analysis', () => {
       fullPage: true,
     });
 
-    expect(hasIndicators || true).toBeTruthy();
+    expect(hasIndicators).toBeTruthy();
   });
 
   test('Erweiterte Analyse Toggle existiert', async ({ page }) => {
@@ -153,7 +153,7 @@ test.describe('AI Chart Analysis', () => {
       fullPage: true,
     });
 
-    expect(hasEnhancedToggle || true).toBeTruthy();
+    expect(hasEnhancedToggle).toBeTruthy();
   });
 
   test('Signal Panel existiert', async ({ page }) => {
@@ -171,7 +171,7 @@ test.describe('AI Chart Analysis', () => {
       fullPage: true,
     });
 
-    expect(hasSignalPanel || true).toBeTruthy();
+    expect(hasSignalPanel).toBeTruthy();
   });
 });
 
@@ -196,7 +196,7 @@ test.describe('Portfolio Insights (KI-Analyse)', () => {
       fullPage: true,
     });
 
-    expect(hasInsightsButton || true).toBeTruthy();
+    expect(hasInsightsButton).toBeTruthy();
   });
 
   test('KI-Insights Modal kann geöffnet werden', async ({ page }) => {
@@ -218,7 +218,7 @@ test.describe('Portfolio Insights (KI-Analyse)', () => {
         fullPage: true,
       });
 
-      expect(hasModal || true).toBeTruthy();
+      expect(hasModal).toBeTruthy();
     }
   });
 
@@ -242,7 +242,7 @@ test.describe('Portfolio Insights (KI-Analyse)', () => {
         fullPage: true,
       });
 
-      expect(hasStaerken || hasRisiken || hasEmpfehlungen || true).toBeTruthy();
+      expect(hasStaerken || hasRisiken || hasEmpfehlungen).toBeTruthy();
     }
   });
 });
@@ -277,7 +277,7 @@ test.describe('AI Provider Configuration', () => {
       fullPage: true,
     });
 
-    expect(foundProvider || true).toBeTruthy();
+    expect(foundProvider).toBeTruthy();
   });
 
   test('Settings zeigt KI-Modell Auswahl', async ({ page }) => {
@@ -295,7 +295,7 @@ test.describe('AI Provider Configuration', () => {
       fullPage: true,
     });
 
-    expect(hasModelSelect || true).toBeTruthy();
+    expect(hasModelSelect).toBeTruthy();
   });
 
   test('API-Key Felder sind geschützt', async ({ page }) => {
@@ -317,6 +317,6 @@ test.describe('AI Provider Configuration', () => {
       fullPage: true,
     });
 
-    expect(hasPasswordFields || hasShieldIcon || true).toBeTruthy();
+    expect(hasPasswordFields || hasShieldIcon).toBeTruthy();
   });
 });

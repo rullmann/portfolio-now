@@ -95,7 +95,7 @@ test.describe('Taxonomies View', () => {
       fullPage: true,
     });
 
-    expect(hasAssetKlassen || hasRegionen || true).toBeTruthy();
+    expect(hasAssetKlassen || hasRegionen).toBeTruthy();
   });
 
   test('Baum-Struktur wird angezeigt', async ({ page }) => {
@@ -112,7 +112,7 @@ test.describe('Taxonomies View', () => {
       fullPage: true,
     });
 
-    expect(hasTree || hasExpander || true).toBeTruthy();
+    expect(hasTree || hasExpander).toBeTruthy();
   });
 
   test('Gewichtungen werden angezeigt', async ({ page }) => {
@@ -127,6 +127,6 @@ test.describe('Taxonomies View', () => {
       fullPage: true,
     });
 
-    expect(hasPercentage || true).toBeTruthy();
+    expect(hasPercentage).toBeTruthy();
   });
 });

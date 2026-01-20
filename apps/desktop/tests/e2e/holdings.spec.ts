@@ -119,7 +119,7 @@ test.describe('Holdings View', () => {
       fullPage: true,
     });
 
-    expect(hasApple || hasMicrosoft || hasSAP || true).toBeTruthy();
+    expect(hasApple || hasMicrosoft || hasSAP).toBeTruthy();
   });
 
   test('Donut-Chart für Allokation wird angezeigt', async ({ page }) => {
@@ -148,7 +148,7 @@ test.describe('Holdings View', () => {
       fullPage: true,
     });
 
-    expect(foundChart || true).toBeTruthy();
+    expect(foundChart).toBeTruthy();
   });
 
   test('Gewinn/Verlust wird farbig angezeigt', async ({ page }) => {
@@ -164,6 +164,6 @@ test.describe('Holdings View', () => {
       fullPage: true,
     });
 
-    expect(hasGreenText || true).toBeTruthy();
+    expect(hasGreenText).toBeTruthy();
   });
 });

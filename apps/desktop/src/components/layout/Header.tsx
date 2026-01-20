@@ -207,7 +207,14 @@ export function Header({
                           <button
                             key={action.action}
                             onClick={() => {
-                              // TODO: Handle context action
+                              // Handle context-specific actions
+                              if (action.action === 'diversification') {
+                                setInsightsMode('insights');
+                                setShowInsightsModal(true);
+                              } else if (action.action === 'chart') {
+                                // Charts view is already active, trigger analysis via scroll target
+                                useUIStore.getState().setScrollTarget('chart-analysis');
+                              }
                               setShowAiMenu(false);
                             }}
                             className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"

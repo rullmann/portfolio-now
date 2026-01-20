@@ -119,7 +119,7 @@ test.describe('Allocation Alerts - Rebalancing View', () => {
   test('Rebalancing-View wird geladen', async ({ page }) => {
     // Check for Rebalancing page content
     const hasRebalancingContent = await page.locator('text=/Rebalancing|Ziel|Allokation/i').count() > 0;
-    expect(hasRebalancingContent || true).toBeTruthy();
+    expect(hasRebalancingContent).toBeTruthy();
   });
 
   test('Warnungen-Button ist sichtbar', async ({ page }) => {
@@ -143,7 +143,7 @@ test.describe('Allocation Alerts - Rebalancing View', () => {
 
       // Check if alerts panel is visible
       const hasAlertsContent = await page.locator('text=/kritisch|Warnung|Zielgewichtung/i').count() > 0;
-      expect(hasAlertsContent || true).toBeTruthy();
+      expect(hasAlertsContent).toBeTruthy();
     }
 
     await page.screenshot({
@@ -222,7 +222,7 @@ test.describe('Allocation Alerts - Widget', () => {
     }
 
     // This is a soft check since alerts widget may not be on default dashboard
-    expect(foundAlertsWidget || true).toBeTruthy();
+    expect(foundAlertsWidget).toBeTruthy();
 
     await page.screenshot({
       path: 'playwright-report/screenshots/alerts-widget.png',
@@ -283,7 +283,7 @@ test.describe('Allocation Target Management', () => {
 
         // Check for target entries
         const hasTargets = await page.locator('text=/Apple|Microsoft|Ziel:/i').count() > 0;
-        expect(hasTargets || true).toBeTruthy();
+        expect(hasTargets).toBeTruthy();
       }
     }
 

@@ -93,7 +93,7 @@ test.describe('Portfolio View', () => {
       fullPage: true,
     });
 
-    expect(hasHauptdepot || hasSparplan || true).toBeTruthy();
+    expect(hasHauptdepot || hasSparplan).toBeTruthy();
   });
 
   test('Neues Portfolio erstellen Button existiert', async ({ page }) => {
@@ -108,7 +108,7 @@ test.describe('Portfolio View', () => {
       path: 'playwright-report/screenshots/portfolio-create-btn.png',
     });
 
-    expect(hasCreateBtn || true).toBeTruthy();
+    expect(hasCreateBtn).toBeTruthy();
   });
 
   test('Portfolio Details werden angezeigt', async ({ page }) => {
@@ -136,6 +136,6 @@ test.describe('Portfolio View', () => {
       fullPage: true,
     });
 
-    expect(foundDetail || true).toBeTruthy();
+    expect(foundDetail).toBeTruthy();
   });
 });

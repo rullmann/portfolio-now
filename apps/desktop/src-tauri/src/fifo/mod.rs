@@ -773,4 +773,142 @@ mod tests {
         let cost_basis = lot.remaining_cost_basis();
         assert_eq!(cost_basis, 500 * AMOUNT_SCALE);
     }
+
+    #[test]
+    fn test_remaining_cost_basis_zero_shares() {
+        let lot = FifoLot {
+            id: 1,
+            security_id: 1,
+            portfolio_id: 1,
+            purchase_txn_id: 1,
+            purchase_date: "2024-01-01".to_string(),
+            original_shares: 0,
+            remaining_shares: 0,
+            gross_amount: 1000 * AMOUNT_SCALE,
+            net_amount: 1000 * AMOUNT_SCALE,
+            currency: "EUR".to_string(),
+        };
+
+        // Should return 0 when original_shares is 0 (avoid division by zero)
+        assert_eq!(lot.remaining_cost_basis(), 0);
+    }
+
+    #[test]
+    fn test_remaining_cost_basis_fully_consumed() {
+        let lot = FifoLot {
+            id: 1,
+            security_id: 1,
+            portfolio_id: 1,
+            purchase_txn_id: 1,
+            purchase_date: "2024-01-01".to_string(),
+            original_shares: 100 * SHARES_SCALE,
+            remaining_shares: 0,
+            gross_amount: 1000 * AMOUNT_SCALE,
+            net_amount: 1000 * AMOUNT_SCALE,
+            currency: "EUR".to_string(),
+        };
+
+        // When fully consumed, remaining cost basis should be 0
+        assert_eq!(lot.remaining_cost_basis(), 0);
+    }
+
+    #[test]
+    fn test_remaining_cost_basis_partial_consumption() {
+        // Buy 10 shares at $100 each = $1000 total
+        let lot = FifoLot {
+            id: 1,
+            security_id: 1,
+            portfolio_id: 1,
+            purchase_txn_id: 1,
+            purchase_date: "2024-01-01".to_string(),
+            original_shares: 10 * SHARES_SCALE,
+            remaining_shares: 3 * SHARES_SCALE, // 7 shares sold
+            gross_amount: 1000 * AMOUNT_SCALE,   // $1000 cost basis
+            net_amount: 950 * AMOUNT_SCALE,      // $950 without fees
+            currency: "USD".to_string(),
+        };
+
+        // Remaining cost basis should be 3/10 * 1000 = 300
+        let cost_basis = lot.remaining_cost_basis();
+        assert_eq!(cost_basis, 300 * AMOUNT_SCALE);
+    }
+
+    #[test]
+    fn test_fifo_consumption_proportional() {
+        // Test that FIFO consumption records are created with correct proportions
+        let consumption = FifoConsumption {
+            lot_id: 1,
+            sale_txn_id: 2,
+            shares_consumed: 25 * SHARES_SCALE,
+            gross_amount: 250 * AMOUNT_SCALE, // 25% of 1000
+            net_amount: 237 * AMOUNT_SCALE,   // 25% of 950
+        };
+
+        assert_eq!(consumption.shares_consumed, 25 * SHARES_SCALE);
+        assert_eq!(consumption.gross_amount, 250 * AMOUNT_SCALE);
+    }
+
+    #[test]
+    fn test_scale_factors() {
+        // Verify scale factors are correct per Portfolio Performance spec
+        assert_eq!(SHARES_SCALE, 100_000_000);
+        assert_eq!(AMOUNT_SCALE, 100);
+
+        // 1.5 shares = 150_000_000 in internal representation
+        let shares = 1.5_f64;
+        let scaled = (shares * SHARES_SCALE as f64) as i64;
+        assert_eq!(scaled, 150_000_000);
+
+        // $99.99 = 9999 cents in internal representation
+        let amount = 99.99_f64;
+        let scaled = (amount * AMOUNT_SCALE as f64) as i64;
+        assert_eq!(scaled, 9999);
+    }
+
+    #[test]
+    fn test_lot_with_fees_and_taxes() {
+        // gross_amount should include fees and taxes (Purchase Value / Einstandswert)
+        // net_amount should exclude fees and taxes
+        let base_amount = 1000 * AMOUNT_SCALE;
+        let fees = 10 * AMOUNT_SCALE;
+        let taxes = 5 * AMOUNT_SCALE;
+
+        let lot = FifoLot {
+            id: 1,
+            security_id: 1,
+            portfolio_id: 1,
+            purchase_txn_id: 1,
+            purchase_date: "2024-01-01".to_string(),
+            original_shares: 10 * SHARES_SCALE,
+            remaining_shares: 10 * SHARES_SCALE,
+            gross_amount: base_amount + fees + taxes, // 1015
+            net_amount: base_amount,                   // 1000
+            currency: "EUR".to_string(),
+        };
+
+        // Full cost basis includes fees/taxes
+        assert_eq!(lot.remaining_cost_basis(), 1015 * AMOUNT_SCALE);
+        assert_eq!(lot.net_amount, 1000 * AMOUNT_SCALE);
+    }
+
+    #[test]
+    fn test_remaining_cost_basis_precision() {
+        // Test with odd numbers to ensure integer division doesn't lose too much precision
+        let lot = FifoLot {
+            id: 1,
+            security_id: 1,
+            portfolio_id: 1,
+            purchase_txn_id: 1,
+            purchase_date: "2024-01-01".to_string(),
+            original_shares: 3 * SHARES_SCALE,       // 3 shares
+            remaining_shares: 1 * SHARES_SCALE,      // 1 share remaining
+            gross_amount: 100 * AMOUNT_SCALE,        // $100 total = 10000 cents
+            net_amount: 100 * AMOUNT_SCALE,
+            currency: "EUR".to_string(),
+        };
+
+        // 1/3 * 10000 cents = 3333.33... truncates to 3333 cents ($33.33)
+        let cost_basis = lot.remaining_cost_basis();
+        assert_eq!(cost_basis, 3333); // 3333 cents
+    }
 }

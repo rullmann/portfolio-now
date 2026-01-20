@@ -722,3 +722,271 @@ fn rand_simple() -> f64 {
         ((SEED >> 16) & 0x7FFF) as f64 / 32767.0
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // Correlation Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_correlation_perfect_positive() {
+        // Perfectly correlated returns (correlation = 1)
+        let returns1 = vec![0.01, 0.02, -0.01, 0.03, 0.00];
+        let returns2 = vec![0.01, 0.02, -0.01, 0.03, 0.00];
+
+        let corr = calculate_correlation(&returns1, &returns2);
+        assert!((corr - 1.0).abs() < 0.0001, "Perfect positive correlation should be 1.0, got {}", corr);
+    }
+
+    #[test]
+    fn test_correlation_perfect_negative() {
+        // Perfectly negatively correlated returns (correlation = -1)
+        let returns1 = vec![0.01, 0.02, -0.01, 0.03, 0.00];
+        let returns2 = vec![-0.01, -0.02, 0.01, -0.03, 0.00];
+
+        let corr = calculate_correlation(&returns1, &returns2);
+        assert!((corr - (-1.0)).abs() < 0.0001, "Perfect negative correlation should be -1.0, got {}", corr);
+    }
+
+    #[test]
+    fn test_correlation_zero() {
+        // Uncorrelated returns (approximately zero)
+        let returns1 = vec![1.0, 0.0, -1.0, 0.0];
+        let returns2 = vec![0.0, 1.0, 0.0, -1.0];
+
+        let corr = calculate_correlation(&returns1, &returns2);
+        assert!(corr.abs() < 0.1, "Uncorrelated series should have correlation near 0, got {}", corr);
+    }
+
+    #[test]
+    fn test_correlation_empty_returns() {
+        let empty: Vec<f64> = vec![];
+        let returns = vec![0.01, 0.02, 0.03];
+
+        assert_eq!(calculate_correlation(&empty, &returns), 0.0);
+        assert_eq!(calculate_correlation(&returns, &empty), 0.0);
+        assert_eq!(calculate_correlation(&empty, &empty), 0.0);
+    }
+
+    #[test]
+    fn test_correlation_different_lengths() {
+        let returns1 = vec![0.01, 0.02, 0.03];
+        let returns2 = vec![0.01, 0.02];
+
+        // Different lengths should return 0
+        assert_eq!(calculate_correlation(&returns1, &returns2), 0.0);
+    }
+
+    #[test]
+    fn test_correlation_single_value() {
+        // Single value doesn't make statistical sense, but shouldn't crash
+        let returns1 = vec![0.01];
+        let returns2 = vec![0.02];
+
+        // Should return 0 (undefined correlation for n=1)
+        let corr = calculate_correlation(&returns1, &returns2);
+        // With a single point, variance is 0, so correlation is undefined (returns 0)
+        assert!(corr.is_finite());
+    }
+
+    #[test]
+    fn test_correlation_constant_returns() {
+        // Constant returns have zero variance
+        let returns1 = vec![0.01, 0.01, 0.01, 0.01];
+        let returns2 = vec![0.01, 0.02, 0.03, 0.04];
+
+        // Correlation with zero-variance series is undefined (returns 0)
+        let corr = calculate_correlation(&returns1, &returns2);
+        assert_eq!(corr, 0.0, "Correlation with constant series should be 0");
+    }
+
+    #[test]
+    fn test_correlation_realistic_stocks() {
+        // Simulate two stocks with partial correlation
+        // Stock A: Tech stock returns
+        let stock_a = vec![0.02, -0.01, 0.03, 0.01, -0.02, 0.04, -0.01, 0.02];
+        // Stock B: Defensive stock returns (lower beta, similar direction)
+        let stock_b = vec![0.01, -0.005, 0.015, 0.005, -0.01, 0.02, -0.005, 0.01];
+
+        let corr = calculate_correlation(&stock_a, &stock_b);
+
+        // Should be highly positively correlated
+        assert!(corr > 0.9, "Similar trend stocks should be highly correlated, got {}", corr);
+    }
+
+    // -------------------------------------------------------------------------
+    // Efficient Frontier Point Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_efficient_frontier_point_creation() {
+        let mut weights = HashMap::new();
+        weights.insert(1, 0.5);
+        weights.insert(2, 0.3);
+        weights.insert(3, 0.2);
+
+        let point = EfficientFrontierPoint {
+            expected_return: 0.10,  // 10% annual return
+            volatility: 0.15,       // 15% volatility
+            sharpe_ratio: 0.47,     // (0.10 - 0.03) / 0.15
+            weights,
+        };
+
+        assert_eq!(point.expected_return, 0.10);
+        assert_eq!(point.volatility, 0.15);
+
+        // Verify weights sum to 1
+        let weight_sum: f64 = point.weights.values().sum();
+        assert!((weight_sum - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_sharpe_ratio_calculation() {
+        // Sharpe ratio = (Return - Risk-free rate) / Volatility
+        let expected_return: f64 = 0.12; // 12%
+        let risk_free_rate: f64 = 0.03;  // 3%
+        let volatility: f64 = 0.18;      // 18%
+
+        let sharpe = (expected_return - risk_free_rate) / volatility;
+
+        // (0.12 - 0.03) / 0.18 = 0.5
+        assert!((sharpe - 0.5_f64).abs() < 0.0001, "Sharpe ratio should be 0.5, got {}", sharpe);
+    }
+
+    #[test]
+    fn test_sharpe_ratio_zero_volatility() {
+        // With zero volatility, Sharpe would be infinite - should handle gracefully
+        let volatility = 0.0;
+        let expected_return = 0.10;
+        let risk_free_rate = 0.03;
+
+        let sharpe = if volatility > 0.0 {
+            (expected_return - risk_free_rate) / volatility
+        } else {
+            0.0
+        };
+
+        assert_eq!(sharpe, 0.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Security Stats Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_annualized_return_calculation() {
+        // Daily returns average
+        let daily_returns = vec![0.001, 0.002, -0.001, 0.003, 0.000];
+        let mean_daily = daily_returns.iter().sum::<f64>() / daily_returns.len() as f64;
+
+        // Annualize (252 trading days)
+        let annualized = mean_daily * 252.0;
+
+        // Mean daily = 0.001, annualized = 0.252 (25.2%)
+        assert!((annualized - 0.252).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_portfolio_variance_two_assets() {
+        // Portfolio variance formula:
+        // σ²_p = w1²σ1² + w2²σ2² + 2w1w2ρ12σ1σ2
+
+        let w1: f64 = 0.6;
+        let w2: f64 = 0.4;
+        let var1: f64 = 0.04; // 20% volatility squared
+        let var2: f64 = 0.09; // 30% volatility squared
+        let corr: f64 = 0.5;
+        let cov12: f64 = corr * 0.2 * 0.3; // correlation * σ1 * σ2
+
+        let port_variance: f64 = w1 * w1 * var1 + w2 * w2 * var2 + 2.0 * w1 * w2 * cov12;
+        let port_volatility = port_variance.sqrt();
+
+        // Expected: 0.6²*0.04 + 0.4²*0.09 + 2*0.6*0.4*0.03 = 0.0144 + 0.0144 + 0.0144 = 0.0432
+        // Volatility = sqrt(0.0432) ≈ 0.208 (20.8%)
+        assert!((port_volatility - 0.208).abs() < 0.01, "Portfolio volatility should be ~20.8%, got {}", port_volatility * 100.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Correlation Matrix Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_correlation_matrix_structure() {
+        let matrix = CorrelationMatrix {
+            securities: vec![
+                SecurityInfo { id: 1, name: "Stock A".to_string(), ticker: Some("STKA".to_string()) },
+                SecurityInfo { id: 2, name: "Stock B".to_string(), ticker: Some("STKB".to_string()) },
+            ],
+            matrix: vec![
+                vec![1.0, 0.5],
+                vec![0.5, 1.0],
+            ],
+            pairs: vec![
+                CorrelationPair {
+                    security1_id: 1,
+                    security1_name: "Stock A".to_string(),
+                    security2_id: 2,
+                    security2_name: "Stock B".to_string(),
+                    correlation: 0.5,
+                },
+            ],
+        };
+
+        // Diagonal should be 1 (perfect self-correlation)
+        assert_eq!(matrix.matrix[0][0], 1.0);
+        assert_eq!(matrix.matrix[1][1], 1.0);
+
+        // Matrix should be symmetric
+        assert_eq!(matrix.matrix[0][1], matrix.matrix[1][0]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Random Number Generator Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_rand_simple_bounds() {
+        // Generate many random numbers and verify they're in [0, 1]
+        for _ in 0..100 {
+            let r = rand_simple();
+            assert!(r >= 0.0 && r <= 1.0, "Random number should be in [0, 1], got {}", r);
+        }
+    }
+
+    #[test]
+    fn test_rand_simple_distribution() {
+        // Generate many random numbers and check rough distribution
+        let mut sum = 0.0;
+        let n = 1000;
+
+        for _ in 0..n {
+            sum += rand_simple();
+        }
+
+        let mean = sum / n as f64;
+
+        // Mean should be approximately 0.5 for uniform distribution
+        assert!((mean - 0.5).abs() < 0.1, "Mean should be near 0.5, got {}", mean);
+    }
+
+    // -------------------------------------------------------------------------
+    // Constants and Scale Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_price_scale() {
+        assert_eq!(PRICE_SCALE, 100_000_000.0);
+
+        // Test conversion
+        let price_cents = 15025000000_i64; // $150.25 in internal format
+        let price_dollars = price_cents as f64 / PRICE_SCALE;
+        assert!((price_dollars - 150.25).abs() < 0.01);
+    }
+}

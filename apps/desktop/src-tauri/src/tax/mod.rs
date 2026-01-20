@@ -515,3 +515,217 @@ pub fn update_freistellung_used(year: i32, amount: f64) -> Result<(), String> {
     settings.freistellung_used = amount.max(0.0).min(settings.freistellung_limit);
     save_tax_settings(settings)
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // Freistellung Limit Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_freistellung_limit_single_2023() {
+        // Since 2023: 1000€ for single persons
+        let limit = get_freistellung_limit(2023, false);
+        assert_eq!(limit, 1000.0);
+    }
+
+    #[test]
+    fn test_freistellung_limit_married_2023() {
+        // Since 2023: 2000€ for married couples
+        let limit = get_freistellung_limit(2023, true);
+        assert_eq!(limit, 2000.0);
+    }
+
+    #[test]
+    fn test_freistellung_limit_single_2022() {
+        // Before 2023: 801€ for single persons
+        let limit = get_freistellung_limit(2022, false);
+        assert_eq!(limit, 801.0);
+    }
+
+    #[test]
+    fn test_freistellung_limit_married_2022() {
+        // Before 2023: 1602€ for married couples
+        let limit = get_freistellung_limit(2022, true);
+        assert_eq!(limit, 1602.0);
+    }
+
+    #[test]
+    fn test_freistellung_limit_2024() {
+        // 2024 should use the new limits
+        let limit = get_freistellung_limit(2024, false);
+        assert_eq!(limit, 1000.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Abgeltungssteuer Calculation Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_abgeltungssteuer_zero_income() {
+        let (abst, soli, kist) = calculate_abgeltungssteuer(0.0, None);
+        assert_eq!(abst, 0.0);
+        assert_eq!(soli, 0.0);
+        assert_eq!(kist, 0.0);
+    }
+
+    #[test]
+    fn test_abgeltungssteuer_negative_income() {
+        // Negative income should return zero taxes
+        let (abst, soli, kist) = calculate_abgeltungssteuer(-1000.0, None);
+        assert_eq!(abst, 0.0);
+        assert_eq!(soli, 0.0);
+        assert_eq!(kist, 0.0);
+    }
+
+    #[test]
+    fn test_abgeltungssteuer_without_kirchensteuer() {
+        // 1000€ taxable income without Kirchensteuer
+        // Abgeltungssteuer: 1000 * 0.25 = 250€
+        // Soli: 250 * 0.055 = 13.75€
+        let (abst, soli, kist) = calculate_abgeltungssteuer(1000.0, None);
+
+        assert!((abst - 250.0).abs() < 0.01, "Abgeltungssteuer should be 250€, got {}", abst);
+        assert!((soli - 13.75).abs() < 0.01, "Soli should be 13.75€, got {}", soli);
+        assert_eq!(kist, 0.0, "Kirchensteuer should be 0€");
+    }
+
+    #[test]
+    fn test_abgeltungssteuer_with_kirchensteuer_8_percent() {
+        // 1000€ taxable income with 8% Kirchensteuer (most Bundesländer)
+        // Effective rate: 0.25 / 1.08 = 0.23148...
+        // Abgeltungssteuer: 1000 * 0.23148 = 231.48€
+        // Soli: 231.48 * 0.055 = 12.73€
+        // Kirchensteuer: 231.48 * 0.08 = 18.52€
+        let (abst, soli, kist) = calculate_abgeltungssteuer(1000.0, Some(0.08));
+
+        let expected_abst = 1000.0 * (0.25 / 1.08);
+        assert!((abst - expected_abst).abs() < 0.01, "Abgeltungssteuer should be ~231.48€, got {}", abst);
+
+        let expected_soli = expected_abst * 0.055;
+        assert!((soli - expected_soli).abs() < 0.01, "Soli should be ~12.73€, got {}", soli);
+
+        let expected_kist = expected_abst * 0.08;
+        assert!((kist - expected_kist).abs() < 0.01, "Kirchensteuer should be ~18.52€, got {}", kist);
+    }
+
+    #[test]
+    fn test_abgeltungssteuer_with_kirchensteuer_9_percent() {
+        // 1000€ taxable income with 9% Kirchensteuer (Bayern, Baden-Württemberg)
+        // Effective rate: 0.25 / 1.09 = 0.22936...
+        let (abst, soli, kist) = calculate_abgeltungssteuer(1000.0, Some(0.09));
+
+        let expected_abst = 1000.0 * (0.25 / 1.09);
+        assert!((abst - expected_abst).abs() < 0.01, "Abgeltungssteuer should be ~229.36€, got {}", abst);
+
+        let expected_kist = expected_abst * 0.09;
+        assert!((kist - expected_kist).abs() < 0.01, "Kirchensteuer should be ~20.64€, got {}", kist);
+    }
+
+    #[test]
+    fn test_total_tax_rate_without_kirchensteuer() {
+        // Total effective rate without Kirchensteuer: 25% + 5.5% Soli = 26.375%
+        let taxable = 10000.0;
+        let (abst, soli, _) = calculate_abgeltungssteuer(taxable, None);
+        let total = abst + soli;
+        let effective_rate = total / taxable;
+
+        assert!((effective_rate - 0.26375).abs() < 0.0001,
+            "Effective rate should be 26.375%, got {}%", effective_rate * 100.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Foreign Withholding Tax Credit Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_creditable_wht_under_limit() {
+        // Foreign tax is under the 15% limit, fully creditable
+        let gross = 1000.0;
+        let foreign_tax = 100.0; // 10%
+        let credit = calculate_creditable_wht(foreign_tax, gross);
+
+        assert_eq!(credit, 100.0, "Full amount should be creditable");
+    }
+
+    #[test]
+    fn test_creditable_wht_at_limit() {
+        // Foreign tax is exactly at the 15% limit
+        let gross = 1000.0;
+        let foreign_tax = 150.0; // 15%
+        let credit = calculate_creditable_wht(foreign_tax, gross);
+
+        assert_eq!(credit, 150.0, "Full amount should be creditable at limit");
+    }
+
+    #[test]
+    fn test_creditable_wht_over_limit() {
+        // Foreign tax exceeds 15% limit (e.g., Swiss 35%)
+        let gross = 1000.0;
+        let foreign_tax = 350.0; // 35%
+        let credit = calculate_creditable_wht(foreign_tax, gross);
+
+        // Only 15% is creditable in Germany
+        assert_eq!(credit, 150.0, "Only 15% should be creditable");
+    }
+
+    #[test]
+    fn test_creditable_wht_zero_income() {
+        let credit = calculate_creditable_wht(100.0, 0.0);
+        assert_eq!(credit, 0.0, "No credit with zero gross income");
+    }
+
+    // -------------------------------------------------------------------------
+    // Tax Settings Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_tax_settings_defaults() {
+        let settings = TaxSettings {
+            year: 2024,
+            is_married: false,
+            kirchensteuer_rate: None,
+            bundesland: None,
+            freistellung_limit: 1000.0,
+            freistellung_used: 0.0,
+        };
+
+        assert_eq!(settings.year, 2024);
+        assert!(!settings.is_married);
+        assert!(settings.kirchensteuer_rate.is_none());
+    }
+
+    #[test]
+    fn test_tax_settings_with_kirchensteuer() {
+        let settings = TaxSettings {
+            year: 2024,
+            is_married: true,
+            kirchensteuer_rate: Some(0.09),
+            bundesland: Some("Bayern".to_string()),
+            freistellung_limit: 2000.0,
+            freistellung_used: 500.0,
+        };
+
+        assert!(settings.is_married);
+        assert_eq!(settings.kirchensteuer_rate, Some(0.09));
+        assert_eq!(settings.bundesland, Some("Bayern".to_string()));
+        assert_eq!(settings.freistellung_limit, 2000.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Constants Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_tax_constants() {
+        assert_eq!(ABGELTUNGSSTEUER_RATE, 0.25);
+        assert_eq!(SOLI_RATE, 0.055);
+        assert_eq!(MAX_CREDITABLE_WHT, 0.15);
+    }
+}

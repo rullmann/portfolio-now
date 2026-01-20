@@ -111,7 +111,7 @@ test.describe('Tauri App - Real E2E Tests', () => {
       fullPage: true,
     });
 
-    expect(hasDashboard || true).toBeTruthy();
+    expect(hasDashboard).toBeTruthy();
   });
 
   test('Navigation funktioniert', async ({ page }) => {

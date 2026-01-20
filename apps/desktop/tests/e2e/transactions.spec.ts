@@ -125,7 +125,7 @@ test.describe('Transactions View', () => {
       fullPage: true,
     });
 
-    expect(hasBuy || hasDividend || true).toBeTruthy();
+    expect(hasBuy || hasDividend).toBeTruthy();
   });
 
   test('Neue Buchung Button existiert', async ({ page }) => {
@@ -140,7 +140,7 @@ test.describe('Transactions View', () => {
       path: 'playwright-report/screenshots/transactions-create-btn.png',
     });
 
-    expect(hasCreateBtn || true).toBeTruthy();
+    expect(hasCreateBtn).toBeTruthy();
   });
 
   test('Filter-Optionen sind vorhanden', async ({ page }) => {
@@ -156,7 +156,7 @@ test.describe('Transactions View', () => {
       fullPage: true,
     });
 
-    expect(hasFilter || true).toBeTruthy();
+    expect(hasFilter).toBeTruthy();
   });
 
   test('Pagination wird angezeigt', async ({ page }) => {
@@ -176,6 +176,6 @@ test.describe('Transactions View', () => {
       fullPage: true,
     });
 
-    expect(hasPagination || true).toBeTruthy();
+    expect(hasPagination).toBeTruthy();
   });
 });
