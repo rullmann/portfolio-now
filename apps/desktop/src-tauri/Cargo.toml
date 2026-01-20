@@ -1,6 +1,6 @@
 [package]
 name = "portfolio-now"
-version = "0.1.3"
+version = "0.1.4"
 description = "Modern investment portfolio tracking and analysis"
 authors = ["Portfolio Now Contributors"]
 license = "EPL-1.0"
