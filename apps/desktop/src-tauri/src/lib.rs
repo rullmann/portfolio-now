@@ -14,6 +14,7 @@ pub mod protobuf;
 pub mod quotes;
 pub mod security;
 pub mod tax;
+pub mod validation;
 
 use tauri::Manager;
 
@@ -76,6 +77,8 @@ pub fn run() {
             commands::quotes::apply_quote_suggestion,
             commands::quotes::get_unconfigured_securities_count,
             commands::quotes::audit_quote_configurations,
+            commands::quotes::get_quote_fix_suggestions,
+            commands::quotes::apply_quote_fix,
             // New PP Import commands
             commands::import::import_pp_file,
             commands::import::get_imports,
@@ -276,6 +279,14 @@ pub fn run() {
             commands::ai::analyze_portfolio_with_ai,
             commands::ai::chat_with_portfolio_assistant,
             commands::ai::execute_confirmed_ai_action,
+            // AI Transaction Commands
+            commands::ai::execute_confirmed_transaction,
+            commands::ai::execute_confirmed_portfolio_transfer,
+            // Chat History Persistence
+            commands::chat::save_chat_message,
+            commands::chat::get_chat_history,
+            commands::chat::clear_chat_history,
+            commands::chat::delete_chat_message,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,
@@ -334,6 +345,11 @@ pub fn run() {
             // DivvyDiary Export
             commands::divvydiary::get_divvydiary_portfolios,
             commands::divvydiary::upload_to_divvydiary,
+            // Symbol Validation
+            commands::validation::validate_all_securities_cmd,
+            commands::validation::validate_security_cmd,
+            commands::validation::apply_validation_result_cmd,
+            commands::validation::get_validation_status_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

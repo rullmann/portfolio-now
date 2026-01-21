@@ -27,6 +27,7 @@ pub mod parsing;
 // Portfolio context and command parsing
 pub mod command_parser;
 pub mod context;
+pub mod query_templates;
 
 // ============================================================================
 // Re-exports from types module
@@ -55,6 +56,8 @@ pub use types::{
     PortfolioInsightsResponse,
     // Chat types
     ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
+    // Transaction command types
+    TransactionCreateCommand, PortfolioTransferCommand, TransactionValidationResult,
     // Model listing
     AiModelInfo,
 };
@@ -109,6 +112,8 @@ pub use command_parser::{
     parse_watchlist_commands,
     parse_transaction_queries, execute_transaction_queries,
     parse_portfolio_value_queries, execute_portfolio_value_queries,
+    // Transaction command parsing (returns suggestions, no auto-execution)
+    parse_transaction_create_commands, parse_portfolio_transfer_commands,
     // Security: Suggestion-based execution (replaces auto-execution)
     parse_response_with_suggestions, execute_confirmed_watchlist_action,
     // Types

@@ -250,6 +250,237 @@ pub fn execute_portfolio_value_queries(queries: &[PortfolioValueQuery]) -> Vec<S
 }
 
 // ============================================================================
+// Database Query Commands (using query_templates)
+// ============================================================================
+
+use crate::ai::query_templates::{execute_template, QueryRequest};
+use crate::db::get_connection;
+use std::collections::HashMap;
+
+/// Database query parsed from AI response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbQuery {
+    pub template: String,
+    pub params: HashMap<String, String>,
+}
+
+/// Parse database query commands from AI response
+///
+/// Extracts `[[QUERY_DB:...]]` commands
+pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
+    let mut queries = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Match [[QUERY_DB:{"template":"...", "params":{...}}]]
+    let query_re = Regex::new(r#"\[\[QUERY_DB:\s*\{([^]]+)\}\]\]"#).unwrap();
+
+    for cap in query_re.captures_iter(response) {
+        let json_content = &cap[1];
+
+        // Extract template name
+        let template = Regex::new(r#""template"\s*:\s*"([^"]+)""#)
+            .ok()
+            .and_then(|re| re.captures(json_content))
+            .map(|c| c[1].to_string());
+
+        if let Some(template) = template {
+            // Extract params object
+            let mut params = HashMap::new();
+
+            // Find params section and extract key-value pairs
+            if let Some(params_re) = Regex::new(r#""params"\s*:\s*\{([^}]*)\}"#).ok() {
+                if let Some(params_cap) = params_re.captures(json_content) {
+                    let params_content = &params_cap[1];
+
+                    // Extract individual parameters
+                    if let Some(param_re) = Regex::new(r#""([^"]+)"\s*:\s*"([^"]+)""#).ok() {
+                        for pcap in param_re.captures_iter(params_content) {
+                            params.insert(pcap[1].to_string(), pcap[2].to_string());
+                        }
+                    }
+                }
+            }
+
+            queries.push(DbQuery { template, params });
+        }
+    }
+
+    let clean_re = Regex::new(r#"\[\[QUERY_DB:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (queries, cleaned_response)
+}
+
+/// Execute database queries and return formatted results
+pub fn execute_db_queries(queries: &[DbQuery]) -> Vec<String> {
+    let mut results = Vec::new();
+
+    let guard = match get_connection() {
+        Ok(g) => g,
+        Err(e) => {
+            results.push(format!("Fehler beim Zugriff auf Datenbank: {}", e));
+            return results;
+        }
+    };
+
+    let conn = match guard.as_ref() {
+        Some(c) => c,
+        None => {
+            results.push("Datenbank nicht initialisiert.".to_string());
+            return results;
+        }
+    };
+
+    for query in queries {
+        let request = QueryRequest {
+            template_id: query.template.clone(),
+            parameters: query.params.clone(),
+        };
+
+        match execute_template(conn, &request) {
+            Ok(result) => {
+                if result.row_count == 0 {
+                    results.push(format!("**{}**: Keine Ergebnisse gefunden.", query.template));
+                } else {
+                    // Some templates (like account_balance_analysis) return a complete answer
+                    // - no need for a header
+                    if query.template == "account_balance_analysis" {
+                        results.push(result.formatted_markdown);
+                    } else {
+                        results.push(format!(
+                            "**{} ({} Ergebnisse)**:\n\n{}",
+                            query.template, result.row_count, result.formatted_markdown
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                results.push(format!("Fehler bei Abfrage '{}': {}", query.template, e));
+            }
+        }
+    }
+
+    results
+}
+
+// ============================================================================
+// Transaction Create Commands
+// ============================================================================
+
+use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand};
+
+/// Parse transaction create commands from AI response
+///
+/// Extracts `[[TRANSACTION_CREATE:...]]` commands.
+/// SECURITY: These are returned as SUGGESTIONS, never auto-executed.
+pub fn parse_transaction_create_commands(response: &str) -> (Vec<TransactionCreateCommand>, String) {
+    let mut commands = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Match [[TRANSACTION_CREATE:{...}]]
+    let cmd_re = Regex::new(r#"\[\[TRANSACTION_CREATE:\s*(\{[^]]+\})\]\]"#).unwrap();
+
+    for cap in cmd_re.captures_iter(response) {
+        let json_str = &cap[1];
+
+        // Try to parse as JSON
+        if let Ok(cmd) = serde_json::from_str::<TransactionCreateCommand>(json_str) {
+            commands.push(cmd);
+        } else {
+            log::warn!("Failed to parse TRANSACTION_CREATE command: {}", json_str);
+        }
+    }
+
+    // Remove command tags from response
+    let clean_re = Regex::new(r#"\[\[TRANSACTION_CREATE:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim().to_string();
+
+    (commands, cleaned_response)
+}
+
+/// Parse portfolio transfer commands from AI response
+///
+/// Extracts `[[PORTFOLIO_TRANSFER:...]]` commands.
+/// SECURITY: These are returned as SUGGESTIONS, never auto-executed.
+pub fn parse_portfolio_transfer_commands(response: &str) -> (Vec<PortfolioTransferCommand>, String) {
+    let mut commands = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Match [[PORTFOLIO_TRANSFER:{...}]]
+    let cmd_re = Regex::new(r#"\[\[PORTFOLIO_TRANSFER:\s*(\{[^]]+\})\]\]"#).unwrap();
+
+    for cap in cmd_re.captures_iter(response) {
+        let json_str = &cap[1];
+
+        // Try to parse as JSON
+        if let Ok(cmd) = serde_json::from_str::<PortfolioTransferCommand>(json_str) {
+            commands.push(cmd);
+        } else {
+            log::warn!("Failed to parse PORTFOLIO_TRANSFER command: {}", json_str);
+        }
+    }
+
+    // Remove command tags from response
+    let clean_re = Regex::new(r#"\[\[PORTFOLIO_TRANSFER:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim().to_string();
+
+    (commands, cleaned_response)
+}
+
+/// Format transaction for user confirmation display
+fn format_transaction_description(cmd: &TransactionCreateCommand) -> String {
+    let type_label = match cmd.txn_type.as_str() {
+        "BUY" => "Kauf",
+        "SELL" => "Verkauf",
+        "DELIVERY_INBOUND" => "Einlieferung",
+        "DELIVERY_OUTBOUND" => "Auslieferung",
+        "DIVIDENDS" => "Dividende",
+        "DEPOSIT" => "Einlage",
+        "REMOVAL" => "Entnahme",
+        "INTEREST" => "Zinsen",
+        "FEES" => "Gebühren",
+        "TAXES" => "Steuern",
+        "TRANSFER_IN" => "Umbuchung (Eingang)",
+        "TRANSFER_OUT" => "Umbuchung (Ausgang)",
+        _ => &cmd.txn_type,
+    };
+
+    let security_str = cmd.security_name.as_ref()
+        .map(|n| format!(" - {}", n))
+        .unwrap_or_default();
+
+    let shares_str = cmd.shares
+        .map(|s| format!(", {:.2} Stk.", s as f64 / 100_000_000.0))
+        .unwrap_or_default();
+
+    let amount_str = cmd.amount
+        .map(|a| format!(", {:.2} {}", a as f64 / 100.0, cmd.currency))
+        .unwrap_or_default();
+
+    let fees_str = cmd.fees.filter(|&f| f > 0)
+        .map(|f| format!(", Gebühren: {:.2} {}", f as f64 / 100.0, cmd.currency))
+        .unwrap_or_default();
+
+    format!(
+        "{}{}: {}{}{}{}",
+        type_label, security_str, cmd.date, shares_str, amount_str, fees_str
+    )
+}
+
+/// Format portfolio transfer for user confirmation display
+fn format_transfer_description(cmd: &PortfolioTransferCommand) -> String {
+    let shares = cmd.shares as f64 / 100_000_000.0;
+    format!(
+        "Depotwechsel: {:.2} Stk. am {} (Depot {} → Depot {})",
+        shares, cmd.date, cmd.from_portfolio_id, cmd.to_portfolio_id
+    )
+}
+
+// ============================================================================
 // Combined Response Processing
 // ============================================================================
 
@@ -257,7 +488,7 @@ pub fn execute_portfolio_value_queries(queries: &[PortfolioValueQuery]) -> Vec<S
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestedAction {
-    /// Type of action: "watchlist_add", "watchlist_remove", "query_transactions", "query_portfolio_value"
+    /// Type of action: "watchlist_add", "watchlist_remove", "transaction_create", "portfolio_transfer"
     pub action_type: String,
     /// Human-readable description of the action
     pub description: String,
@@ -282,6 +513,7 @@ pub struct ParsedResponseWithSuggestions {
 /// SECURITY: This is the secure parsing function that:
 /// - Parses all command types from AI response
 /// - Returns watchlist commands as SUGGESTIONS (not executed)
+/// - Returns transaction commands as SUGGESTIONS (not executed)
 /// - Executes ONLY read-only queries (transaction queries, portfolio value queries)
 /// - Returns structured result for frontend to handle
 pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
@@ -313,6 +545,30 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
         });
     }
 
+    // Parse transaction create commands - DO NOT EXECUTE, return as suggestions
+    let (txn_create_commands, cleaned) = parse_transaction_create_commands(&current_response);
+    current_response = cleaned;
+
+    for cmd in txn_create_commands {
+        suggestions.push(SuggestedAction {
+            action_type: "transaction_create".to_string(),
+            description: format_transaction_description(&cmd),
+            payload: serde_json::to_string(&cmd).unwrap_or_default(),
+        });
+    }
+
+    // Parse portfolio transfer commands - DO NOT EXECUTE, return as suggestions
+    let (transfer_commands, cleaned) = parse_portfolio_transfer_commands(&current_response);
+    current_response = cleaned;
+
+    for cmd in transfer_commands {
+        suggestions.push(SuggestedAction {
+            action_type: "portfolio_transfer".to_string(),
+            description: format_transfer_description(&cmd),
+            payload: serde_json::to_string(&cmd).unwrap_or_default(),
+        });
+    }
+
     // Parse and execute transaction queries (READ-ONLY, safe to execute)
     let (txn_queries, cleaned) = parse_transaction_queries(&current_response);
     current_response = cleaned;
@@ -328,6 +584,15 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
 
     if !pv_queries.is_empty() {
         let results = execute_portfolio_value_queries(&pv_queries);
+        query_results.extend(results);
+    }
+
+    // Parse and execute database queries (READ-ONLY, safe to execute)
+    let (db_queries, cleaned) = parse_db_queries(&current_response);
+    current_response = cleaned;
+
+    if !db_queries.is_empty() {
+        let results = execute_db_queries(&db_queries);
         query_results.extend(results);
     }
 
@@ -520,5 +785,113 @@ Das war's!"#;
         assert!(!final_cleaned.contains("QUERY_TRANSACTIONS"));
         assert!(!final_cleaned.contains("QUERY_PORTFOLIO_VALUE"));
         assert!(final_cleaned.contains("Das war's!"));
+    }
+
+    #[test]
+    fn test_parse_transaction_create_buy() {
+        let response = r#"Ich erstelle die Transaktion für dich.
+
+[[TRANSACTION_CREATE:{"preview":true,"type":"BUY","portfolioId":1,"securityId":42,"securityName":"Apple Inc.","shares":1000000000,"amount":180000,"currency":"EUR","date":"2026-01-15","fees":100}]]
+
+Bitte bestätige die Transaktion."#;
+
+        let (commands, cleaned) = parse_transaction_create_commands(response);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].txn_type, "BUY");
+        assert_eq!(commands[0].portfolio_id, Some(1));
+        assert_eq!(commands[0].security_id, Some(42));
+        assert_eq!(commands[0].security_name, Some("Apple Inc.".to_string()));
+        assert_eq!(commands[0].shares, Some(1000000000));
+        assert_eq!(commands[0].amount, Some(180000));
+        assert_eq!(commands[0].currency, "EUR");
+        assert_eq!(commands[0].date, "2026-01-15");
+        assert_eq!(commands[0].fees, Some(100));
+        assert!(!cleaned.contains("TRANSACTION_CREATE"));
+        assert!(cleaned.contains("Bitte bestätige"));
+    }
+
+    #[test]
+    fn test_parse_transaction_create_dividend() {
+        let response = r#"[[TRANSACTION_CREATE:{"type":"DIVIDENDS","accountId":1,"securityId":42,"securityName":"Microsoft","amount":5000,"currency":"EUR","date":"2026-01-20"}]]"#;
+
+        let (commands, _) = parse_transaction_create_commands(response);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].txn_type, "DIVIDENDS");
+        assert_eq!(commands[0].account_id, Some(1));
+        assert_eq!(commands[0].amount, Some(5000));
+    }
+
+    #[test]
+    fn test_parse_transaction_create_deposit() {
+        let response = r#"[[TRANSACTION_CREATE:{"type":"DEPOSIT","accountId":1,"amount":100000,"currency":"EUR","date":"2026-01-15"}]]"#;
+
+        let (commands, _) = parse_transaction_create_commands(response);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].txn_type, "DEPOSIT");
+        assert_eq!(commands[0].account_id, Some(1));
+        assert_eq!(commands[0].amount, Some(100000));
+        assert_eq!(commands[0].security_id, None);
+    }
+
+    #[test]
+    fn test_parse_portfolio_transfer() {
+        let response = r#"Ich übertrage die Aktien für dich.
+
+[[PORTFOLIO_TRANSFER:{"securityId":42,"shares":1000000000,"date":"2026-01-15","fromPortfolioId":1,"toPortfolioId":2,"note":"Depotwechsel zu Broker B"}]]
+
+Bitte bestätige."#;
+
+        let (commands, cleaned) = parse_portfolio_transfer_commands(response);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].security_id, 42);
+        assert_eq!(commands[0].shares, 1000000000);
+        assert_eq!(commands[0].date, "2026-01-15");
+        assert_eq!(commands[0].from_portfolio_id, 1);
+        assert_eq!(commands[0].to_portfolio_id, 2);
+        assert_eq!(commands[0].note, Some("Depotwechsel zu Broker B".to_string()));
+        assert!(!cleaned.contains("PORTFOLIO_TRANSFER"));
+    }
+
+    #[test]
+    fn test_format_transaction_description() {
+        let cmd = TransactionCreateCommand {
+            preview: true,
+            txn_type: "BUY".to_string(),
+            portfolio_id: Some(1),
+            account_id: None,
+            security_id: Some(42),
+            security_name: Some("Apple Inc.".to_string()),
+            shares: Some(1000000000), // 10 shares
+            amount: Some(180000),      // 1800 EUR
+            currency: "EUR".to_string(),
+            date: "2026-01-15".to_string(),
+            fees: Some(100),           // 1 EUR
+            taxes: None,
+            note: None,
+            other_portfolio_id: None,
+            other_account_id: None,
+        };
+
+        let desc = format_transaction_description(&cmd);
+        assert!(desc.contains("Kauf"));
+        assert!(desc.contains("Apple"));
+        assert!(desc.contains("10.00 Stk."));
+        assert!(desc.contains("1800.00 EUR"));
+        assert!(desc.contains("Gebühren: 1.00 EUR"));
+    }
+
+    #[test]
+    fn test_parse_transaction_no_commands() {
+        let response = "Das ist eine normale Antwort ohne Transaction-Commands.";
+
+        let (txn_cmds, cleaned) = parse_transaction_create_commands(response);
+        let (transfer_cmds, _) = parse_portfolio_transfer_commands(&cleaned);
+
+        assert!(txn_cmds.is_empty());
+        assert!(transfer_cmds.is_empty());
     }
 }

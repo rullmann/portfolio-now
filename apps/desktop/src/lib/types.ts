@@ -1826,3 +1826,224 @@ export interface ConsortiumHistory {
   /** Per-portfolio history */
   byPortfolio: PortfolioHistoryData[];
 }
+
+// ============================================================================
+// Symbol Validation Types
+// ============================================================================
+
+/** Validation status for a security's quote configuration */
+export type ValidationStatus = 'pending' | 'validated' | 'ai_suggested' | 'failed' | 'skipped';
+
+/** Method used for validation */
+export type ValidationMethod = 'code' | 'ai' | 'user';
+
+/** Validated quote configuration for a security */
+export interface ValidatedConfig {
+  /** Provider name (YAHOO, TRADINGVIEW, COINGECKO, etc.) */
+  feed: string;
+  /** Feed URL / exchange suffix (e.g., ".DE", "XETR", etc.) */
+  feedUrl?: string;
+  /** Ticker symbol */
+  ticker?: string;
+  /** Exchange name */
+  exchange?: string;
+}
+
+/** Search result from a quote provider */
+export interface ProviderSearchResult {
+  /** Provider name */
+  provider: string;
+  /** Symbol/ticker */
+  symbol: string;
+  /** Security name */
+  name?: string;
+  /** Exchange */
+  exchange?: string;
+  /** Security type (stock, ETF, fund, crypto, etc.) */
+  securityType?: string;
+  /** Currency */
+  currency?: string;
+  /** ISIN if available */
+  isin?: string;
+  /** Match confidence (0.0 - 1.0) */
+  confidence: number;
+}
+
+/** AI suggestion for quote configuration */
+export interface AiSuggestion {
+  /** Suggested feed */
+  feed: string;
+  /** Suggested ticker */
+  ticker: string;
+  /** Suggested feed URL / exchange */
+  feedUrl?: string;
+  /** AI's reasoning */
+  reasoning: string;
+  /** Confidence (0.0 - 1.0) */
+  confidence: number;
+}
+
+/** Result of validating a single security */
+export interface ValidationResult {
+  securityId: number;
+  securityName: string;
+  isin?: string;
+  originalFeed?: string;
+  originalTicker?: string;
+  status: ValidationStatus;
+  validatedConfig?: ValidatedConfig;
+  aiSuggestion?: AiSuggestion;
+  providerResults: ProviderSearchResult[];
+  confidence: number;
+  error?: string;
+}
+
+/** Validation run status */
+export interface ValidationRun {
+  id: number;
+  startedAt: string;
+  completedAt?: string;
+  totalSecurities: number;
+  validatedCount: number;
+  failedCount: number;
+  aiSuggestedCount: number;
+  status: string;
+}
+
+/** Overall validation status summary */
+export interface ValidationStatusSummary {
+  totalSecurities: number;
+  validatedCount: number;
+  pendingCount: number;
+  failedCount: number;
+  aiSuggestedCount: number;
+  skippedCount: number;
+  lastRun?: ValidationRun;
+  securitiesNeedingAttention: ValidationResult[];
+}
+
+/** Summary of validation results */
+export interface ValidationSummary {
+  total: number;
+  validated: number;
+  failed: number;
+  aiSuggested: number;
+  skipped: number;
+}
+
+/** Response for validation operations */
+export interface ValidationResponse {
+  success: boolean;
+  results: ValidationResult[];
+  summary?: ValidationSummary;
+  error?: string;
+}
+
+/** API keys for providers */
+export interface ValidationApiKeys {
+  coingeckoApiKey?: string;
+  finnhubApiKey?: string;
+  alphaVantageApiKey?: string;
+  twelveDataApiKey?: string;
+}
+
+/** AI configuration for validation */
+export interface ValidationAiConfig {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  apiKey: string;
+}
+
+/** Request to validate securities */
+export interface ValidateSecuritiesRequest {
+  onlyHeld: boolean;
+  force: boolean;
+  apiKeys: ValidationApiKeys;
+  aiConfig?: ValidationAiConfig;
+}
+
+/** Request to validate a single security */
+export interface ValidateSingleRequest {
+  securityId: number;
+  apiKeys: ValidationApiKeys;
+  aiConfig?: ValidationAiConfig;
+}
+
+/** Request to apply validation result */
+export interface ApplyValidationRequest {
+  securityId: number;
+  config: ValidatedConfig;
+}
+
+// ============================================================================
+// Chat History Types
+// ============================================================================
+
+/** A chat message stored in the database */
+export interface ChatHistoryMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+// ============================================================================
+// AI Transaction Command Types
+// ============================================================================
+
+/**
+ * Transaction create command from AI ChatBot.
+ * SECURITY: This is returned as a suggestion that requires user confirmation.
+ */
+export interface TransactionCreateCommand {
+  preview: boolean;
+  type: string; // BUY, SELL, DELIVERY_INBOUND, DELIVERY_OUTBOUND, DIVIDENDS, DEPOSIT, REMOVAL, etc.
+  portfolioId?: number;
+  accountId?: number;
+  securityId?: number;
+  securityName?: string;
+  shares?: number;        // × 10^8
+  amount?: number;        // × 10^2
+  currency: string;
+  date: string;
+  fees?: number;          // × 10^2
+  taxes?: number;         // × 10^2
+  note?: string;
+  otherPortfolioId?: number;
+  otherAccountId?: number;
+}
+
+/**
+ * Portfolio transfer command (Depotwechsel) from AI ChatBot.
+ * Creates paired DELIVERY_OUTBOUND and DELIVERY_INBOUND transactions.
+ */
+export interface PortfolioTransferCommand {
+  securityId: number;
+  shares: number;         // × 10^8
+  date: string;
+  fromPortfolioId: number;
+  toPortfolioId: number;
+  note?: string;
+}
+
+/**
+ * Helper to format shares from scaled value (× 10^8)
+ */
+export function formatSharesFromScaled(scaledShares: number | undefined): string {
+  if (scaledShares === undefined) return '-';
+  const shares = scaledShares / 100_000_000;
+  return new Intl.NumberFormat('de-DE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(shares);
+}
+
+/**
+ * Helper to format amount from scaled value (× 10^2)
+ */
+export function formatAmountFromScaled(scaledAmount: number | undefined, currency: string = 'EUR'): string {
+  if (scaledAmount === undefined) return '-';
+  const amount = scaledAmount / 100;
+  return formatCurrency(amount, currency);
+}

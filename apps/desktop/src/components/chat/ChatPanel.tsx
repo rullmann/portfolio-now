@@ -3,15 +3,20 @@
  *
  * Provides a conversational interface to ask questions about the portfolio.
  * The AI is restricted to finance/portfolio topics only.
+ *
+ * Chat history is persisted in SQLite and uses a sliding window
+ * (chatContextSize setting) to limit tokens sent to the AI.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import { ChatMessage, type ChatMessageData } from './ChatMessage';
 import { cn } from '../../lib/utils';
+import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand } from '../../lib/types';
+import { formatSharesFromScaled, formatAmountFromScaled, getTransactionTypeLabel, formatDate } from '../../lib/types';
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 800;
@@ -44,24 +49,205 @@ const EXAMPLE_QUESTIONS = [
   'Wie ist mein Portfolio diversifiziert?',
 ];
 
-const STORAGE_KEY = 'portfolio-chat-history';
+// ============================================================================
+// Transaction Confirmation Component
+// ============================================================================
+
+interface TransactionConfirmationProps {
+  suggestion: SuggestedAction;
+  onConfirm: () => void;
+  onDecline: () => void;
+  isExecuting: boolean;
+}
+
+function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting }: TransactionConfirmationProps) {
+  const isTransaction = suggestion.actionType === 'transaction_create';
+  const isTransfer = suggestion.actionType === 'portfolio_transfer';
+
+  if (!isTransaction && !isTransfer) {
+    return null;
+  }
+
+  // Parse the payload
+  let preview: TransactionCreateCommand | PortfolioTransferCommand | null = null;
+  try {
+    preview = JSON.parse(suggestion.payload);
+  } catch {
+    return null;
+  }
+
+  if (!preview) return null;
+
+  // Render transaction preview
+  if (isTransaction) {
+    const txn = preview as TransactionCreateCommand;
+    return (
+      <div className="p-4 rounded-lg border-2 border-primary/50 bg-primary/5">
+        <div className="flex items-center gap-2 mb-3">
+          <Receipt className="h-5 w-5 text-primary" />
+          <span className="font-semibold">Transaktion bestätigen</span>
+        </div>
+
+        <table className="w-full text-sm mb-4">
+          <tbody className="divide-y divide-border">
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Typ</td>
+              <td className="py-1.5 font-medium">{getTransactionTypeLabel(txn.type)}</td>
+            </tr>
+            {txn.securityName && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Wertpapier</td>
+                <td className="py-1.5">{txn.securityName}</td>
+              </tr>
+            )}
+            {txn.portfolioId && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Depot</td>
+                <td className="py-1.5">ID: {txn.portfolioId}</td>
+              </tr>
+            )}
+            {txn.accountId && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Konto</td>
+                <td className="py-1.5">ID: {txn.accountId}</td>
+              </tr>
+            )}
+            {txn.shares !== undefined && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Stückzahl</td>
+                <td className="py-1.5">{formatSharesFromScaled(txn.shares)}</td>
+              </tr>
+            )}
+            {txn.amount !== undefined && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Betrag</td>
+                <td className="py-1.5">{formatAmountFromScaled(txn.amount, txn.currency)}</td>
+              </tr>
+            )}
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Datum</td>
+              <td className="py-1.5">{formatDate(txn.date)}</td>
+            </tr>
+            {txn.fees !== undefined && txn.fees > 0 && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Gebühren</td>
+                <td className="py-1.5">{formatAmountFromScaled(txn.fees, txn.currency)}</td>
+              </tr>
+            )}
+            {txn.taxes !== undefined && txn.taxes > 0 && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Steuern</td>
+                <td className="py-1.5">{formatAmountFromScaled(txn.taxes, txn.currency)}</td>
+              </tr>
+            )}
+            {txn.note && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Notiz</td>
+                <td className="py-1.5 text-xs">{txn.note}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onConfirm}
+            disabled={isExecuting}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {isExecuting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle className="h-4 w-4" />
+            )}
+            Bestätigen
+          </button>
+          <button
+            onClick={onDecline}
+            disabled={isExecuting}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+          >
+            <XCircle className="h-4 w-4" />
+            Abbrechen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Render transfer preview
+  if (isTransfer) {
+    const transfer = preview as PortfolioTransferCommand;
+    return (
+      <div className="p-4 rounded-lg border-2 border-primary/50 bg-primary/5">
+        <div className="flex items-center gap-2 mb-3">
+          <Receipt className="h-5 w-5 text-primary" />
+          <span className="font-semibold">Depotwechsel bestätigen</span>
+        </div>
+
+        <table className="w-full text-sm mb-4">
+          <tbody className="divide-y divide-border">
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Wertpapier</td>
+              <td className="py-1.5">ID: {transfer.securityId}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Stückzahl</td>
+              <td className="py-1.5">{formatSharesFromScaled(transfer.shares)}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Von Depot</td>
+              <td className="py-1.5">ID: {transfer.fromPortfolioId}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Nach Depot</td>
+              <td className="py-1.5">ID: {transfer.toPortfolioId}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-muted-foreground">Datum</td>
+              <td className="py-1.5">{formatDate(transfer.date)}</td>
+            </tr>
+            {transfer.note && (
+              <tr>
+                <td className="py-1.5 text-muted-foreground">Notiz</td>
+                <td className="py-1.5 text-xs">{transfer.note}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onConfirm}
+            disabled={isExecuting}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {isExecuting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle className="h-4 w-4" />
+            )}
+            Bestätigen
+          </button>
+          <button
+            onClick={onDecline}
+            disabled={isExecuting}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+          >
+            <XCircle className="h-4 w-4" />
+            Abbrechen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessageData[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return parsed.map((m: ChatMessageData) => ({
-          ...m,
-          timestamp: new Date(m.timestamp),
-        }));
-      }
-    } catch {
-      // Ignore parse errors
-    }
-    return [];
-  });
+  const [messages, setMessages] = useState<ChatMessageData[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +271,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     baseCurrency,
     alphaVantageApiKey,
     userName,
+    chatContextSize,
   } = useSettingsStore();
 
   // Get feature-specific provider and model for Chat Assistant
@@ -110,12 +297,27 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     return key && key.trim().length > 0;
   };
 
-  // Save messages to localStorage
+  // Load chat history from database on mount
   useEffect(() => {
-    if (messages.length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    }
-  }, [messages]);
+    const loadHistory = async () => {
+      try {
+        setIsLoadingHistory(true);
+        const history = await invoke<ChatHistoryMessage[]>('get_chat_history', { limit: null });
+        const loaded: ChatMessageData[] = history.map((m) => ({
+          id: String(m.id),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: new Date(m.createdAt),
+        }));
+        setMessages(loaded);
+      } catch (err) {
+        console.error('Failed to load chat history:', err);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+    loadHistory();
+  }, []);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -164,21 +366,31 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
-    const userMessage: ChatMessageData = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: content.trim(),
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+    const trimmedContent = content.trim();
     setInput('');
     setIsLoading(true);
     setError(null);
 
     try {
-      // Build message history for API
-      const apiMessages = [...messages, userMessage].map((m) => ({
+      // Save user message to database first
+      const userMsgId = await invoke<number>('save_chat_message', {
+        role: 'user',
+        content: trimmedContent,
+      });
+
+      const userMessage: ChatMessageData = {
+        id: String(userMsgId),
+        role: 'user',
+        content: trimmedContent,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+
+      // Build message history for API with sliding window
+      const allMessages = [...messages, userMessage];
+      const contextMessages = allMessages.slice(-chatContextSize);
+      const apiMessages = contextMessages.map((m) => ({
         role: m.role,
         content: m.content,
       }));
@@ -194,8 +406,14 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         },
       });
 
+      // Save assistant response to database
+      const assistantMsgId = await invoke<number>('save_chat_message', {
+        role: 'assistant',
+        content: response.response,
+      });
+
       const assistantMessage: ChatMessageData = {
-        id: crypto.randomUUID(),
+        id: String(assistantMsgId),
         role: 'assistant',
         content: response.response,
         timestamp: new Date(),
@@ -229,30 +447,61 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     }
   };
 
-  const clearHistory = () => {
-    setMessages([]);
-    localStorage.removeItem(STORAGE_KEY);
+  const clearHistory = async () => {
+    try {
+      await invoke('clear_chat_history');
+      setMessages([]);
+    } catch (err) {
+      console.error('Failed to clear chat history:', err);
+      setError('Fehler beim Löschen des Verlaufs');
+    }
   };
 
-  const deleteMessage = (id: string) => {
-    setMessages((prev) => prev.filter((m) => m.id !== id));
+  const deleteMessage = async (id: string) => {
+    try {
+      await invoke('delete_chat_message', { id: parseInt(id, 10) });
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+    } catch (err) {
+      console.error('Failed to delete chat message:', err);
+      setError('Fehler beim Löschen der Nachricht');
+    }
   };
 
   // Execute a confirmed suggestion
   const executeSuggestion = async (suggestion: SuggestedAction) => {
     setExecutingSuggestion(suggestion.payload);
     try {
-      const result = await invoke<string>('execute_confirmed_ai_action', {
-        actionType: suggestion.actionType,
-        payload: suggestion.payload,
-        alphaVantageApiKey: alphaVantageApiKey || null,
+      let result: string;
+
+      // Handle different action types
+      if (suggestion.actionType === 'transaction_create') {
+        result = await invoke<string>('execute_confirmed_transaction', {
+          payload: suggestion.payload,
+        });
+      } else if (suggestion.actionType === 'portfolio_transfer') {
+        result = await invoke<string>('execute_confirmed_portfolio_transfer', {
+          payload: suggestion.payload,
+        });
+      } else {
+        // Default: watchlist actions
+        result = await invoke<string>('execute_confirmed_ai_action', {
+          actionType: suggestion.actionType,
+          payload: suggestion.payload,
+          alphaVantageApiKey: alphaVantageApiKey || null,
+        });
+      }
+
+      // Save success message to database
+      const successContent = `✓ ${result}`;
+      const msgId = await invoke<number>('save_chat_message', {
+        role: 'assistant',
+        content: successContent,
       });
 
-      // Add success message
       const successMessage: ChatMessageData = {
-        id: crypto.randomUUID(),
+        id: String(msgId),
         role: 'assistant',
-        content: `✓ ${result}`,
+        content: successContent,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, successMessage]);
@@ -338,7 +587,11 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {messages.length === 0 ? (
+          {isLoadingHistory ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : messages.length === 0 ? (
             <div className="text-center py-8">
               <MessageSquare className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
               <p className="text-muted-foreground mb-4">
@@ -378,46 +631,68 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
           {/* Pending Suggestions - Require user confirmation */}
           {pendingSuggestions.length > 0 && (
-            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-3">
-              <div className="flex items-center gap-2 text-amber-600">
-                <AlertTriangle className="h-4 w-4" />
-                <span className="text-sm font-medium">
-                  {pendingSuggestions.length === 1 ? 'Aktion erfordert Bestätigung' : `${pendingSuggestions.length} Aktionen erfordern Bestätigung`}
-                </span>
-                {pendingSuggestions.length > 1 && (
-                  <button
-                    onClick={declineAllSuggestions}
-                    className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    Alle ablehnen
-                  </button>
-                )}
-              </div>
-              {pendingSuggestions.map((suggestion, idx) => (
-                <div key={idx} className="flex items-center gap-2 bg-background/50 rounded-md p-2">
-                  <span className="flex-1 text-sm">{suggestion.description}</span>
-                  <button
-                    onClick={() => executeSuggestion(suggestion)}
-                    disabled={executingSuggestion !== null}
-                    className="p-1.5 rounded bg-green-500/20 text-green-600 hover:bg-green-500/30 disabled:opacity-50"
-                    title="Bestätigen"
-                  >
-                    {executingSuggestion === suggestion.payload ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <CheckCircle className="h-4 w-4" />
+            <div className="space-y-3">
+              {/* Transaction suggestions get special preview treatment */}
+              {pendingSuggestions
+                .filter((s) => s.actionType === 'transaction_create' || s.actionType === 'portfolio_transfer')
+                .map((suggestion, idx) => (
+                  <TransactionConfirmation
+                    key={`txn-${idx}`}
+                    suggestion={suggestion}
+                    onConfirm={() => executeSuggestion(suggestion)}
+                    onDecline={() => declineSuggestion(suggestion)}
+                    isExecuting={executingSuggestion === suggestion.payload}
+                  />
+                ))}
+
+              {/* Other suggestions (watchlist, etc.) */}
+              {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length > 0 && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-3">
+                  <div className="flex items-center gap-2 text-amber-600">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span className="text-sm font-medium">
+                      {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length === 1
+                        ? 'Aktion erfordert Bestätigung'
+                        : `${pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length} Aktionen erfordern Bestätigung`}
+                    </span>
+                    {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length > 1 && (
+                      <button
+                        onClick={declineAllSuggestions}
+                        className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Alle ablehnen
+                      </button>
                     )}
-                  </button>
-                  <button
-                    onClick={() => declineSuggestion(suggestion)}
-                    disabled={executingSuggestion !== null}
-                    className="p-1.5 rounded bg-red-500/20 text-red-600 hover:bg-red-500/30 disabled:opacity-50"
-                    title="Ablehnen"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </button>
+                  </div>
+                  {pendingSuggestions
+                    .filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer')
+                    .map((suggestion, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-background/50 rounded-md p-2">
+                        <span className="flex-1 text-sm">{suggestion.description}</span>
+                        <button
+                          onClick={() => executeSuggestion(suggestion)}
+                          disabled={executingSuggestion !== null}
+                          className="p-1.5 rounded bg-green-500/20 text-green-600 hover:bg-green-500/30 disabled:opacity-50"
+                          title="Bestätigen"
+                        >
+                          {executingSuggestion === suggestion.payload ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="h-4 w-4" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => declineSuggestion(suggestion)}
+                          disabled={executingSuggestion !== null}
+                          className="p-1.5 rounded bg-red-500/20 text-red-600 hover:bg-red-500/30 disabled:opacity-50"
+                          title="Ablehnen"
+                        >
+                          <XCircle className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
                 </div>
-              ))}
+              )}
             </div>
           )}
 
@@ -431,21 +706,21 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               Bitte konfiguriere deinen {aiProvider.toUpperCase()} API-Key in den Einstellungen.
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-end">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Nachricht eingeben..."
-                rows={1}
-                className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                rows={3}
+                className="flex-1 resize-y min-h-[76px] max-h-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 disabled={isLoading}
               />
               <button
                 onClick={() => sendMessage(input)}
                 disabled={!input.trim() || isLoading}
-                className="p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
               >
                 <Send className="h-5 w-5" />
               </button>

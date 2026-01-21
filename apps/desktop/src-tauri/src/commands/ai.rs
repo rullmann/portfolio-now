@@ -344,3 +344,221 @@ pub async fn execute_confirmed_ai_action(
 
     Ok(result)
 }
+
+// ============================================================================
+// Transaction Execution Commands
+// ============================================================================
+
+use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand};
+use crate::commands::crud::{create_transaction, CreateTransactionRequest};
+use crate::events::{emit_data_changed, DataChangedPayload};
+
+/// Execute a confirmed transaction creation
+///
+/// SECURITY: This command should only be called after explicit user confirmation.
+/// The frontend MUST display a transaction preview and get user approval before
+/// calling this command. This prevents prompt injection attacks.
+#[command]
+pub fn execute_confirmed_transaction(
+    app: AppHandle,
+    payload: String,
+) -> Result<String, String> {
+    let cmd: TransactionCreateCommand = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid transaction payload: {}", e))?;
+
+    // Determine owner type and ID
+    let (owner_type, owner_id) = match (&cmd.portfolio_id, &cmd.account_id) {
+        (Some(pid), _) if is_portfolio_transaction(&cmd.txn_type) => ("portfolio".to_string(), *pid),
+        (_, Some(aid)) if is_account_transaction(&cmd.txn_type) => ("account".to_string(), *aid),
+        (Some(pid), _) => ("portfolio".to_string(), *pid),
+        (_, Some(aid)) => ("account".to_string(), *aid),
+        _ => return Err("Kein Depot oder Konto angegeben".to_string()),
+    };
+
+    // Validate required fields based on transaction type
+    validate_transaction_fields(&cmd)?;
+
+    // Build CreateTransactionRequest
+    let request = CreateTransactionRequest {
+        owner_type: owner_type.clone(),
+        owner_id,
+        txn_type: cmd.txn_type.clone(),
+        date: cmd.date.clone(),
+        amount: cmd.amount.unwrap_or(0),
+        currency: cmd.currency.clone(),
+        shares: cmd.shares,
+        security_id: cmd.security_id,
+        note: cmd.note.clone(),
+        units: None, // No units from AI commands
+        reference_account_id: None, // Could be extended later
+    };
+
+    // Create the transaction
+    let result = create_transaction(app.clone(), request)
+        .map_err(|e| format!("Fehler beim Erstellen der Transaktion: {}", e))?;
+
+    // Emit data_changed event
+    emit_data_changed(&app, DataChangedPayload::transaction("created", cmd.security_id));
+
+    // Format success message
+    let type_label = get_transaction_type_label(&cmd.txn_type);
+    let security_str = cmd.security_name.as_ref()
+        .map(|n| format!(" für {}", n))
+        .unwrap_or_default();
+    let amount_str = cmd.amount
+        .map(|a| format!(" über {:.2} {}", a as f64 / 100.0, cmd.currency))
+        .unwrap_or_default();
+
+    Ok(format!(
+        "{}{}{} am {} erstellt (ID: {})",
+        type_label, security_str, amount_str, cmd.date, result.id
+    ))
+}
+
+/// Execute a confirmed portfolio transfer (Depotwechsel)
+///
+/// SECURITY: This command should only be called after explicit user confirmation.
+#[command]
+pub fn execute_confirmed_portfolio_transfer(
+    app: AppHandle,
+    payload: String,
+) -> Result<String, String> {
+    let cmd: PortfolioTransferCommand = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid transfer payload: {}", e))?;
+
+    // Create DELIVERY_OUTBOUND from source portfolio
+    let outbound_request = CreateTransactionRequest {
+        owner_type: "portfolio".to_string(),
+        owner_id: cmd.from_portfolio_id,
+        txn_type: "DELIVERY_OUTBOUND".to_string(),
+        date: cmd.date.clone(),
+        amount: 0, // Deliveries don't have an amount
+        currency: "EUR".to_string(), // Will be updated by the system
+        shares: Some(cmd.shares),
+        security_id: Some(cmd.security_id),
+        note: cmd.note.clone(),
+        units: None,
+        reference_account_id: None,
+    };
+
+    let outbound_result = create_transaction(app.clone(), outbound_request)
+        .map_err(|e| format!("Fehler bei Auslieferung: {}", e))?;
+
+    // Create DELIVERY_INBOUND to target portfolio
+    let inbound_request = CreateTransactionRequest {
+        owner_type: "portfolio".to_string(),
+        owner_id: cmd.to_portfolio_id,
+        txn_type: "DELIVERY_INBOUND".to_string(),
+        date: cmd.date.clone(),
+        amount: 0,
+        currency: "EUR".to_string(),
+        shares: Some(cmd.shares),
+        security_id: Some(cmd.security_id),
+        note: cmd.note.clone(),
+        units: None,
+        reference_account_id: None,
+    };
+
+    let inbound_result = create_transaction(app.clone(), inbound_request)
+        .map_err(|e| format!("Fehler bei Einlieferung: {}", e))?;
+
+    // Emit data_changed event
+    emit_data_changed(&app, DataChangedPayload::transaction("created", Some(cmd.security_id)));
+
+    let shares_display = cmd.shares as f64 / 100_000_000.0;
+    Ok(format!(
+        "Depotwechsel erfolgreich: {:.4} Stück am {} übertragen (Auslieferung ID: {}, Einlieferung ID: {})",
+        shares_display, cmd.date, outbound_result.id, inbound_result.id
+    ))
+}
+
+/// Check if transaction type is for portfolios
+fn is_portfolio_transaction(txn_type: &str) -> bool {
+    matches!(
+        txn_type,
+        "BUY" | "SELL" | "TRANSFER_IN" | "TRANSFER_OUT" | "DELIVERY_INBOUND" | "DELIVERY_OUTBOUND"
+    )
+}
+
+/// Check if transaction type is for accounts
+fn is_account_transaction(txn_type: &str) -> bool {
+    matches!(
+        txn_type,
+        "DEPOSIT" | "REMOVAL" | "INTEREST" | "INTEREST_CHARGE" | "DIVIDENDS" |
+        "FEES" | "FEES_REFUND" | "TAXES" | "TAX_REFUND"
+    )
+}
+
+/// Validate that required fields are present for the transaction type
+fn validate_transaction_fields(cmd: &TransactionCreateCommand) -> Result<(), String> {
+    match cmd.txn_type.as_str() {
+        "BUY" | "SELL" => {
+            if cmd.portfolio_id.is_none() {
+                return Err("Kein Depot angegeben".to_string());
+            }
+            if cmd.security_id.is_none() {
+                return Err("Kein Wertpapier angegeben".to_string());
+            }
+            if cmd.shares.is_none() || cmd.shares == Some(0) {
+                return Err("Keine Stückzahl angegeben".to_string());
+            }
+            if cmd.amount.is_none() || cmd.amount == Some(0) {
+                return Err("Kein Betrag angegeben".to_string());
+            }
+        }
+        "DELIVERY_INBOUND" | "DELIVERY_OUTBOUND" => {
+            if cmd.portfolio_id.is_none() {
+                return Err("Kein Depot angegeben".to_string());
+            }
+            if cmd.security_id.is_none() {
+                return Err("Kein Wertpapier angegeben".to_string());
+            }
+            if cmd.shares.is_none() || cmd.shares == Some(0) {
+                return Err("Keine Stückzahl angegeben".to_string());
+            }
+        }
+        "DIVIDENDS" => {
+            if cmd.account_id.is_none() {
+                return Err("Kein Konto angegeben".to_string());
+            }
+            if cmd.security_id.is_none() {
+                return Err("Kein Wertpapier angegeben".to_string());
+            }
+            if cmd.amount.is_none() || cmd.amount == Some(0) {
+                return Err("Kein Betrag angegeben".to_string());
+            }
+        }
+        "DEPOSIT" | "REMOVAL" | "INTEREST" | "FEES" | "TAXES" => {
+            if cmd.account_id.is_none() {
+                return Err("Kein Konto angegeben".to_string());
+            }
+            if cmd.amount.is_none() || cmd.amount == Some(0) {
+                return Err("Kein Betrag angegeben".to_string());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Get German label for transaction type
+fn get_transaction_type_label(txn_type: &str) -> &'static str {
+    match txn_type {
+        "BUY" => "Kauf",
+        "SELL" => "Verkauf",
+        "DELIVERY_INBOUND" => "Einlieferung",
+        "DELIVERY_OUTBOUND" => "Auslieferung",
+        "DIVIDENDS" => "Dividende",
+        "DEPOSIT" => "Einlage",
+        "REMOVAL" => "Entnahme",
+        "INTEREST" => "Zinsen",
+        "INTEREST_CHARGE" => "Zinsbelastung",
+        "FEES" => "Gebühren",
+        "FEES_REFUND" => "Gebührenerstattung",
+        "TAXES" => "Steuern",
+        "TAX_REFUND" => "Steuererstattung",
+        "TRANSFER_IN" => "Umbuchung (Eingang)",
+        "TRANSFER_OUT" => "Umbuchung (Ausgang)",
+        _ => "Transaktion",
+    }
+}

@@ -689,6 +689,94 @@ pub struct PortfolioChatResponse {
 }
 
 // ============================================================================
+// Transaction Create Command Types
+// ============================================================================
+
+/// Transaction create command parsed from AI response.
+/// SECURITY: This is returned as a SUGGESTION that requires user confirmation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionCreateCommand {
+    /// Always true - transactions require preview/confirmation
+    #[serde(default = "default_true")]
+    pub preview: bool,
+    /// Transaction type: BUY, SELL, DELIVERY_INBOUND, DELIVERY_OUTBOUND, DIVIDENDS, DEPOSIT, REMOVAL, etc.
+    #[serde(rename = "type")]
+    pub txn_type: String,
+    /// Portfolio ID (for portfolio transactions)
+    pub portfolio_id: Option<i64>,
+    /// Account ID (for account transactions like DIVIDENDS, DEPOSIT, REMOVAL)
+    pub account_id: Option<i64>,
+    /// Security ID (required for BUY/SELL/DELIVERY/DIVIDENDS)
+    pub security_id: Option<i64>,
+    /// Security name for display
+    pub security_name: Option<String>,
+    /// Number of shares × 10^8 (e.g., 10 shares = 1_000_000_000)
+    pub shares: Option<i64>,
+    /// Amount in cents × 10^2 (e.g., 180.00 EUR = 18000)
+    pub amount: Option<i64>,
+    /// Currency code (EUR, USD, etc.)
+    #[serde(default = "default_eur")]
+    pub currency: String,
+    /// Transaction date in ISO format (YYYY-MM-DD)
+    pub date: String,
+    /// Fees in cents × 10^2
+    #[serde(default)]
+    pub fees: Option<i64>,
+    /// Taxes in cents × 10^2
+    #[serde(default)]
+    pub taxes: Option<i64>,
+    /// Optional note
+    pub note: Option<String>,
+    /// For transfers: other portfolio ID
+    pub other_portfolio_id: Option<i64>,
+    /// For transfers: other account ID
+    pub other_account_id: Option<i64>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_eur() -> String {
+    "EUR".to_string()
+}
+
+/// Portfolio transfer command (Depotwechsel) parsed from AI response.
+/// Creates paired DELIVERY_OUTBOUND and DELIVERY_INBOUND transactions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioTransferCommand {
+    /// Security ID to transfer
+    pub security_id: i64,
+    /// Number of shares × 10^8
+    pub shares: i64,
+    /// Transfer date in ISO format
+    pub date: String,
+    /// Source portfolio ID
+    pub from_portfolio_id: i64,
+    /// Target portfolio ID
+    pub to_portfolio_id: i64,
+    /// Optional note
+    pub note: Option<String>,
+}
+
+/// Result of transaction validation before execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionValidationResult {
+    pub valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    /// Resolved names for display
+    pub portfolio_name: Option<String>,
+    pub account_name: Option<String>,
+    pub security_name: Option<String>,
+    /// Current holdings for SELL validation
+    pub current_holdings: Option<f64>,
+}
+
+// ============================================================================
 // Model Listing API Types
 // ============================================================================
 

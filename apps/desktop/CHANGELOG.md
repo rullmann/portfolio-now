@@ -5,9 +5,99 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.1.4] - 2026-01-19
+## [0.1.5] - 2026-01-21
 
 ### Hinzugefügt
+
+#### ChatBot Transaktionserstellung
+Der Portfolio-ChatBot kann jetzt Transaktionen über natürliche Sprache erstellen:
+
+**Unterstützte Transaktionstypen:**
+- **Kauf/Verkauf (BUY/SELL)** - Mit Depot, Wertpapier, Stückzahl, Betrag
+- **Einlieferung/Auslieferung (DELIVERY_INBOUND/OUTBOUND)** - Depotüberträge ohne Gegenwert
+- **Dividende (DIVIDENDS)** - Konto, Wertpapier, Betrag
+- **Einlage/Entnahme (DEPOSIT/REMOVAL)** - Kontobewegungen
+- **Depotwechsel (PORTFOLIO_TRANSFER)** - Aktien von Depot A nach Depot B
+
+**Multi-Step Konversation:**
+Der ChatBot sammelt alle benötigten Daten durch natürlichen Dialog:
+```
+User: "Buche einen Kauf von Apple"
+AI: "In welchem Depot? - Hauptdepot (ID: 1) - Zweitdepot (ID: 2)"
+User: "Hauptdepot, 10 Stück zu 180 Euro am 15.01.2026"
+AI: "Sollen Gebühren erfasst werden?"
+User: "1 Euro Gebühren"
+AI: [Zeigt Transaktions-Vorschau zur Bestätigung]
+```
+
+**Sicherheit:**
+- Transaktionen werden IMMER als Vorschläge zurückgegeben
+- Detaillierte Transaktionsvorschau mit allen Feldern
+- Explizite Benutzerbestätigung erforderlich (Bestätigen/Abbrechen)
+- Doppelte Validierung (Frontend + Backend)
+- FIFO-Lots werden automatisch neu berechnet
+
+**Neue Command-Patterns:**
+- `[[TRANSACTION_CREATE:{...}]]` - Einzelne Transaktion
+- `[[PORTFOLIO_TRANSFER:{...}]]` - Depotwechsel (erzeugt 2 Transaktionen)
+
+**Neue Tauri Commands:**
+- `execute_confirmed_transaction` - Führt bestätigte Transaktion aus
+- `execute_confirmed_portfolio_transfer` - Führt Depotwechsel aus
+
+**Neue UI-Komponente:**
+- `TransactionConfirmation` in ChatPanel.tsx - Detaillierte Vorschau mit Bestätigungs-Buttons
+
+**Dateien:**
+- `src-tauri/src/ai/types.rs` - `TransactionCreateCommand`, `PortfolioTransferCommand`
+- `src-tauri/src/ai/command_parser.rs` - Transaction-Command-Parsing
+- `src-tauri/src/ai/prompts.rs` - Erweiterte System-Prompts
+- `src-tauri/src/commands/ai.rs` - Neue Execute-Commands
+- `src/lib/types.ts` - Frontend-Types
+- `src/components/chat/ChatPanel.tsx` - TransactionConfirmation-Komponente
+
+---
+
+## [0.1.4] - 2026-01-20
+
+### Hinzugefügt
+
+#### ChatBot Datenbank-Integration
+Der Portfolio-ChatBot hat jetzt vollständigen Zugriff auf die SQLite-Datenbank mit 13 spezialisierten Query-Templates:
+
+**Basis-Abfragen:**
+- `security_transactions` - Alle Transaktionen für ein Wertpapier (nach Name/ISIN/Ticker)
+- `dividends_by_security` - Dividenden für ein Wertpapier
+- `all_dividends` - Alle Dividenden gruppiert (mit Jahr-Filter)
+- `transactions_by_date` - Transaktionen in Zeitraum
+- `security_cost_basis` - FIFO-Lots und Einstandskurse
+- `sold_securities` - Verkaufte/geschlossene Positionen
+
+**Erweiterte Abfragen:**
+- `holding_period_analysis` - Haltefrist-Analyse für Krypto/Gold (§ 23 EStG)
+- `fifo_lot_details` - Detaillierte FIFO-Lots mit Haltetagen und Tax-Status
+- `account_transactions` - Kontobewegungen (Einzahlungen, Auszahlungen, Dividenden)
+- `investment_plans` - Alle Sparpläne
+- `portfolio_accounts` - Konten mit aktuellen Salden
+- `tax_relevant_sales` - Verkäufe mit Haltefrist und Steuerstatus
+
+**Account Balance Analysis:**
+- `account_balance_analysis` - **NEU**: Analysiert woher ein Kontostand kommt
+- Running Balance Berechnung mit Window Functions
+- Korrekte Reihenfolge: INFLOWS vor OUTFLOWS am gleichen Tag
+- Ausgabe mit `[AKTUELLER SALDO]` Marker
+
+**Beispiel-Frage:** "Woher kommen die 25 Cent auf dem Referenzkonto?"
+```
+→ • 02.10.2025 Dividende +0,25 EUR → Saldo: 0,25 EUR | NVIDIA [AKTUELLER SALDO: 0,25 EUR]
+  • 03.07.2025 Auszahlung -0,22 EUR → Saldo: 0,00 EUR
+  • 03.07.2025 Dividende +0,22 EUR → Saldo: 0,22 EUR | NVIDIA
+```
+
+**Dateien:**
+- `src-tauri/src/ai/query_templates.rs` - Query-Templates und Formatierung
+- `src-tauri/src/ai/command_parser.rs` - `[[QUERY_DB:...]]` Command-Parsing
+- `src-tauri/src/ai/prompts.rs` - Erweiterte System-Prompts
 
 #### 29 neue Bank-Parser für PDF-Import
 Erweiterte Unterstützung für Bank-Dokumente aus Deutschland, Schweiz, Österreich und international.
