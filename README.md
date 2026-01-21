@@ -45,8 +45,8 @@ Modern cross-platform desktop application for tracking and analyzing investment 
 
 ```bash
 # Clone the repository
-git clone https://github.com/rullmann/portfolio_now.git
-cd portfolio_now
+git clone https://github.com/rullmann/portfolio-now.git
+cd portfolio-now
 
 # Install dependencies
 pnpm install
