@@ -1023,6 +1023,16 @@ TRANSAKTIONS-TYPEN:
 - DEPOSIT/REMOVAL: Einlage/Entnahme - braucht accountId, amount
 - INTEREST/FEES/TAXES: Zinsen/Gebühren/Steuern - braucht accountId, amount
 
+WICHTIG - GEBÜHREN/STEUERN:
+- BUY/SELL: Gebühren und Steuern erlaubt (frage nach wenn nicht genannt)
+- DIVIDENDS: Steuern erlaubt (Quellensteuer)
+- DEPOSIT/REMOVAL: NIEMALS Gebühren oder Steuern hinzufügen! Das sind reine Geldbewegungen.
+- INTEREST/FEES/TAXES: Das SIND die Gebühren/Steuern selbst, keine zusätzlichen
+
+Beispiel - Wenn der User sagt "Buche eine Entnahme von 0,25 EUR":
+→ RICHTIG: amount=25, fees=null, taxes=null
+→ FALSCH: amount=25, fees=25 (User hat KEINE Gebühren erwähnt!)
+
 SKALIERUNG (WICHTIG!):
 - Stückzahl: × 10^8 (10 Stück = 1000000000, 0.5 Stück = 50000000)
 - Betrag: × 10^2 (100.00 EUR = 10000, 1.50 EUR = 150)

@@ -520,11 +520,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     setPendingSuggestions((prev) => prev.filter((s) => s.payload !== suggestion.payload));
   };
 
-  // Decline all suggestions
-  const declineAllSuggestions = () => {
-    setPendingSuggestions([]);
-  };
-
   if (!isOpen) return null;
 
   return (
@@ -645,54 +640,42 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                   />
                 ))}
 
-              {/* Other suggestions (watchlist, etc.) */}
-              {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length > 0 && (
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 space-y-3">
-                  <div className="flex items-center gap-2 text-amber-600">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span className="text-sm font-medium">
-                      {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length === 1
-                        ? 'Aktion erfordert Bestätigung'
-                        : `${pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length} Aktionen erfordern Bestätigung`}
-                    </span>
-                    {pendingSuggestions.filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer').length > 1 && (
+              {/* Other suggestions (watchlist, etc.) - same UI as transactions */}
+              {pendingSuggestions
+                .filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer')
+                .map((suggestion, idx) => (
+                  <div key={`other-${idx}`} className="p-4 rounded-lg border-2 border-amber-500/50 bg-amber-500/5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlertTriangle className="h-5 w-5 text-amber-600" />
+                      <span className="font-semibold">Aktion bestätigen</span>
+                    </div>
+
+                    <p className="text-sm mb-4">{suggestion.description}</p>
+
+                    <div className="flex gap-2">
                       <button
-                        onClick={declineAllSuggestions}
-                        className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => executeSuggestion(suggestion)}
+                        disabled={executingSuggestion !== null}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
                       >
-                        Alle ablehnen
+                        {executingSuggestion === suggestion.payload ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <CheckCircle className="h-4 w-4" />
+                        )}
+                        Bestätigen
                       </button>
-                    )}
+                      <button
+                        onClick={() => declineSuggestion(suggestion)}
+                        disabled={executingSuggestion !== null}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                      >
+                        <XCircle className="h-4 w-4" />
+                        Abbrechen
+                      </button>
+                    </div>
                   </div>
-                  {pendingSuggestions
-                    .filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer')
-                    .map((suggestion, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-background/50 rounded-md p-2">
-                        <span className="flex-1 text-sm">{suggestion.description}</span>
-                        <button
-                          onClick={() => executeSuggestion(suggestion)}
-                          disabled={executingSuggestion !== null}
-                          className="p-1.5 rounded bg-green-500/20 text-green-600 hover:bg-green-500/30 disabled:opacity-50"
-                          title="Bestätigen"
-                        >
-                          {executingSuggestion === suggestion.payload ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <CheckCircle className="h-4 w-4" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => declineSuggestion(suggestion)}
-                          disabled={executingSuggestion !== null}
-                          className="p-1.5 rounded bg-red-500/20 text-red-600 hover:bg-red-500/30 disabled:opacity-50"
-                          title="Ablehnen"
-                        >
-                          <XCircle className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              )}
+                ))}
             </div>
           )}
 

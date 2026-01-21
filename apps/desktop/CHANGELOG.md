@@ -56,6 +56,23 @@ AI: [Zeigt Transaktions-Vorschau zur Bestätigung]
 - `src/lib/types.ts` - Frontend-Types
 - `src/components/chat/ChatPanel.tsx` - TransactionConfirmation-Komponente
 
+### Behoben
+
+#### Fees-Bug bei DEPOSIT/REMOVAL
+- AI fügte bei Einlagen/Entnahmen ungefragt Gebühren hinzu
+- Neue explizite Regel in System-Prompt: "DEPOSIT/REMOVAL: NIEMALS Gebühren oder Steuern hinzufügen!"
+- Klare Beispiele für korrektes Verhalten im Prompt
+
+### Geändert
+
+#### Einheitliche Bestätigungs-UI im ChatBot
+- **Vorher**: Watchlist-Aktionen hatten kleine Icon-only Buttons (✓/✗)
+- **Nachher**: Alle Bestätigungen (Watchlist, Transaktionen, Transfers) nutzen das gleiche UI-Pattern:
+  - Amber Container mit Header-Icon
+  - Beschreibung der Aktion
+  - Zwei vollbreite Buttons: "Bestätigen" (grün) / "Abbrechen" (muted)
+- Entfernt: `declineAllSuggestions()` Funktion (unbenutzt nach UI-Refactoring)
+
 ---
 
 ## [0.1.4] - 2026-01-20
