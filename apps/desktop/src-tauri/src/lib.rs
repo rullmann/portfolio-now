@@ -56,6 +56,7 @@ pub fn run() {
             commands::file::validate_portfolio_file,
             commands::file::get_portfolio_stats,
             commands::file::export_database_to_portfolio,
+            commands::file::read_file_as_base64,
             // Quotes
             commands::quotes::fetch_quotes,
             commands::quotes::sync_security_prices,
@@ -293,6 +294,7 @@ pub fn run() {
             commands::ai::execute_confirmed_transaction_delete,
             commands::ai::import_extracted_transactions,
             commands::ai::enrich_extracted_transactions,
+            commands::ai::check_extracted_transactions_for_duplicates,
             // Chat History Persistence
             commands::chat::save_chat_message,
             commands::chat::get_chat_history,

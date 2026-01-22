@@ -323,6 +323,29 @@ function App() {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, [theme]);
 
+  // ============================================================================
+  // Global Drag & Drop Prevention
+  // ============================================================================
+  // Prevents files from being opened by the browser/Tauri when dropped on
+  // areas without specific D&D handlers (e.g., sidebar, dashboard, etc.)
+  // NOTE: Only preventDefault, NOT stopPropagation - stopPropagation breaks Tauri's native D&D
+  useEffect(() => {
+    const preventDefaultDrop = (e: DragEvent) => {
+      // Only preventDefault to stop browser from opening files
+      // Do NOT stopPropagation - it breaks Tauri's onDragDropEvent
+      e.preventDefault();
+    };
+
+    // Register global handlers on document level
+    document.addEventListener('dragover', preventDefaultDrop);
+    document.addEventListener('drop', preventDefaultDrop);
+
+    return () => {
+      document.removeEventListener('dragover', preventDefaultDrop);
+      document.removeEventListener('drop', preventDefaultDrop);
+    };
+  }, []);
+
   // DB-based state
   const [dbPortfolios, setDbPortfolios] = useState<PortfolioData[]>([]);
   const [dbHoldings, setDbHoldings] = useState<AggregatedHolding[]>([]);

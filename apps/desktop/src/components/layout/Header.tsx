@@ -62,7 +62,7 @@ export function Header({
   onRefresh,
   onOpenChat,
 }: HeaderProps) {
-  const { currentView, setCurrentView } = useUIStore();
+  const { currentView, setCurrentView, pdfImportModalOpen, pdfImportInitialPath, openPdfImportModal, closePdfImportModal } = useUIStore();
   const { isLoading } = useAppStore();
   const {
     aiEnabled,
@@ -73,7 +73,6 @@ export function Header({
   } = useSettingsStore();
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
-  const [showPdfImportModal, setShowPdfImportModal] = useState(false);
   const [showCsvImportModal, setShowCsvImportModal] = useState(false);
   const [showPdfExportModal, setShowPdfExportModal] = useState(false);
   const [showDivvyDiaryModal, setShowDivvyDiaryModal] = useState(false);
@@ -175,7 +174,7 @@ export function Header({
                     {/* PDF OCR */}
                     <button
                       onClick={() => {
-                        setShowPdfImportModal(true);
+                        openPdfImportModal();
                         setShowAiMenu(false);
                       }}
                       className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
@@ -252,7 +251,7 @@ export function Header({
               Portfolio Performance Datei...
             </DropdownItem>
             <DropdownItem
-              onClick={() => setShowPdfImportModal(true)}
+              onClick={() => openPdfImportModal()}
               disabled={isLoading}
               icon={<FileText className="w-4 h-4" />}
             >
@@ -332,9 +331,10 @@ export function Header({
 
       {/* PDF Import Modal */}
       <PdfImportModal
-        isOpen={showPdfImportModal}
-        onClose={() => setShowPdfImportModal(false)}
+        isOpen={pdfImportModalOpen}
+        onClose={closePdfImportModal}
         onSuccess={onRefresh}
+        initialFilePath={pdfImportInitialPath}
       />
 
       {/* CSV Import Modal */}

@@ -22,7 +22,8 @@ export interface ChatMessageData {
   content: string;
   timestamp: Date;
   attachments?: StoredChatAttachment[];
-  isDuplicate?: boolean; // For duplicate transaction messages (shown with red border)
+  isDuplicate?: boolean; // For duplicate transaction messages (shown with amber border)
+  isError?: boolean; // For error messages (shown with red border)
 }
 
 interface ChatMessageProps {
@@ -35,16 +36,19 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const isDuplicate = message.isDuplicate;
+  const isError = message.isError;
 
   return (
     <div
       className={cn(
         'flex gap-3 p-3 rounded-lg border group relative',
-        isDuplicate
-          ? 'bg-red-500/5 border-red-500/50 border-2' // Red border for duplicates
-          : isUser
-            ? 'bg-blue-500/5 border-blue-500/20'
-            : 'bg-orange-500/5 border-orange-500/20'
+        isError
+          ? 'bg-red-500/5 border-red-500/50 border-2' // Red border for errors
+          : isDuplicate
+            ? 'bg-amber-500/5 border-amber-500/50 border-2' // Amber border for duplicates
+            : isUser
+              ? 'bg-blue-500/5 border-blue-500/20'
+              : 'bg-orange-500/5 border-orange-500/20'
       )}
     >
       {/* Delete button */}

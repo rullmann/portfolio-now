@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import { Receipt, Check, X, AlertTriangle, ChevronDown, ChevronUp, ArrowRight, Briefcase, Info } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { cn } from '../../lib/utils';
+import { toast } from '../../store';
 
 export interface Portfolio {
   id: number;
@@ -502,6 +503,8 @@ export function ExtractedTransactionsPreview({
         setSharesFromHoldingsMap(newMap);
       } catch (err) {
         console.error('Failed to enrich transactions:', err);
+        // Show error toast instead of silent fallback
+        toast.error(`Bestandsabfrage fehlgeschlagen: ${String(err)}`);
         // Fall back to original transactions on error
         setEnrichedTransactions(originalTransactions);
       } finally {

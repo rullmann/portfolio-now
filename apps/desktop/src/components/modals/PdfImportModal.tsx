@@ -2,10 +2,11 @@
  * PDF Import Modal for importing bank statements.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Upload, FileText, AlertCircle, CheckCircle, Loader2, ScanText, AlertTriangle } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { AIProviderLogo } from '../common/AIProviderLogo';
 import { AIModelSelector } from '../common';
@@ -31,6 +32,7 @@ interface PdfImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  initialFilePath?: string | null;
 }
 
 type Step = 'select' | 'preview' | 'importing' | 'done';
@@ -48,7 +50,7 @@ const TXN_TYPE_OPTIONS = [
   { value: 'Fee', label: 'Gebühr' },
 ] as const;
 
-export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalProps) {
+export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: PdfImportModalProps) {
   const {
     deliveryMode,
     aiEnabled,
@@ -98,6 +100,11 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   // Fee overrides (index -> new fee value)
   const [feeOverrides, setFeeOverrides] = useState<Record<number, number>>({});
 
+  // Drag & Drop state
+  const [isDragging, setIsDragging] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const processDroppedFilesRef = useRef<(files: string[]) => Promise<void>>();
+
   // OCR state
   const [useOcrFallback, setUseOcrFallback] = useState(false);
   const [isOcrAvailable, setIsOcrAvailable] = useState(false);
@@ -141,6 +148,60 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     } else {
       resetState();
     }
+  }, [isOpen]);
+
+  // Process initial file path if provided (e.g., from ChatBot PDF drop)
+  useEffect(() => {
+    if (isOpen && initialFilePath && processDroppedFilesRef.current) {
+      console.log('[PDF Import] Processing initial file path:', initialFilePath);
+      setSelectedFiles([initialFilePath]);
+      processDroppedFilesRef.current([initialFilePath]);
+    }
+  }, [isOpen, initialFilePath]);
+
+  // Tauri Native Drag & Drop Handler
+  useEffect(() => {
+    if (!isOpen) {
+      console.log('[PDF Import D&D] Modal not open, skipping listener setup');
+      return;
+    }
+
+    console.log('[PDF Import D&D] Setting up Tauri drag-drop listener...');
+    const window = getCurrentWindow();
+    let unlistenFn: (() => void) | null = null;
+
+    const setupListener = async () => {
+      console.log('[PDF Import D&D] Registering onDragDropEvent...');
+      unlistenFn = await window.onDragDropEvent(async (event) => {
+        console.log('[PDF Import D&D] Tauri event received:', event.payload.type, event.payload);
+        if (event.payload.type === 'enter') {
+          setIsDragging(true);
+        } else if (event.payload.type === 'leave') {
+          setIsDragging(false);
+        } else if (event.payload.type === 'drop' && event.payload.paths.length > 0) {
+          setIsDragging(false);
+          console.log('[PDF Import D&D] Dropped paths:', event.payload.paths);
+          const pdfPaths = event.payload.paths.filter((path: string) => {
+            const ext = path.split('.').pop()?.toLowerCase();
+            return ext === 'pdf';
+          });
+          console.log('[PDF Import D&D] PDF paths:', pdfPaths);
+          if (pdfPaths.length > 0) {
+            // Trigger file processing with the dropped paths
+            // Use ref to always call the latest version of the function (fixes stale closure)
+            setSelectedFiles(pdfPaths);
+            if (processDroppedFilesRef.current) {
+              processDroppedFilesRef.current(pdfPaths);
+            }
+          }
+        }
+      });
+    };
+
+    setupListener();
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
   }, [isOpen]);
 
   // Check if configured model supports vision when provider/model changes
@@ -275,6 +336,178 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   const getFileName = (filePath: string): string => {
     const parts = filePath.split(/[/\\]/);
     return parts[parts.length - 1] || filePath;
+  };
+
+  // Process dropped PDF files (shared logic with handleSelectFile)
+  const processDroppedFiles = async (files: string[]) => {
+    console.log('[PDF Import D&D] processDroppedFiles called with', files.length, 'files');
+    setIsLoading(true);
+    setError(null);
+    setOcrStatus(null);
+
+    try {
+      const allPreviews: Array<PdfImportPreview & { filePath: string; fileName: string }> = [];
+
+      // Process each PDF
+      const errors: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const filePath = files[i];
+        const fileName = getFileName(filePath);
+        console.log(`[PDF Import D&D] Processing ${i + 1}/${files.length}: ${fileName}`);
+        setOcrStatus(`Analysiere ${fileName} (${i + 1}/${files.length})...`);
+
+        // Allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        try {
+          let previewData: PdfImportPreview;
+
+          // Use OCR-enabled preview if option is selected and consent given
+          if (useOcrFallback && hasOcrApiKey() && ocrConsentGiven) {
+            console.log(`[PDF Import D&D] Using OCR for ${fileName}`);
+            setIsOcrActive(true);
+            setOcrProgress({ current: i + 1, total: files.length });
+            previewData = await invoke<PdfImportPreview>('preview_pdf_import_with_ocr', {
+              pdfPath: filePath,
+              useOcr: true,
+              ocrProvider: aiProvider,
+              ocrModel: aiModel,
+              ocrApiKey: getOcrApiKey(),
+              ocrConsentGiven: true,
+            });
+          } else {
+            // Regular preview
+            console.log(`[PDF Import D&D] Using regular preview for ${fileName}`);
+            previewData = await previewPdfImport(filePath);
+            console.log(`[PDF Import D&D] Received preview for ${fileName}:`, previewData.transactions.length, 'transactions');
+          }
+
+          allPreviews.push({
+            ...previewData,
+            filePath,
+            fileName,
+          });
+        } catch (err) {
+          console.error(`Failed to parse ${fileName}:`, err);
+          errors.push(`${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // Show errors if any files failed
+      if (errors.length > 0 && allPreviews.length === 0) {
+        throw new Error(`Keine PDFs konnten verarbeitet werden:\n${errors.join('\n')}`);
+      }
+
+      // Add errors as warnings to show in preview
+      if (errors.length > 0) {
+        allPreviews[0] = {
+          ...allPreviews[0],
+          warnings: [...(allPreviews[0].warnings || []), ...errors.map(e => `Fehler: ${e}`)],
+        };
+      }
+
+      setOcrStatus(null);
+      setIsOcrActive(false);
+      setOcrProgress(null);
+      setPreviews(allPreviews);
+
+      // Initialize portfolio selection per file with first available portfolio
+      const defaultPortfolio = portfolios.find(p => !p.isRetired)?.id;
+      if (defaultPortfolio) {
+        const initialPortfolios: Record<number, number> = {};
+        allPreviews.forEach((_, idx) => {
+          initialPortfolios[idx] = defaultPortfolio;
+        });
+        setPortfolioPerFile(initialPortfolios);
+      }
+
+      // Combine all previews into one for display
+      const combined: PdfImportPreview = {
+        bank: allPreviews.map(p => p.bank).filter(Boolean).join(', ') || 'Unbekannt',
+        transactions: allPreviews.flatMap(p =>
+          p.transactions.map(txn => ({
+            ...txn,
+            // Add source info to security name for display
+            _sourceFile: p.fileName,
+            _sourceBank: p.bank,
+          }))
+        ),
+        newSecurities: allPreviews.flatMap(p => p.newSecurities),
+        matchedSecurities: allPreviews.flatMap(p => p.matchedSecurities || []),
+        warnings: allPreviews.flatMap(p =>
+          p.warnings.map(w => `[${p.fileName}] ${w}`)
+        ),
+        potentialDuplicates: allPreviews.flatMap(p => p.potentialDuplicates || []),
+      };
+
+      // Remove duplicate securities (by ISIN)
+      const seenIsins = new Set<string>();
+      combined.newSecurities = combined.newSecurities.filter(sec => {
+        if (sec.isin && seenIsins.has(sec.isin)) return false;
+        if (sec.isin) seenIsins.add(sec.isin);
+        return true;
+      });
+
+      setCombinedPreview(combined);
+
+      // If deliveryMode is active, automatically convert Buy → TransferIn
+      if (deliveryMode && combined.transactions.length > 0) {
+        const autoOverrides: Record<number, string> = {};
+        combined.transactions.forEach((txn, idx) => {
+          if (txn.txnType === 'Buy') {
+            autoOverrides[idx] = 'TransferIn';
+          }
+        });
+        if (Object.keys(autoOverrides).length > 0) {
+          setTxnTypeOverrides(autoOverrides);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setOcrStatus(null);
+      setIsOcrActive(false);
+      setOcrProgress(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Keep ref updated with latest processDroppedFiles function (fixes stale closure)
+  processDroppedFilesRef.current = processDroppedFiles;
+
+  // HTML5 Drag & Drop Handlers (fallback for browser events)
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    // Note: HTML5 D&D doesn't provide file paths, only File objects
+    // Tauri native D&D (onDragDropEvent) handles actual file drops with paths
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = modalRef.current?.getBoundingClientRect();
+    if (rect) {
+      const { clientX, clientY } = e;
+      if (clientX < rect.left || clientX > rect.right ||
+          clientY < rect.top || clientY > rect.bottom) {
+        setIsDragging(false);
+      }
+    }
   };
 
   const handleSelectFile = async () => {
@@ -552,7 +785,14 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-background rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div
+        ref={modalRef}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        className="bg-background rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] flex flex-col relative"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -1093,6 +1333,16 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
             </button>
           )}
         </div>
+
+        {/* Drag & Drop Visual Feedback Overlay */}
+        {isDragging && (
+          <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
+            <div className="bg-background/90 rounded-lg p-4 shadow-lg text-center">
+              <FileText className="h-8 w-8 mx-auto mb-2 text-primary" />
+              <p className="text-sm font-medium">PDF hier ablegen</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* OCR Consent Dialog */}

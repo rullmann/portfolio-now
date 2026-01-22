@@ -145,20 +145,14 @@ impl ScalableParser {
     fn parse_dividends(&self, content: &str, ctx: &mut ParseContext) -> Vec<ParsedTransaction> {
         let mut transactions = Vec::new();
 
+        // Detect dividend documents - including "Wertpapierereignisse" and "Dividendenabrechnung" from Baader Bank
         if !content.contains("Dividende")
             && !content.contains("Ertragsgutschrift")
-            && !content.contains("Ausschüttung") {
+            && !content.contains("Ausschüttung")
+            && !content.contains("Wertpapierereignisse")
+            && !content.contains("Dividendenabrechnung") {
             return transactions;
         }
-
-        let date_re = Regex::new(r"(?:Valuta|Zahltag)\s*[:/]?\s*(\d{2}\.\d{2}\.\d{4})").ok();
-        let isin_re = Regex::new(r"ISIN\s*[:/]?\s*([A-Z]{2}[A-Z0-9]{10})").ok();
-        let shares_re = Regex::new(r"(?:Nominale|St(?:ü|u)ck)\s*[:/]?\s*([\d.,]+)").ok();
-        let gross_re = Regex::new(r"(?:Brutto|Bruttobetrag)\s*[:/]?\s*EUR?\s*([\d.,]+)").ok();
-        let tax_re = Regex::new(r"Kapitalertragsteuer\s*[:/]?\s*EUR?\s*([\d.,]+)").ok();
-        let soli_re = Regex::new(r"Solidarit(?:ä|a)tszuschlag\s*[:/]?\s*EUR?\s*([\d.,]+)").ok();
-        let qst_re = Regex::new(r"Quellensteuer\s*[:/]?\s*EUR?\s*([\d.,]+)").ok();
-        let net_re = Regex::new(r"(?:Gutschrift|Ausmachender Betrag)\s*[:/]?\s*EUR?\s*([\d.,]+)").ok();
 
         let mut txn = ParsedTransaction {
             date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
@@ -179,59 +173,182 @@ impl ScalableParser {
             forex_currency: None,
         };
 
-        if let Some(re) = date_re {
+        // === BAADER BANK / SCALABLE CAPITAL FORMAT ===
+        // Example: "STK 85 Ausschüttung"
+        // Example: "Zahltag: 13.11.2025"
+        // Example: "Bruttobetrag EUR 18,98"
+        // Example: "US-Quellensteuer 2,85 -EUR"
+        // Example: "16,13EURValuta: 13.11.2025"
+
+        // 1. Extract shares - "STK 85" format (Baader Bank)
+        if let Some(re) = Regex::new(r"STK\s+(\d+)").ok() {
+            if let Some(caps) = re.captures(content) {
+                txn.shares = parse_german_decimal(&caps[1]);
+            }
+        }
+        // Fallback: "Stück: X" or "Nominale: X"
+        if txn.shares.is_none() {
+            if let Some(re) = Regex::new(r"(?:Nominale|St(?:ü|u)ck)\s*[:/]?\s*([\d.,]+)").ok() {
+                if let Some(caps) = re.captures(content) {
+                    txn.shares = parse_german_decimal(&caps[1]);
+                }
+            }
+        }
+
+        // 2. Extract ISIN - "ISIN: US0378331005" or "ISIN US0378331005"
+        if let Some(re) = Regex::new(r"ISIN[:\s]+([A-Z]{2}[A-Z0-9]{10})").ok() {
+            if let Some(caps) = re.captures(content) {
+                txn.isin = Some(caps[1].to_string());
+            }
+        }
+        if txn.isin.is_none() {
+            txn.isin = extract_isin(content);
+        }
+
+        // 3. Extract WKN - "WKN: 865985" or "WKN 865985"
+        if let Some(re) = Regex::new(r"WKN[:\s]+([A-Z0-9]{6})").ok() {
+            if let Some(caps) = re.captures(content) {
+                txn.wkn = Some(caps[1].to_string());
+            }
+        }
+
+        // 4. Extract date - "Zahltag: 13.11.2025" or "Valuta: 13.11.2025"
+        if let Some(re) = Regex::new(r"(?:Zahltag|Valuta|Zahlbarkeitstag)[:\s]+(\d{2}\.\d{2}\.\d{4})").ok() {
             if let Some(caps) = re.captures(content) {
                 if let Some(date) = parse_german_date(&caps[1]) {
                     txn.date = date;
                 }
             }
         }
-
-        if let Some(re) = &isin_re {
-            if let Some(caps) = re.captures(content) {
-                txn.isin = Some(caps[1].to_string());
-            }
-        } else {
-            txn.isin = extract_isin(content);
-        }
-
-        if let Some(re) = &shares_re {
-            if let Some(caps) = re.captures(content) {
-                txn.shares = parse_german_decimal(&caps[1]);
+        // Fallback: Ex-Tag
+        if txn.date == chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap() {
+            if let Some(re) = Regex::new(r"Ex-Tag[:\s]+(\d{2}\.\d{2}\.\d{4})").ok() {
+                if let Some(caps) = re.captures(content) {
+                    if let Some(date) = parse_german_date(&caps[1]) {
+                        txn.date = date;
+                    }
+                }
             }
         }
 
-        if let Some(re) = &gross_re {
+        // 5. Extract exchange rate - "Umrechnungskurs: 1,16438EUR/USD"
+        if let Some(re) = Regex::new(r"(?:Umrechnungskurs|Devisenkurs|Wechselkurs)[:\s]+([\d.,]+)").ok() {
             if let Some(caps) = re.captures(content) {
-                txn.gross_amount = ctx.parse_amount("gross_amount", &caps[1]);
+                txn.exchange_rate = parse_german_decimal(&caps[1]);
             }
         }
 
-        // Collect all taxes
+        // 6. Extract gross amount in EUR - "Bruttobetrag EUR 18,98"
+        if let Some(re) = Regex::new(r"Bruttobetrag\s+EUR\s+([\d.,]+)").ok() {
+            if let Some(caps) = re.captures(content) {
+                txn.gross_amount = ctx.parse_amount("gross_eur", &caps[1]);
+            }
+        }
+
+        // 7. Extract gross amount in foreign currency - "Bruttobetrag USD 22,10"
+        if let Some(re) = Regex::new(r"Bruttobetrag\s+(USD|GBP|CHF)\s+([\d.,]+)").ok() {
+            if let Some(caps) = re.captures(content) {
+                txn.forex_currency = Some(caps[1].to_string());
+                // If we don't have EUR gross yet, calculate from foreign
+                if txn.gross_amount == 0.0 {
+                    let foreign_gross = ctx.parse_amount("gross_foreign", &caps[2]);
+                    if let Some(rate) = txn.exchange_rate {
+                        if rate > 0.0 {
+                            txn.gross_amount = foreign_gross / rate;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback gross patterns for other formats
+        if txn.gross_amount == 0.0 {
+            if let Some(re) = Regex::new(r"(?:Brutto|Bruttobetrag|Bruttodividende)[:\s]+(?:EUR\s+)?([\d.,]+)").ok() {
+                if let Some(caps) = re.captures(content) {
+                    txn.gross_amount = ctx.parse_amount("gross_amount", &caps[1]);
+                }
+            }
+        }
+
+        // 8. Extract taxes
         let mut total_tax = 0.0;
-        if let Some(re) = &tax_re {
+
+        // US-Quellensteuer: "US-Quellensteuer 2,85 -EUR" or "US-Quellensteuer 2,85-EUR"
+        if let Some(re) = Regex::new(r"US-Quellensteuer\s+([\d.,]+)\s*-?\s*EUR").ok() {
             if let Some(caps) = re.captures(content) {
-                total_tax += ctx.parse_amount("tax", &caps[1]);
+                total_tax += ctx.parse_amount("us_qst", &caps[1]);
             }
         }
-        if let Some(re) = &soli_re {
+        // General Quellensteuer: "Quellensteuer 15,00 % 2,85 -EUR"
+        if total_tax == 0.0 {
+            if let Some(re) = Regex::new(r"Quellensteuer(?:\s+[\d.,]+\s*%?)?\s+([\d.,]+)\s*-?\s*EUR").ok() {
+                if let Some(caps) = re.captures(content) {
+                    total_tax += ctx.parse_amount("quellensteuer", &caps[1]);
+                }
+            }
+        }
+        // Kapitalertragsteuer
+        if let Some(re) = Regex::new(r"Kapitalertragsteuer\s*[:\s]*([\d.,]+)\s*-?\s*EUR").ok() {
+            if let Some(caps) = re.captures(content) {
+                total_tax += ctx.parse_amount("kest", &caps[1]);
+            }
+        }
+        // Solidaritätszuschlag
+        if let Some(re) = Regex::new(r"Solidarit(?:ä|a)tszuschlag\s*[:\s]*([\d.,]+)\s*-?\s*EUR").ok() {
             if let Some(caps) = re.captures(content) {
                 total_tax += ctx.parse_amount("soli", &caps[1]);
             }
         }
-        if let Some(re) = &qst_re {
+        // Kirchensteuer
+        if let Some(re) = Regex::new(r"Kirchensteuer\s*[:\s]*([\d.,]+)\s*-?\s*EUR").ok() {
             if let Some(caps) = re.captures(content) {
-                total_tax += ctx.parse_amount("quellensteuer", &caps[1]);
+                total_tax += ctx.parse_amount("kist", &caps[1]);
             }
         }
         txn.taxes = total_tax;
 
-        if let Some(re) = &net_re {
+        // 9. Extract net amount - "16,13EURValuta:" or "Zu Gunsten...16,13 EUR"
+        // Baader Bank format: amount directly before "EUR" and "Valuta"
+        if let Some(re) = Regex::new(r"(\d+,\d{2})EUR\s*Valuta").ok() {
             if let Some(caps) = re.captures(content) {
                 txn.net_amount = ctx.parse_amount("net_amount", &caps[1]);
             }
         }
+        // Alternative: "Ausmachender Betrag EUR 16,13" or "Gutschrift EUR 16,13"
+        if txn.net_amount == 0.0 {
+            if let Some(re) = Regex::new(r"(?:Ausmachender Betrag|Gutschrift|Netto)[:\s]+(?:EUR\s+)?([\d.,]+)").ok() {
+                if let Some(caps) = re.captures(content) {
+                    txn.net_amount = ctx.parse_amount("net_amount", &caps[1]);
+                }
+            }
+        }
+        // Calculate net from gross - taxes if still 0
+        if txn.net_amount == 0.0 && txn.gross_amount > 0.0 {
+            txn.net_amount = txn.gross_amount - txn.taxes;
+        }
 
+        // 10. Extract security name - "p.STKApple Inc." or line after ISIN/WKN
+        if let Some(re) = Regex::new(r"p\.STK\s*([A-Za-z][A-Za-z0-9\s.,&'-]+?)(?:\n|Zahlungszeitraum)").ok() {
+            if let Some(caps) = re.captures(content) {
+                let name = caps[1].trim();
+                if !name.is_empty() && name.len() < 100 {
+                    txn.security_name = Some(name.to_string());
+                }
+            }
+        }
+        // Fallback: Wertpapierbezeichnung
+        if txn.security_name.is_none() {
+            if let Some(re) = Regex::new(r"(?:Wertpapier(?:bezeichnung)?|Gattungsbezeichnung)[:\s]+(.+?)(?:\n|ISIN|WKN)").ok() {
+                if let Some(caps) = re.captures(content) {
+                    let name = caps[1].trim();
+                    if !name.is_empty() && name.len() < 100 {
+                        txn.security_name = Some(name.to_string());
+                    }
+                }
+            }
+        }
+
+        // Only add if we have ISIN and some amount
         if txn.isin.is_some() && (txn.gross_amount > 0.0 || txn.net_amount > 0.0) {
             transactions.push(txn);
         }

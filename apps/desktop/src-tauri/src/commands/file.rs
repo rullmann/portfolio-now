@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use crate::db;
 use crate::pp::{
     common::Money,
@@ -459,4 +460,52 @@ fn load_portfolio_transactions(
     }
 
     Ok(txns)
+}
+
+/// Read a file as base64 for chat attachments
+///
+/// # Security
+/// Path is validated. Only PDF files are allowed for security reasons.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBase64Result {
+    pub data: String,
+    pub mime_type: String,
+    pub filename: String,
+}
+
+#[command]
+pub async fn read_file_as_base64(path: String) -> Result<FileBase64Result, String> {
+    // SECURITY: Validate the file path - only allow PDF files
+    let validated_path = security::validate_file_path_with_extension(&path, Some(&["pdf"]))?;
+
+    if !validated_path.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    // Read the file
+    let data = std::fs::read(&validated_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // Check file size (max 50MB for PDFs)
+    const MAX_SIZE: usize = 50 * 1024 * 1024;
+    if data.len() > MAX_SIZE {
+        return Err(format!("File too large (max {} MB)", MAX_SIZE / 1024 / 1024));
+    }
+
+    // Encode as base64
+    let base64_data = BASE64.encode(&data);
+
+    // Extract filename
+    let filename = validated_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document.pdf")
+        .to_string();
+
+    Ok(FileBase64Result {
+        data: base64_data,
+        mime_type: "application/pdf".to_string(),
+        filename,
+    })
 }

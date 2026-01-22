@@ -678,11 +678,9 @@ pub fn import_extracted_transactions(
         }
     }
 
-    // Only return error if nothing was imported AND there are real errors (not just duplicates)
-    if imported_count == 0 && duplicates.is_empty() && !errors.is_empty() {
-        return Err(format!("Keine Transaktionen importiert. Fehler: {}", errors.join("; ")));
-    }
-
+    // NEVER throw Err() - always return a result with imported_count, duplicates, and errors
+    // The frontend will handle displaying appropriate messages for each case
+    // This allows duplicates and errors to be shown as friendly chat messages
     Ok(ImportTransactionsResult {
         imported_count,
         duplicates,
@@ -768,53 +766,23 @@ fn import_single_extracted_transaction(
         let requires_security = is_portfolio_transaction(&effective_txn_type)
             || effective_txn_type == "DIVIDENDS";
 
-        // Find security if ISIN/name provided
-        let security_id = if let Some(isin) = &txn.isin {
-            // Skip "nicht verfügbar" or similar placeholder values
-            if isin.len() >= 10 && !isin.to_lowercase().contains("nicht") {
-                let mut stmt = conn.prepare(
-                    "SELECT id FROM pp_security WHERE isin = ?1 LIMIT 1"
-                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+        // Find security using the improved fuzzy-matching function
+        // This handles: ISIN match, exact name, partial name, accent-normalized name,
+        // multi-word fuzzy match (e.g., "LVMH" + "Vuitton" -> "LVMH Moët Henn. L. Vuitton")
+        let security_id = find_security_id(conn, &txn.isin, &txn.security_name);
 
-                let security: Option<i64> = stmt.query_row([isin], |row| row.get(0)).ok();
+        // Report error if security required but not found
+        if security_id.is_none() && requires_security {
+            let identifier = txn.isin.as_ref()
+                .filter(|i| i.len() >= 10)
+                .map(|i| format!("ISIN {}", i))
+                .or_else(|| txn.security_name.as_ref().map(|n| format!("'{}'", n)))
+                .unwrap_or_else(|| "ohne Kennung".to_string());
 
-                if security.is_none() && requires_security {
-                    return Err(ImportSingleError::Other(format!("Wertpapier mit ISIN {} nicht gefunden. Bitte zuerst anlegen.", isin)));
-                }
-                security
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // If no security by ISIN, try by name
-        let security_id = if security_id.is_none() {
-            if let Some(name) = &txn.security_name {
-                let mut stmt = conn.prepare(
-                    "SELECT id FROM pp_security WHERE name LIKE ?1 LIMIT 1"
-                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
-
-                let search_name = format!("%{}%", name);
-                let security: Option<i64> = stmt.query_row([&search_name], |row| row.get(0)).ok();
-
-                if security.is_none() && requires_security {
-                    return Err(ImportSingleError::Other(format!("Wertpapier '{}' nicht gefunden. Bitte zuerst anlegen.", name)));
-                }
-                security
-            } else {
-                None
-            }
-        } else {
-            security_id
-        };
-
-        // For DIVIDENDS, we MUST have a security
-        if effective_txn_type == "DIVIDENDS" && security_id.is_none() {
-            return Err(ImportSingleError::Other(
-                "Dividende ohne Wertpapier kann nicht importiert werden. Bitte ISIN oder Name angeben.".to_string()
-            ));
+            return Err(ImportSingleError::Other(format!(
+                "Wertpapier {} nicht gefunden. Bitte zuerst anlegen.",
+                identifier
+            )));
         }
 
         // Determine owner (portfolio or account)
@@ -865,7 +833,12 @@ fn import_single_extracted_transaction(
         // Duplicate detection (same logic as pdf_import.rs - SSOT)
         if let Some(sec_id) = security_id {
             let effective_amount = if effective_txn_type == "DIVIDENDS" {
-                compute_dividend_gross_amount(txn).or(txn.amount)
+                let gross = compute_dividend_gross_amount(txn);
+                log::debug!(
+                    "Dividend duplicate check: gross_amount={:?}, taxes={:?}, net_amount={:?}, computed_gross={:?}, using={:?}",
+                    txn.gross_amount, txn.taxes, txn.amount, gross, gross.or(txn.amount)
+                );
+                gross.or(txn.amount)
             } else {
                 txn.amount
             };
@@ -1039,15 +1012,37 @@ fn import_single_extracted_transaction(
 
 fn normalize_extracted_fees(txn: &ExtractedTransactionInput) -> Option<f64> {
     let mut total = txn.fees.unwrap_or(0.0);
+
     if let Some(foreign) = txn.fees_foreign {
-        if let Some(foreign_currency) = txn.fees_foreign_currency.as_ref() {
-            if foreign_currency.eq_ignore_ascii_case(&txn.currency) {
-                total += foreign;
-            } else if let Some(rate) = txn.exchange_rate {
-                total += foreign * rate;
+        if foreign > 0.0 {
+            if let Some(foreign_currency) = txn.fees_foreign_currency.as_ref() {
+                // Currency explicitly specified
+                if foreign_currency.eq_ignore_ascii_case(&txn.currency) {
+                    // Same currency -> no conversion needed
+                    total += foreign;
+                } else if let Some(rate) = txn.exchange_rate {
+                    // Different currency -> convert with exchange rate
+                    total += foreign * rate;
+                }
+            } else {
+                // NO fees_foreign_currency specified
+                // Check if transaction itself has foreign currency
+                if let Some(gross_currency) = txn.gross_currency.as_ref() {
+                    if !gross_currency.eq_ignore_ascii_case(&txn.currency) {
+                        // Transaction has foreign currency -> fees_foreign is in that currency
+                        if let Some(rate) = txn.exchange_rate {
+                            total += foreign * rate;
+                        }
+                    } else {
+                        // gross_currency == txn.currency -> fees_foreign is already in base currency
+                        total += foreign;
+                    }
+                } else {
+                    // No gross_currency -> assume fees_foreign is already in txn.currency
+                    // This handles AutoFX fees from Trade Republic (already in EUR)
+                    total += foreign;
+                }
             }
-        } else if let Some(rate) = txn.exchange_rate {
-            total += foreign * rate;
         }
     }
 
@@ -1323,9 +1318,164 @@ pub fn enrich_extracted_transactions(
     Ok(enriched)
 }
 
-/// Helper to find security ID by ISIN or name
+// ============================================================================
+// Duplicate Detection (for preview - before import)
+// ============================================================================
+
+/// Result of checking a single transaction for duplicates
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCheckResult {
+    pub index: usize,
+    pub is_duplicate: bool,
+    pub message: Option<String>,
+}
+
+/// Result of checking all transactions for duplicates
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCheckResponse {
+    pub results: Vec<DuplicateCheckResult>,
+    pub all_duplicates: bool,
+    pub duplicate_count: usize,
+}
+
+/// Check extracted transactions for duplicates BEFORE showing preview
+///
+/// This allows the frontend to filter out duplicates before displaying
+/// the transaction preview, or show a message that all are duplicates.
+#[command]
+pub fn check_extracted_transactions_for_duplicates(
+    transactions: Vec<ExtractedTransactionInput>,
+) -> Result<DuplicateCheckResponse, String> {
+    use crate::db;
+
+    let conn_guard = db::get_connection()
+        .map_err(|e| format!("Datenbankfehler: {}", e))?;
+    let conn = conn_guard.as_ref()
+        .ok_or_else(|| "Datenbank nicht initialisiert".to_string())?;
+
+    let mut results: Vec<DuplicateCheckResult> = Vec::new();
+    let mut duplicate_count = 0;
+
+    for (index, txn) in transactions.iter().enumerate() {
+        let normalized_date = normalize_extracted_date(&txn.date, &txn.currency);
+        let effective_txn_type = normalize_extracted_txn_type(&txn.txn_type);
+
+        // Find security ID
+        let security_id = find_security_id(conn, &txn.isin, &txn.security_name);
+
+        // Check for duplicate if security found
+        let (is_duplicate, message) = if let Some(sec_id) = security_id {
+            let effective_amount = if effective_txn_type == "DIVIDENDS" {
+                compute_dividend_gross_amount(txn).or(txn.amount)
+            } else {
+                txn.amount
+            };
+            let amount_cents = effective_amount.map(|a| (a * 100.0).round() as i64).unwrap_or(0);
+            let txn_types = get_duplicate_check_types_for_string(&effective_txn_type);
+
+            if !txn_types.is_empty() {
+                let date_pattern = format!("{}%", &normalized_date);
+                let type_placeholders = txn_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", i + 4))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let sql = format!(
+                    r#"
+                    SELECT 1 FROM pp_txn
+                    WHERE security_id = ?1
+                      AND date LIKE ?2
+                      AND ABS(amount - ?3) <= 1
+                      AND txn_type IN ({})
+                    LIMIT 1
+                    "#,
+                    type_placeholders
+                );
+
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    vec![&sec_id, &date_pattern, &amount_cents];
+                for t in &txn_types {
+                    params.push(t);
+                }
+
+                let is_dup: bool = conn
+                    .query_row(&sql, params.as_slice(), |_| Ok(true))
+                    .unwrap_or(false);
+
+                if is_dup {
+                    let msg = format!(
+                        "{} {} vom {} bereits vorhanden",
+                        txn.txn_type,
+                        txn.security_name.as_deref().unwrap_or("Unbekannt"),
+                        normalized_date
+                    );
+                    (true, Some(msg))
+                } else {
+                    (false, None)
+                }
+            } else {
+                (false, None)
+            }
+        } else {
+            // No security found - not a duplicate (will fail during import with different error)
+            (false, None)
+        };
+
+        if is_duplicate {
+            duplicate_count += 1;
+        }
+
+        results.push(DuplicateCheckResult {
+            index,
+            is_duplicate,
+            message,
+        });
+    }
+
+    let all_duplicates = duplicate_count == transactions.len() && !transactions.is_empty();
+
+    Ok(DuplicateCheckResponse {
+        results,
+        all_duplicates,
+        duplicate_count,
+    })
+}
+
+/// Normalize string for fuzzy matching: lowercase, remove accents, remove punctuation
+fn normalize_for_search(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'ë' | 'é' | 'è' | 'ê' | 'ē' => 'e',
+            'ä' | 'á' | 'à' | 'â' | 'ā' => 'a',
+            'ö' | 'ó' | 'ò' | 'ô' | 'ō' => 'o',
+            'ü' | 'ú' | 'ù' | 'û' | 'ū' => 'u',
+            'ï' | 'í' | 'ì' | 'î' | 'ī' => 'i',
+            'ß' => 's',
+            'ñ' => 'n',
+            '.' | ',' | '-' | '&' | '\'' => ' ', // Replace punctuation with space
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Extract significant words from name (skip common words, keep brand names)
+fn extract_significant_words(name: &str) -> Vec<String> {
+    let skip_words = ["inc", "corp", "ag", "sa", "se", "plc", "ltd", "gmbh", "co", "kg", "the", "and", "of"];
+    normalize_for_search(name)
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && !skip_words.contains(&w.to_lowercase().as_str()))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Helper to find security ID by ISIN, WKN, ticker, or name
 fn find_security_id(conn: &rusqlite::Connection, isin: &Option<String>, name: &Option<String>) -> Option<i64> {
-    // First try by ISIN
+    // First try by ISIN (most reliable)
     if let Some(isin_val) = isin {
         if isin_val.len() >= 10 && !isin_val.to_lowercase().contains("nicht") {
             let result: Option<i64> = conn
@@ -1337,22 +1487,127 @@ fn find_security_id(conn: &rusqlite::Connection, isin: &Option<String>, name: &O
                 .ok();
 
             if result.is_some() {
+                log::debug!("find_security_id: Found by ISIN {}", isin_val);
                 return result;
             }
         }
     }
 
-    // Then try by name
+    // Then try by name with multiple strategies
     if let Some(name_val) = name {
+        // Strategy 1: Exact match (case-insensitive)
+        let name_lower = name_val.to_lowercase();
+        let result: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM pp_security WHERE LOWER(name) = ?1 LIMIT 1",
+                [&name_lower],
+                |row| row.get(0),
+            )
+            .ok();
+        if result.is_some() {
+            log::debug!("find_security_id: Found by exact name match '{}'", name_val);
+            return result;
+        }
+
+        // Strategy 2: Contains the full name
         let search_name = format!("%{}%", name_val);
-        return conn
+        let result: Option<i64> = conn
             .query_row(
                 "SELECT id FROM pp_security WHERE name LIKE ?1 LIMIT 1",
                 [&search_name],
                 |row| row.get(0),
             )
             .ok();
+        if result.is_some() {
+            log::debug!("find_security_id: Found by name contains '{}'", name_val);
+            return result;
+        }
+
+        // Strategy 3: First word match (e.g., "LVMH" from "LVMH Moët Hennessy...")
+        let first_word = name_val.split_whitespace().next().unwrap_or(name_val);
+        if first_word.len() >= 3 {
+            let search_first = format!("{}%", first_word);
+            let result: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM pp_security WHERE name LIKE ?1 LIMIT 1",
+                    [&search_first],
+                    |row| row.get(0),
+                )
+                .ok();
+            if result.is_some() {
+                log::debug!("find_security_id: Found by first word '{}' of '{}'", first_word, name_val);
+                return result;
+            }
+        }
+
+        // Strategy 4: Normalized first word (without accents)
+        let normalized_first = normalize_for_search(first_word);
+        if normalized_first.len() >= 3 && normalized_first != first_word.to_lowercase() {
+            // Load all securities and check normalized names
+            let mut stmt = conn
+                .prepare("SELECT id, name FROM pp_security WHERE is_retired = 0")
+                .ok()?;
+            let mut rows = stmt.query([]).ok()?;
+            while let Some(row) = rows.next().ok()? {
+                let id: i64 = row.get(0).ok()?;
+                let db_name: String = row.get(1).ok()?;
+                let db_normalized = normalize_for_search(&db_name);
+                if db_normalized.starts_with(&normalized_first) {
+                    log::debug!("find_security_id: Found by normalized first word '{}' -> '{}'", first_word, db_name);
+                    return Some(id);
+                }
+            }
+        }
+
+        // Strategy 5: Multi-word fuzzy match (LVMH + Vuitton both in name)
+        let significant_words = extract_significant_words(name_val);
+        if significant_words.len() >= 2 {
+            // Use first and last significant words
+            let first = &significant_words[0];
+            let last = &significant_words[significant_words.len() - 1];
+
+            let mut stmt = conn
+                .prepare("SELECT id, name FROM pp_security WHERE is_retired = 0")
+                .ok()?;
+            let mut rows = stmt.query([]).ok()?;
+            while let Some(row) = rows.next().ok()? {
+                let id: i64 = row.get(0).ok()?;
+                let db_name: String = row.get(1).ok()?;
+                let db_normalized = normalize_for_search(&db_name);
+
+                // Check if both first and last words appear in DB name
+                if db_normalized.contains(first) && db_normalized.contains(last) {
+                    log::debug!(
+                        "find_security_id: Found by multi-word match '{}' + '{}' in '{}'",
+                        first, last, db_name
+                    );
+                    return Some(id);
+                }
+            }
+        }
+
+        // Strategy 6: Any significant word with high confidence (brand names)
+        // "LVMH" alone should match "LVMH Moët Henn. L. Vuitton"
+        for word in &significant_words {
+            if word.len() >= 4 {
+                let search_pattern = format!("%{}%", word);
+                let result: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM pp_security WHERE LOWER(name) LIKE LOWER(?1) LIMIT 1",
+                        [&search_pattern],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if result.is_some() {
+                    log::debug!("find_security_id: Found by significant word '{}' from '{}'", word, name_val);
+                    return result;
+                }
+            }
+        }
+
+        log::debug!("find_security_id: No match found for name '{}' (words: {:?})", name_val, significant_words);
     }
 
+    log::debug!("find_security_id: No security found for isin={:?}, name={:?}", isin, name);
     None
 }

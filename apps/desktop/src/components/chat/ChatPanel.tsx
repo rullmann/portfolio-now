@@ -14,7 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { useSettingsStore, type AiProvider } from '../../store';
+import { useSettingsStore, useUIStore, type AiProvider } from '../../store';
 import { AIModelSelector } from '../common/AIModelSelector';
 import { ChatMessage, type ChatMessageData } from './ChatMessage';
 import { VisionIndicator } from './VisionIndicator';
@@ -22,7 +22,7 @@ import { ImageAttachmentPreview, type ChatImageAttachment } from './ImageAttachm
 import { ImageUploadConsentDialog } from './ImageUploadConsentDialog';
 import { ExtractedTransactionsPreview, type ExtractedTransaction, type ExtractedTransactionsPayload, type Portfolio } from './ExtractedTransactionsPreview';
 import { cn } from '../../lib/utils';
-import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult } from '../../lib/types';
+import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult, DuplicateCheckResponse } from '../../lib/types';
 import { formatSharesFromScaled, formatAmountFromScaled, getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { DropdownMenu, DropdownItem } from '../common/DropdownMenu';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
@@ -32,6 +32,7 @@ const MAX_IMAGE_SIZE_MB = 10;
 const MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+const PDF_EXTENSIONS = ['pdf'];
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 800;
@@ -294,6 +295,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [pendingImageUpload, setPendingImageUpload] = useState<File[] | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // PDF import modal access
+  const { openPdfImportModal } = useUIStore();
+
   // Conversation state
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null);
@@ -379,14 +383,33 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   // Tauri native drag-drop handler (external files)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      console.log('[ChatPanel D&D] Panel not open, skipping listener');
+      return;
+    }
 
+    console.log('[ChatPanel D&D] Setting up Tauri drag-drop listener...');
     const window = getCurrentWindow();
     let unlistenFn: (() => void) | null = null;
 
     const setupListener = async () => {
+      console.log('[ChatPanel D&D] Registering onDragDropEvent...');
       unlistenFn = await window.onDragDropEvent(async (event) => {
+        console.log('[ChatPanel D&D] Tauri event received:', event.payload.type, event.payload);
         if (event.payload.type === 'drop' && event.payload.paths.length > 0) {
+          // Check for PDF files first - show action dialog
+          const pdfPaths = event.payload.paths.filter((path: string) => {
+            const ext = path.split('.').pop()?.toLowerCase() || '';
+            return PDF_EXTENSIONS.includes(ext);
+          });
+
+          if (pdfPaths.length > 0) {
+            console.log('[ChatPanel D&D] PDF detected, opening import modal:', pdfPaths[0]);
+            openPdfImportModal(pdfPaths[0]);
+            onClose(); // Close chat panel
+            return;
+          }
+
           // Filter for image files by extension
           const imagePaths = event.payload.paths.filter((path: string) => {
             const ext = path.split('.').pop()?.toLowerCase() || '';
@@ -821,27 +844,35 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     };
   }, [isResizing]);
 
-  const sendMessage = async (content: string) => {
+  const sendMessage = async (content: string, overrideAttachments?: ChatImageAttachment[]) => {
     // Allow sending with just attachments (no text required if images present)
     const hasContent = content.trim().length > 0;
-    const hasAttachments = attachments.length > 0;
+    // Use override attachments if provided, otherwise use state
+    const effectiveAttachments = overrideAttachments ?? attachments;
+    const hasAttachments = effectiveAttachments.length > 0;
 
     if ((!hasContent && !hasAttachments) || isLoading || !currentConversationId) return;
 
     const trimmedContent = content.trim();
-    const currentAttachments = [...attachments]; // Copy for sending
+    const currentAttachments = [...effectiveAttachments]; // Copy for sending
 
     setInput('');
-    setAttachments([]); // Clear attachments immediately
+    if (!overrideAttachments) {
+      setAttachments([]); // Clear attachments only if not using override
+    }
     setIsLoading(true);
     setError(null);
 
     try {
-      // Build user message content (include attachment indicator if images sent)
+      // Build user message content (include attachment indicator)
+      const hasPdf = currentAttachments.some(a => a.mimeType === 'application/pdf');
+      const attachmentLabel = hasPdf
+        ? `${currentAttachments.length} PDF${currentAttachments.length > 1 ? 's' : ''}`
+        : `${currentAttachments.length} Bild${currentAttachments.length > 1 ? 'er' : ''}`;
       const displayContent = hasAttachments && !hasContent
-        ? `[${currentAttachments.length} Bild${currentAttachments.length > 1 ? 'er' : ''} gesendet]`
+        ? `[${attachmentLabel} gesendet]`
         : hasAttachments
-        ? `${trimmedContent}\n\n[${currentAttachments.length} Bild${currentAttachments.length > 1 ? 'er' : ''} angehängt]`
+        ? `${trimmedContent}\n\n[${attachmentLabel} angehängt]`
         : trimmedContent;
 
       // Save user message to database first (with attachments)
@@ -940,6 +971,115 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         const savedSuggestions: SuggestedAction[] = [];
         for (const suggestion of response.suggestions) {
           try {
+            // For extracted_transactions: check for duplicates BEFORE showing preview
+            if (suggestion.actionType === 'extracted_transactions') {
+              let payload: ExtractedTransactionsPayload;
+              try {
+                payload = JSON.parse(suggestion.payload);
+              } catch {
+                console.error('Failed to parse extracted transactions payload');
+                continue;
+              }
+
+              // Check all transactions for duplicates
+              const duplicateCheck = await invoke<DuplicateCheckResponse>(
+                'check_extracted_transactions_for_duplicates',
+                {
+                  transactions: payload.transactions.map((t) => ({
+                    date: t.date,
+                    txn_type: t.txnType,
+                    security_name: t.securityName || null,
+                    isin: t.isin || null,
+                    shares: t.shares || null,
+                    gross_amount: t.grossAmount || null,
+                    gross_currency: t.grossCurrency || null,
+                    amount: t.amount || null,
+                    currency: t.currency,
+                    fees: t.fees || null,
+                    fees_foreign: t.feesForeign || null,
+                    fees_foreign_currency: t.feesForeignCurrency || null,
+                    exchange_rate: t.exchangeRate || null,
+                    taxes: t.taxes || null,
+                    note: t.note || null,
+                  })),
+                }
+              );
+
+              // If ALL transactions are duplicates, show message instead of preview
+              if (duplicateCheck.allDuplicates) {
+                const duplicateMessages = duplicateCheck.results
+                  .filter((r) => r.isDuplicate && r.message)
+                  .map((r) => r.message);
+
+                const duplicateContent =
+                  duplicateCheck.duplicateCount === 1
+                    ? `🔄 Diese Transaktion ist bereits vorhanden:\n• ${duplicateMessages[0]}`
+                    : `🔄 Alle ${duplicateCheck.duplicateCount} Transaktionen sind bereits vorhanden:\n${duplicateMessages.map((m) => `• ${m}`).join('\n')}`;
+
+                const dupMsgId = await invoke<number>('save_chat_message', {
+                  role: 'assistant',
+                  content: duplicateContent,
+                  conversationId: currentConversationId,
+                });
+
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: String(dupMsgId),
+                    role: 'assistant',
+                    content: duplicateContent,
+                    timestamp: new Date(),
+                    isDuplicate: true,
+                  },
+                ]);
+
+                // Don't save this suggestion - all duplicates
+                continue;
+              }
+
+              // If SOME transactions are duplicates, filter them out
+              if (duplicateCheck.duplicateCount > 0) {
+                const nonDuplicateIndices = duplicateCheck.results
+                  .filter((r) => !r.isDuplicate)
+                  .map((r) => r.index);
+                const filteredTransactions = payload.transactions.filter((_, idx) =>
+                  nonDuplicateIndices.includes(idx)
+                );
+
+                // Show message about skipped duplicates
+                const duplicateMessages = duplicateCheck.results
+                  .filter((r) => r.isDuplicate && r.message)
+                  .map((r) => r.message);
+
+                const partialDupContent = `🔄 ${duplicateCheck.duplicateCount === 1 ? 'Duplikat' : 'Duplikate'} übersprungen:\n${duplicateMessages.map((m) => `• ${m}`).join('\n')}`;
+
+                const partialDupMsgId = await invoke<number>('save_chat_message', {
+                  role: 'assistant',
+                  content: partialDupContent,
+                  conversationId: currentConversationId,
+                });
+
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: String(partialDupMsgId),
+                    role: 'assistant',
+                    content: partialDupContent,
+                    timestamp: new Date(),
+                    isDuplicate: true,
+                  },
+                ]);
+
+                // Update payload with filtered transactions
+                const filteredPayload: ExtractedTransactionsPayload = {
+                  ...payload,
+                  transactions: filteredTransactions,
+                };
+                suggestion.payload = JSON.stringify(filteredPayload);
+                suggestion.description = `${filteredTransactions.length} Transaktion${filteredTransactions.length !== 1 ? 'en' : ''} aus Bild erkannt`;
+              }
+            }
+
             const suggestionId = await invoke<number>('save_chat_suggestion', {
               messageId: Number(assistantMsgId),
               conversationId: currentConversationId,
@@ -1174,20 +1314,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         deliveryMode: deliveryMode,
       });
 
-      // Build success message
-      let successContent = '';
+      // 1. Show success message ONLY if transactions were imported
       if (result.importedCount > 0) {
-        successContent = `✓ ${result.importedCount} Transaktion${result.importedCount === 1 ? '' : 'en'} erfolgreich importiert`;
-      }
-
-      // Add errors to success message if any
-      if (result.errors.length > 0) {
-        if (successContent) successContent += '\n\n';
-        successContent += `⚠️ Fehler: ${result.errors.join('; ')}`;
-      }
-
-      // Save success message if there's any content
-      if (successContent) {
+        const successContent = `✓ ${result.importedCount} Transaktion${result.importedCount === 1 ? '' : 'en'} erfolgreich importiert`;
         const msgId = await invoke<number>('save_chat_message', {
           role: 'assistant',
           content: successContent,
@@ -1205,9 +1334,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         ]);
       }
 
-      // Show duplicates as a separate message with special styling (red border)
+      // 2. Show duplicates as separate chat message with special styling
       if (result.duplicates.length > 0) {
-        const duplicateContent = `🔄 Duplikate übersprungen:\n${result.duplicates.map(d => `• ${d}`).join('\n')}`;
+        const duplicateContent = `🔄 ${result.duplicates.length === 1 ? 'Duplikat' : 'Duplikate'} übersprungen:\n${result.duplicates.map(d => `• ${d}`).join('\n')}`;
         const dupMsgId = await invoke<number>('save_chat_message', {
           role: 'assistant',
           content: duplicateContent,
@@ -1221,7 +1350,48 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
             role: 'assistant',
             content: duplicateContent,
             timestamp: new Date(),
-            isDuplicate: true, // Mark as duplicate for special styling
+            isDuplicate: true, // Mark as duplicate for special styling (amber/orange border)
+          },
+        ]);
+      }
+
+      // 3. Show errors as separate chat message with special styling
+      if (result.errors.length > 0) {
+        const errorContent = `⚠️ ${result.errors.length === 1 ? 'Fehler' : 'Fehler'} beim Import:\n${result.errors.map(e => `• ${e}`).join('\n')}`;
+        const errMsgId = await invoke<number>('save_chat_message', {
+          role: 'assistant',
+          content: errorContent,
+          conversationId: currentConversationId,
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: String(errMsgId),
+            role: 'assistant',
+            content: errorContent,
+            timestamp: new Date(),
+            isError: true, // Mark as error for special styling (red border)
+          },
+        ]);
+      }
+
+      // 4. If nothing happened at all, show info message
+      if (result.importedCount === 0 && result.duplicates.length === 0 && result.errors.length === 0) {
+        const infoContent = 'ℹ️ Keine Transaktionen zum Importieren gefunden.';
+        const infoMsgId = await invoke<number>('save_chat_message', {
+          role: 'assistant',
+          content: infoContent,
+          conversationId: currentConversationId,
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: String(infoMsgId),
+            role: 'assistant',
+            content: infoContent,
+            timestamp: new Date(),
           },
         ]);
       }

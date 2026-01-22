@@ -643,6 +643,18 @@ export interface ImageImportTransactionsResult {
   errors: string[];
 }
 
+export interface DuplicateCheckResult {
+  index: number;
+  isDuplicate: boolean;
+  message: string | null;
+}
+
+export interface DuplicateCheckResponse {
+  results: DuplicateCheckResult[];
+  allDuplicates: boolean;
+  duplicateCount: number;
+}
+
 export interface BrokerDetectionResult {
   templateId: string | null;
   brokerName: string;

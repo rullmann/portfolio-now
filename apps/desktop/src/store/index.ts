@@ -72,10 +72,15 @@ interface UIState {
   currentView: View;
   sidebarCollapsed: boolean;
   scrollTarget: string | null;
+  // PDF Import Modal state (global for cross-component access)
+  pdfImportModalOpen: boolean;
+  pdfImportInitialPath: string | null;
   setCurrentView: (view: View) => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setScrollTarget: (target: string | null) => void;
+  openPdfImportModal: (path?: string) => void;
+  closePdfImportModal: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -84,10 +89,14 @@ export const useUIStore = create<UIState>()(
       currentView: 'dashboard',
       sidebarCollapsed: false,
       scrollTarget: null,
+      pdfImportModalOpen: false,
+      pdfImportInitialPath: null,
       setCurrentView: (view) => set({ currentView: view }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       setScrollTarget: (target) => set({ scrollTarget: target }),
+      openPdfImportModal: (path) => set({ pdfImportModalOpen: true, pdfImportInitialPath: path || null }),
+      closePdfImportModal: () => set({ pdfImportModalOpen: false, pdfImportInitialPath: null }),
     }),
     {
       name: 'portfolio-ui-state',
