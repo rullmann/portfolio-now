@@ -2033,7 +2033,11 @@ pub fn delete_all_data() -> Result<(), String> {
     // Delete in correct order to respect foreign key constraints
     // (child tables first, then parent tables)
     let tables = [
-        // Dependent tables first
+        // Chat tables first (suggestion references history)
+        "pp_chat_suggestion",
+        "pp_chat_history",
+        "pp_chat_conversation",
+        // Dependent tables
         "pp_fifo_consumption",
         "pp_fifo_lot",
         "pp_txn_unit",

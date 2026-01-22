@@ -28,7 +28,9 @@ import {
   analyzeCsvWithAi,
 } from '../../lib/api';
 import { useEscapeKey } from '../../lib/hooks';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, type AiProvider } from '../../store';
+import { AIModelSelector } from '../common';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type {
   CsvPreview,
   CsvColumnMapping,
@@ -68,10 +70,19 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
   useEscapeKey(isOpen, onClose);
 
   // AI settings from store
-  const { aiFeatureSettings, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } = useSettingsStore();
+  const { aiFeatureSettings } = useSettingsStore();
+
+  // Secure API keys
+  const { keys } = useSecureApiKeys();
+
+  // Temporary model selection (not persisted unless "save as default" is checked)
+  const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
 
   // Get feature-specific provider and model for CSV Import
-  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.csvImport;
+  // Use temporary selection if set, otherwise use stored config
+  const csvConfig = aiFeatureSettings.csvImport;
+  const aiProvider = (tempSelection?.provider ?? csvConfig.provider) as AiProvider;
+  const aiModel = tempSelection?.model ?? csvConfig.model;
 
   const [step, setStep] = useState<Step>('select');
   const [filePath, setFilePath] = useState<string | null>(null);
@@ -95,13 +106,13 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<AiCsvAnalysisResponse | null>(null);
 
-  // Get API key for current provider
+  // Get API key for current provider (from secure storage)
   const getApiKey = () => {
     switch (aiProvider) {
-      case 'claude': return anthropicApiKey;
-      case 'openai': return openaiApiKey;
-      case 'gemini': return geminiApiKey;
-      case 'perplexity': return perplexityApiKey;
+      case 'claude': return keys.anthropicApiKey;
+      case 'openai': return keys.openaiApiKey;
+      case 'gemini': return keys.geminiApiKey;
+      case 'perplexity': return keys.perplexityApiKey;
       default: return '';
     }
   };
@@ -464,20 +475,25 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
                 {/* AI Fallback - Code first, AI as helper */}
                 {!useTemplate && hasAiConfigured && (!detectedBroker || detectedBroker.confidence < 0.8) && (
                   <div className="p-3 rounded-lg border border-purple-500/20 bg-purple-500/10">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <Sparkles size={16} className="text-purple-600" />
                         <span className="text-sm font-medium text-purple-600">
                           KI-Unterstützung
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          (Format nicht automatisch erkannt)
-                        </span>
+                        {/* AI Model Selector */}
+                        <AIModelSelector
+                          featureId="csvImport"
+                          value={{ provider: aiProvider, model: aiModel }}
+                          onChange={setTempSelection}
+                          compact
+                          disabled={isAiAnalyzing}
+                        />
                       </div>
                       <button
                         onClick={handleAiAnalysis}
                         disabled={isAiAnalyzing}
-                        className="flex items-center gap-2 px-3 py-1 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50"
+                        className="flex items-center gap-2 px-3 py-1 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 shrink-0"
                       >
                         {isAiAnalyzing ? (
                           <>

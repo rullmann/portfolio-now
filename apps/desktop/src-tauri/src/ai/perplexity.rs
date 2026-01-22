@@ -716,6 +716,7 @@ pub async fn analyze_opportunities(
 }
 
 /// Chat with portfolio assistant using Perplexity
+/// Supports both text-only and multimodal (with images) messages
 pub async fn chat(
     model: &str,
     api_key: &str,
@@ -737,24 +738,8 @@ pub async fn chat(
         .build()
         .map_err(|e| AiError::network_error("Perplexity", model, &e.to_string()))?;
 
-    // Build messages with system prompt
-    let mut perplexity_messages = vec![TextChatMessage {
-        role: "system".to_string(),
-        content: build_chat_system_prompt(context),
-    }];
-
-    for m in messages {
-        perplexity_messages.push(TextChatMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        });
-    }
-
-    let request_body = TextChatCompletionRequest {
-        model: model.to_string(),
-        max_tokens: MAX_TOKENS_CHAT,
-        messages: perplexity_messages,
-    };
+    // Check if any message has image attachments
+    let has_images = messages.iter().any(|m| !m.attachments.is_empty());
 
     let mut last_error = AiError::other("Perplexity", model, "No attempts made");
 
@@ -763,7 +748,70 @@ pub async fn chat(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        // Use multimodal format if we have images, otherwise use text-only
+        let response = if has_images {
+            // Build multimodal messages with images (OpenAI-compatible format)
+            let mut perplexity_messages: Vec<ChatMessage> = vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: vec![ContentPart::Text { text: build_chat_system_prompt(context) }],
+                }
+            ];
+
+            for m in messages {
+                let mut content: Vec<ContentPart> = Vec::new();
+
+                // Add images first
+                for attachment in &m.attachments {
+                    content.push(ContentPart::ImageUrl {
+                        image_url: ImageUrl {
+                            url: format!("data:{};base64,{}", attachment.mime_type, attachment.data),
+                        },
+                    });
+                }
+
+                // Add text content
+                if !m.content.is_empty() {
+                    content.push(ContentPart::Text { text: m.content.clone() });
+                }
+
+                perplexity_messages.push(ChatMessage {
+                    role: m.role.clone(),
+                    content,
+                });
+            }
+
+            let request_body = ChatCompletionRequest {
+                model: model.to_string(),
+                max_tokens: MAX_TOKENS_CHAT,
+                messages: perplexity_messages,
+            };
+
+            client.post(API_URL).json(&request_body).send().await
+        } else {
+            // Text-only messages
+            let mut perplexity_messages = vec![TextChatMessage {
+                role: "system".to_string(),
+                content: build_chat_system_prompt(context),
+            }];
+
+            for m in messages {
+                perplexity_messages.push(TextChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                });
+            }
+
+            let request_body = TextChatCompletionRequest {
+                model: model.to_string(),
+                max_tokens: MAX_TOKENS_CHAT,
+                messages: perplexity_messages,
+            };
+
+            client.post(API_URL).json(&request_body).send().await
+        };
+
+        let response = match response {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {

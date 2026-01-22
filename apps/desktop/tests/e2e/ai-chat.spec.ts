@@ -9,7 +9,8 @@ const aiChatMockData = {
   },
 };
 
-async function injectAIChatMocks(page: any) {
+async function injectAIChatMocks(page: any, overrides?: Partial<typeof aiChatMockData>) {
+  const data = { ...aiChatMockData, ...overrides };
   await page.addInitScript((data: typeof aiChatMockData) => {
     (window as any).__TAURI__ = {
       core: {
@@ -48,6 +49,12 @@ async function injectAIChatMocks(page: any) {
               return { success: true };
             case 'ai_query_transactions':
               return [];
+            case 'enrich_extracted_transactions':
+              return (args?.transactions || []).map((txn: any) => ({
+                ...txn,
+                shares: txn.shares ?? 10,
+                shares_from_holdings: txn.shares == null,
+              }));
             default:
               return null;
           }
@@ -61,7 +68,7 @@ async function injectAIChatMocks(page: any) {
     (window as any).__TAURI_INTERNALS__ = {
       invoke: (window as any).__TAURI__.core.invoke,
     };
-  }, aiChatMockData);
+  }, data);
 }
 
 test.describe('AI Chat Panel', () => {
@@ -268,5 +275,54 @@ test.describe('AI Chat Interaction', () => {
     });
 
     expect(hasProviderInHeader).toBeTruthy();
+  });
+
+  test('Dividende ohne Stückzahl zeigt Bestand und Brutto je Aktie', async ({ page }) => {
+    const dividendResponse = {
+      message:
+        'Ich habe eine Dividenden-Transaktion erkannt.\n\n[[EXTRACTED_TRANSACTIONS:{"transactions":[{"date":"2025-12-04","txnType":"DIVIDENDE","securityName":"Apple Inc.","isin":"US0378331005","shares":0,"grossAmount":110.00,"grossCurrency":"EUR","amount":82.50,"currency":"EUR","taxes":27.50,"note":"Dividende"}],"sourceDescription":"Screenshot"}]]',
+      suggestions: [],
+    };
+
+    await injectAIChatMocks(page, { chatResponse: dividendResponse });
+    await page.goto('/');
+    await waitForAppReady(page);
+    await closeWelcomeModal(page);
+
+    // Open chat panel
+    const buttons = await page.locator('button').all();
+    for (const btn of buttons.slice(-5)) {
+      const isVisible = await btn.isVisible();
+      if (isVisible) {
+        const box = await btn.boundingBox();
+        if (box && box.y > 500) {
+          await btn.click();
+          break;
+        }
+      }
+    }
+
+    await page.waitForTimeout(500);
+
+    // Send a message to trigger the mocked response
+    const input = page.locator('input[type="text"], textarea').last();
+    if (await input.count() > 0) {
+      await input.fill('Bitte prüfe diesen Screenshot');
+      await input.press('Enter');
+    }
+
+    // Expect preview to show dividend with shares from holdings and per-share info
+    const previewTitle = page.locator('text=/Transaktion erkannt|Transaktionen erkannt/i');
+    const sharesText = page.locator('text=/Stk\\./i');
+    const dividendLabel = page.locator('text=/Dividende/i');
+
+    await expect(previewTitle).toBeVisible({ timeout: 5000 });
+    await expect(dividendLabel.first()).toBeVisible();
+    await expect(sharesText.first()).toBeVisible();
+
+    await page.screenshot({
+      path: 'playwright-report/screenshots/ai-chat-dividend-preview.png',
+      fullPage: true,
+    });
   });
 });

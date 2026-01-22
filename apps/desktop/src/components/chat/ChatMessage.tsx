@@ -2,17 +2,27 @@
  * Chat Message Component - Displays individual chat messages.
  *
  * Supports user and assistant messages with markdown rendering.
+ * Shows image attachments if present.
  */
 
-import { User, Bot, X } from 'lucide-react';
+import { useState } from 'react';
+import { User, Bot, X, ImageIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '../../lib/utils';
+
+export interface StoredChatAttachment {
+  data: string;      // Base64 encoded image data
+  mimeType: string;  // e.g., "image/png", "image/jpeg"
+  filename?: string;
+}
 
 export interface ChatMessageData {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  attachments?: StoredChatAttachment[];
+  isDuplicate?: boolean; // For duplicate transaction messages (shown with red border)
 }
 
 interface ChatMessageProps {
@@ -22,14 +32,19 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message, onDelete }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const hasAttachments = message.attachments && message.attachments.length > 0;
+  const isDuplicate = message.isDuplicate;
 
   return (
     <div
       className={cn(
         'flex gap-3 p-3 rounded-lg border group relative',
-        isUser
-          ? 'bg-blue-500/5 border-blue-500/20'
-          : 'bg-orange-500/5 border-orange-500/20'
+        isDuplicate
+          ? 'bg-red-500/5 border-red-500/50 border-2' // Red border for duplicates
+          : isUser
+            ? 'bg-blue-500/5 border-blue-500/20'
+            : 'bg-orange-500/5 border-orange-500/20'
       )}
     >
       {/* Delete button */}
@@ -62,7 +77,32 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
           <span className="text-xs text-muted-foreground">
             {formatTime(message.timestamp)}
           </span>
+          {hasAttachments && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <ImageIcon className="h-3 w-3" />
+              {message.attachments!.length}
+            </span>
+          )}
         </div>
+
+        {/* Image attachments */}
+        {hasAttachments && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.attachments!.map((attachment, idx) => (
+              <button
+                key={idx}
+                onClick={() => setExpandedImage(`data:${attachment.mimeType};base64,${attachment.data}`)}
+                className="relative group/thumb"
+              >
+                <img
+                  src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                  alt={attachment.filename || `Bild ${idx + 1}`}
+                  className="h-16 w-16 object-cover rounded-lg border border-border hover:border-primary transition-colors"
+                />
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="prose prose-sm dark:prose-invert max-w-none text-[13px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
           {isUser ? (
@@ -72,6 +112,27 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
           )}
         </div>
       </div>
+
+      {/* Expanded image modal */}
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={() => setExpandedImage(null)}
+        >
+          <button
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+            onClick={() => setExpandedImage(null)}
+          >
+            <X className="h-6 w-6 text-white" />
+          </button>
+          <img
+            src={expandedImage}
+            alt="Vergrößertes Bild"
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }

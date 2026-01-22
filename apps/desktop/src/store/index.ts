@@ -184,7 +184,7 @@ export type OpenAIModel = 'gpt-5-mini' | 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
 export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-3-flash-preview' | 'gemini-3-pro-preview';
 
 // AI Feature Types for individual configuration
-export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport';
+export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport' | 'quoteAssistant';
 export type AiProvider = 'claude' | 'openai' | 'gemini' | 'perplexity';
 
 export interface AiFeatureConfig {
@@ -215,6 +215,7 @@ export const AI_FEATURES: AiFeatureDefinition[] = [
   { id: 'chatAssistant', name: 'Chat-Assistent', description: 'Fragen zu deinem Portfolio beantworten', icon: 'MessageSquare', requiresVision: false },
   { id: 'pdfOcr', name: 'PDF OCR', description: 'Text aus gescannten Bank-PDFs extrahieren', icon: 'FileText', requiresVision: true },
   { id: 'csvImport', name: 'CSV-Import', description: 'Unbekannte Broker-Formate analysieren', icon: 'FileSpreadsheet', requiresVision: false },
+  { id: 'quoteAssistant', name: 'Kursquellen-Assistent', description: 'Optimale Kursquellen mit Web-Suche finden', icon: 'Bot', requiresVision: false },
 ];
 
 // AI Models - Updated January 2026 (Vision-only)
@@ -414,6 +415,19 @@ interface SettingsState {
     availableProviders: AiProvider[];
   } | null) => void;
   clearPendingFeatureMigration: () => void;
+
+  // Symbol Validation Settings
+  symbolValidation: {
+    autoValidateIntervalDays: 0 | 7 | 14 | 30; // 0 = disabled
+    lastAutoValidation: string | null; // ISO date string
+    validateOnlyHeld: boolean;
+    enableAiFallback: boolean;
+  };
+  setSymbolValidationSettings: (settings: Partial<SettingsState['symbolValidation']>) => void;
+
+  // Chat Context Settings
+  chatContextSize: number; // Number of messages to send to AI (sliding window)
+  setChatContextSize: (size: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -493,6 +507,7 @@ export const useSettingsStore = create<SettingsState>()(
         chatAssistant: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
         pdfOcr: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
         csvImport: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
+        quoteAssistant: { provider: 'perplexity', model: 'sonar-pro' }, // Web-Suche für aktuelle Ticker
       },
       setAiFeatureSetting: (featureId, config) => set((state) => ({
         aiFeatureSettings: {
@@ -505,10 +520,25 @@ export const useSettingsStore = create<SettingsState>()(
       pendingFeatureMigration: null,
       setPendingFeatureMigration: (migration) => set({ pendingFeatureMigration: migration }),
       clearPendingFeatureMigration: () => set({ pendingFeatureMigration: null }),
+
+      // Symbol Validation Settings
+      symbolValidation: {
+        autoValidateIntervalDays: 0, // Disabled by default
+        lastAutoValidation: null,
+        validateOnlyHeld: true,
+        enableAiFallback: true,
+      },
+      setSymbolValidationSettings: (settings) => set((state) => ({
+        symbolValidation: { ...state.symbolValidation, ...settings },
+      })),
+
+      // Chat Context Settings
+      chatContextSize: 20, // Default: 20 messages in context window
+      setChatContextSize: (size) => set({ chatContextSize: size }),
     }),
     {
       name: 'portfolio-settings',
-      version: 5, // v5: Added aiFeatureSettings
+      version: 8, // v8: Added quoteAssistant to aiFeatureSettings
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -541,7 +571,33 @@ export const useSettingsStore = create<SettingsState>()(
             chatAssistant: { provider: globalProvider, model: globalModel },
             pdfOcr: { provider: globalProvider, model: globalModel },
             csvImport: { provider: globalProvider, model: globalModel },
+            quoteAssistant: { provider: 'perplexity' as AiProvider, model: 'sonar-pro' },
           };
+        }
+
+        // Migration v6: Initialize symbolValidation settings
+        if (version < 6) {
+          state.symbolValidation = {
+            autoValidateIntervalDays: 0,
+            lastAutoValidation: null,
+            validateOnlyHeld: true,
+            enableAiFallback: true,
+          };
+        }
+
+        // Migration v7: Initialize chatContextSize
+        if (version < 7) {
+          state.chatContextSize = 20; // Default: 20 messages
+        }
+
+        // Migration v8: Add quoteAssistant to aiFeatureSettings (for existing users)
+        if (version < 8) {
+          if (state.aiFeatureSettings && !state.aiFeatureSettings.quoteAssistant) {
+            state.aiFeatureSettings.quoteAssistant = {
+              provider: 'perplexity' as AiProvider,
+              model: 'sonar-pro',
+            };
+          }
         }
 
         return state as SettingsState;

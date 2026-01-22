@@ -135,6 +135,88 @@ pub fn get_all_templates() -> Vec<QueryTemplate> {
             description: "Alle verkauften/geschlossenen Positionen".to_string(),
             parameters: vec![],
         },
+        QueryTemplate {
+            id: "holding_period_analysis".to_string(),
+            description: "Haltefrist-Analyse für Krypto/Gold (§ 23 EStG - steuerfrei nach 1 Jahr)".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "asset_type".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Filter: 'crypto', 'gold', oder leer für alle".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "fifo_lot_details".to_string(),
+            description: "Detaillierte FIFO-Lots mit Haltetagen und Tax-Status".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "security".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Name, ISIN oder Ticker (optional, ohne = alle)".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "account_transactions".to_string(),
+            description: "Kontobewegungen (Einzahlungen, Auszahlungen, Zinsen, Gebühren)".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "account".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Kontoname (optional)".to_string(),
+                },
+                QueryParameter {
+                    name: "year".to_string(),
+                    param_type: "year".to_string(),
+                    required: false,
+                    description: "Jahr filtern (z.B. 2024)".to_string(),
+                },
+                QueryParameter {
+                    name: "amount".to_string(),
+                    param_type: "number".to_string(),
+                    required: false,
+                    description: "Betrag suchen (z.B. 0.25 für 25 Cent)".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "investment_plans".to_string(),
+            description: "Alle Sparpläne mit Details".to_string(),
+            parameters: vec![],
+        },
+        QueryTemplate {
+            id: "portfolio_accounts".to_string(),
+            description: "Alle Konten mit aktuellen Salden".to_string(),
+            parameters: vec![],
+        },
+        QueryTemplate {
+            id: "tax_relevant_sales".to_string(),
+            description: "Verkäufe mit Haltefrist und Steuerstatus".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "year".to_string(),
+                    param_type: "year".to_string(),
+                    required: false,
+                    description: "Jahr filtern (z.B. 2024)".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "account_balance_analysis".to_string(),
+            description: "Analysiert Kontostand: Woher kommt das aktuelle Guthaben? Running Balance Berechnung.".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "account".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                    description: "Kontoname (z.B. 'Referenz')".to_string(),
+                },
+            ],
+        },
     ]
 }
 
@@ -154,6 +236,13 @@ pub fn execute_template(
         "transactions_by_date" => execute_transactions_by_date(conn, &request.parameters),
         "security_cost_basis" => execute_security_cost_basis(conn, &request.parameters),
         "sold_securities" => execute_sold_securities(conn, &request.parameters),
+        "holding_period_analysis" => execute_holding_period_analysis(conn, &request.parameters),
+        "fifo_lot_details" => execute_fifo_lot_details(conn, &request.parameters),
+        "account_transactions" => execute_account_transactions(conn, &request.parameters),
+        "investment_plans" => execute_investment_plans(conn, &request.parameters),
+        "portfolio_accounts" => execute_portfolio_accounts(conn, &request.parameters),
+        "tax_relevant_sales" => execute_tax_relevant_sales(conn, &request.parameters),
+        "account_balance_analysis" => execute_account_balance_analysis(conn, &request.parameters),
         _ => Err(format!("Unbekanntes Template: {}", request.template_id)),
     }
 }
@@ -397,6 +486,381 @@ fn execute_sold_securities(
     execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "sold_securities")
 }
 
+/// Holding period analysis for crypto/gold (tax-free after 1 year in Germany)
+fn execute_holding_period_analysis(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let asset_type = params.get("asset_type").map(|s| s.to_lowercase());
+
+    // Build filter based on asset type
+    let type_filter = match asset_type.as_deref() {
+        Some("crypto") | Some("krypto") => {
+            // Common crypto identifiers
+            "AND (LOWER(s.name) LIKE '%bitcoin%' OR LOWER(s.name) LIKE '%ethereum%'
+                  OR LOWER(s.name) LIKE '%crypto%' OR LOWER(s.name) LIKE '%krypto%'
+                  OR LOWER(s.ticker) LIKE '%btc%' OR LOWER(s.ticker) LIKE '%eth%'
+                  OR LOWER(s.ticker) LIKE '%sol%' OR LOWER(s.ticker) LIKE '%xrp%'
+                  OR s.feed = 'COINGECKO' OR s.feed = 'KRAKEN')"
+        }
+        Some("gold") => {
+            "AND (LOWER(s.name) LIKE '%gold%' OR LOWER(s.ticker) LIKE '%xau%'
+                  OR LOWER(s.ticker) = 'gc=f' OR LOWER(s.name) LIKE '%edelmetall%')"
+        }
+        _ => "", // All assets
+    };
+
+    let sql = format!(r#"
+        SELECT
+            s.name as security_name,
+            s.ticker,
+            l.purchase_date,
+            julianday('now') - julianday(l.purchase_date) as holding_days,
+            l.remaining_shares / 100000000.0 as shares,
+            l.gross_amount / 100.0 as cost_basis,
+            l.currency,
+            CASE
+                WHEN julianday('now') - julianday(l.purchase_date) >= 365 THEN 'STEUERFREI'
+                ELSE 'STEUERPFLICHTIG'
+            END as tax_status,
+            CASE
+                WHEN julianday('now') - julianday(l.purchase_date) < 365
+                THEN date(l.purchase_date, '+1 year')
+                ELSE NULL
+            END as tax_free_date
+        FROM pp_fifo_lot l
+        JOIN pp_security s ON s.id = l.security_id
+        WHERE l.remaining_shares > 0
+            {}
+        ORDER BY holding_days DESC
+    "#, type_filter);
+
+    execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "holding_period_analysis")
+}
+
+/// Detailed FIFO lots with holding days and tax status
+fn execute_fifo_lot_details(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let security = params.get("security");
+
+    if let Some(sec) = security {
+        let search_pattern = format!("%{}%", sec);
+        let sql = r#"
+            SELECT
+                s.name as security_name,
+                s.ticker,
+                s.isin,
+                l.purchase_date,
+                julianday('now') - julianday(l.purchase_date) as holding_days,
+                l.original_shares / 100000000.0 as original_shares,
+                l.remaining_shares / 100000000.0 as remaining_shares,
+                l.gross_amount / 100.0 as cost_basis,
+                CASE
+                    WHEN l.original_shares > 0 THEN (l.gross_amount * 100000000.0 / l.original_shares) / 100.0
+                    ELSE 0
+                END as cost_per_share,
+                l.currency,
+                CASE
+                    WHEN julianday('now') - julianday(l.purchase_date) >= 365 THEN 'STEUERFREI'
+                    ELSE 'STEUERPFLICHTIG'
+                END as tax_status
+            FROM pp_fifo_lot l
+            JOIN pp_security s ON s.id = l.security_id
+            WHERE l.remaining_shares > 0
+                AND (s.name LIKE ?1 OR s.isin LIKE ?1 OR s.ticker LIKE ?1)
+            ORDER BY l.purchase_date ASC
+        "#;
+        execute_query(conn, sql, &[&search_pattern], "fifo_lot_details")
+    } else {
+        let sql = r#"
+            SELECT
+                s.name as security_name,
+                s.ticker,
+                s.isin,
+                l.purchase_date,
+                julianday('now') - julianday(l.purchase_date) as holding_days,
+                l.original_shares / 100000000.0 as original_shares,
+                l.remaining_shares / 100000000.0 as remaining_shares,
+                l.gross_amount / 100.0 as cost_basis,
+                CASE
+                    WHEN l.original_shares > 0 THEN (l.gross_amount * 100000000.0 / l.original_shares) / 100.0
+                    ELSE 0
+                END as cost_per_share,
+                l.currency,
+                CASE
+                    WHEN julianday('now') - julianday(l.purchase_date) >= 365 THEN 'STEUERFREI'
+                    ELSE 'STEUERPFLICHTIG'
+                END as tax_status
+            FROM pp_fifo_lot l
+            JOIN pp_security s ON s.id = l.security_id
+            WHERE l.remaining_shares > 0
+            ORDER BY s.name, l.purchase_date ASC
+            LIMIT 100
+        "#;
+        execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "fifo_lot_details")
+    }
+}
+
+/// Account transactions (deposits, withdrawals, interest, fees)
+fn execute_account_transactions(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let account = params.get("account");
+    let year = params.get("year");
+    let amount = params.get("amount");
+
+    let mut conditions = vec!["t.owner_type = 'account'".to_string()];
+    let mut bind_values: Vec<String> = Vec::new();
+
+    if let Some(acc) = account {
+        conditions.push(format!("a.name LIKE ?{}", bind_values.len() + 1));
+        bind_values.push(format!("%{}%", acc));
+    }
+
+    if let Some(y) = year {
+        conditions.push(format!("strftime('%Y', t.date) = ?{}", bind_values.len() + 1));
+        bind_values.push(y.clone());
+    }
+
+    // Amount filter: search for exact amount in both directions (Soll + Haben)
+    // Uses ABS to find both positive and negative amounts with same absolute value
+    if let Some(amt) = amount {
+        if let Ok(amt_float) = amt.parse::<f64>() {
+            // Convert to stored format (amount * 100) and allow small tolerance
+            let amt_cents = (amt_float * 100.0).abs().round() as i64;
+            // Search for both +X and -X (Soll und Haben)
+            conditions.push(format!("ABS(ABS(t.amount) - {}) <= 1", amt_cents));
+        }
+    }
+
+    let where_clause = conditions.join(" AND ");
+
+    let sql = format!(r#"
+        SELECT
+            t.date,
+            a.name as account_name,
+            t.txn_type,
+            t.amount / 100.0 as amount,
+            t.currency,
+            t.note,
+            s.name as security_name,
+            s.ticker
+        FROM pp_txn t
+        JOIN pp_account a ON a.id = t.owner_id
+        LEFT JOIN pp_security s ON s.id = t.security_id
+        WHERE {}
+        ORDER BY t.date DESC
+        LIMIT 100
+    "#, where_clause);
+
+    // Convert bind values to references for rusqlite
+    let bind_refs: Vec<&dyn rusqlite::ToSql> = bind_values.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+
+    execute_query(conn, &sql, bind_refs.as_slice(), "account_transactions")
+}
+
+/// Investment plans overview
+fn execute_investment_plans(
+    conn: &Connection,
+    _params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let sql = r#"
+        SELECT
+            ip.name as plan_name,
+            s.name as security_name,
+            s.ticker,
+            p.name as portfolio_name,
+            ip.amount / 100.0 as amount,
+            ip.interval,
+            ip.start_date,
+            ip.auto_generate,
+            ip.note
+        FROM pp_investment_plan ip
+        JOIN pp_security s ON s.id = ip.security_id
+        LEFT JOIN pp_portfolio p ON p.id = ip.portfolio_id
+        ORDER BY ip.name
+    "#;
+
+    execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "investment_plans")
+}
+
+/// Portfolio accounts with current balances
+fn execute_portfolio_accounts(
+    conn: &Connection,
+    _params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let sql = r#"
+        SELECT
+            a.name as account_name,
+            a.currency,
+            COALESCE(
+                (SELECT SUM(
+                    CASE
+                        WHEN t.txn_type IN ('DEPOSIT', 'INTEREST', 'FEES_REFUND', 'TAX_REFUND', 'DIVIDENDS', 'SELL') THEN t.amount
+                        WHEN t.txn_type IN ('REMOVAL', 'INTEREST_CHARGE', 'FEES', 'TAXES', 'BUY') THEN -t.amount
+                        ELSE 0
+                    END
+                ) FROM pp_txn t WHERE t.owner_type = 'account' AND t.owner_id = a.id),
+                0
+            ) / 100.0 as balance,
+            (SELECT COUNT(*) FROM pp_txn t WHERE t.owner_type = 'account' AND t.owner_id = a.id) as transaction_count,
+            (SELECT MAX(t.date) FROM pp_txn t WHERE t.owner_type = 'account' AND t.owner_id = a.id) as last_transaction
+        FROM pp_account a
+        WHERE a.is_retired = 0
+        ORDER BY a.name
+    "#;
+
+    execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "portfolio_accounts")
+}
+
+/// Tax-relevant sales with holding period
+fn execute_tax_relevant_sales(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let year = params.get("year");
+
+    let year_filter = if let Some(y) = year {
+        format!("AND strftime('%Y', t.date) = '{}'", y)
+    } else {
+        String::new()
+    };
+
+    let sql = format!(r#"
+        SELECT
+            t.date as sale_date,
+            s.name as security_name,
+            s.ticker,
+            t.shares / 100000000.0 as shares_sold,
+            t.amount / 100.0 as sale_amount,
+            t.currency,
+            c.shares_consumed / 100000000.0 as lot_shares,
+            l.purchase_date,
+            julianday(t.date) - julianday(l.purchase_date) as holding_days,
+            CASE
+                WHEN julianday(t.date) - julianday(l.purchase_date) >= 365 THEN 'STEUERFREI'
+                ELSE 'STEUERPFLICHTIG'
+            END as tax_status,
+            c.gross_amount / 100.0 as cost_basis
+        FROM pp_txn t
+        JOIN pp_security s ON s.id = t.security_id
+        JOIN pp_fifo_consumption c ON c.sale_txn_id = t.id
+        JOIN pp_fifo_lot l ON l.id = c.lot_id
+        WHERE t.txn_type IN ('SELL', 'DELIVERY_OUTBOUND')
+            AND t.owner_type = 'portfolio'
+            {}
+        ORDER BY t.date DESC, l.purchase_date ASC
+        LIMIT 100
+    "#, year_filter);
+
+    execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "tax_relevant_sales")
+}
+
+/// Account balance analysis - finds which transactions explain the current balance
+fn execute_account_balance_analysis(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let account = params.get("account")
+        .ok_or("Parameter 'account' ist erforderlich")?;
+
+    let search_pattern = format!("%{}%", account);
+
+    // Strategy: Calculate running balance FORWARD through time, identify origin transactions
+    // using ROW_NUMBER for correct chronological ordering
+    let sql = r#"
+        WITH account_info AS (
+            SELECT a.id, a.name, a.currency
+            FROM pp_account a
+            WHERE a.name LIKE ?1
+            LIMIT 1
+        ),
+        -- All transactions with signed amounts (+ = money in, - = money out)
+        all_txns AS (
+            SELECT
+                t.id,
+                t.date,
+                t.txn_type,
+                t.amount,
+                CASE
+                    WHEN t.txn_type IN ('DEPOSIT', 'INTEREST', 'DIVIDENDS', 'SELL', 'FEES_REFUND', 'TAX_REFUND', 'TRANSFER_IN') THEN t.amount
+                    ELSE -t.amount
+                END as signed_amount,
+                t.note,
+                t.security_id,
+                ai.name as account_name,
+                ai.currency as account_currency
+            FROM pp_txn t
+            JOIN account_info ai ON t.owner_id = ai.id
+            WHERE t.owner_type = 'account'
+        ),
+        -- Calculate running balance forward through time with row numbers
+        -- IMPORTANT: On same day, process INFLOWS before OUTFLOWS (logical order)
+        with_running AS (
+            SELECT
+                at.*,
+                ROW_NUMBER() OVER (
+                    ORDER BY at.date ASC,
+                             CASE WHEN at.txn_type IN ('DIVIDENDS', 'DEPOSIT', 'INTEREST', 'SELL', 'FEES_REFUND', 'TAX_REFUND', 'TRANSFER_IN') THEN 0 ELSE 1 END ASC,
+                             at.id ASC
+                ) as row_num,
+                SUM(at.signed_amount) OVER (
+                    ORDER BY at.date ASC,
+                             CASE WHEN at.txn_type IN ('DIVIDENDS', 'DEPOSIT', 'INTEREST', 'SELL', 'FEES_REFUND', 'TAX_REFUND', 'TRANSFER_IN') THEN 0 ELSE 1 END ASC,
+                             at.id ASC
+                ) as running_balance,
+                s.name as security_name,
+                s.ticker
+            FROM all_txns at
+            LEFT JOIN pp_security s ON s.id = at.security_id
+        ),
+        -- Get current balance (final running balance)
+        current AS (
+            SELECT running_balance as current_balance
+            FROM with_running
+            ORDER BY row_num DESC
+            LIMIT 1
+        ),
+        -- Find the last row where running balance was <= 0 (using row_num for correct ordering)
+        last_zero_point AS (
+            SELECT COALESCE(MAX(row_num), 0) as zero_row
+            FROM with_running
+            WHERE running_balance <= 0
+        ),
+        -- Get transactions AFTER the last zero point (these explain current balance)
+        origin_txns AS (
+            SELECT wr.*
+            FROM with_running wr, last_zero_point lzp
+            WHERE wr.row_num > lzp.zero_row
+              AND wr.signed_amount > 0  -- Only inflows
+        )
+        SELECT
+            wr.account_name,
+            wr.account_currency,
+            wr.date,
+            wr.txn_type,
+            wr.amount / 100.0 as amount,
+            wr.signed_amount / 100.0 as signed_amount,
+            wr.running_balance / 100.0 as running_balance,
+            wr.note,
+            wr.security_name,
+            wr.ticker,
+            c.current_balance / 100.0 as current_balance,
+            -- Mark if this transaction is in the origin set (contributed to current balance)
+            CASE WHEN ot.id IS NOT NULL THEN 1 ELSE 0 END as is_origin
+        FROM with_running wr
+        CROSS JOIN current c
+        LEFT JOIN origin_txns ot ON ot.id = wr.id
+        ORDER BY wr.row_num DESC
+        LIMIT 20
+    "#;
+
+    execute_query(conn, sql, &[&search_pattern], "account_balance_analysis")
+}
+
 // ============================================================================
 // Helper
 // ============================================================================
@@ -420,10 +884,13 @@ fn translate_txn_type(txn_type: &str) -> &str {
     }
 }
 
-/// Format a date from YYYY-MM-DD to DD.MM.YYYY
+/// Format a date from YYYY-MM-DD (or YYYY-MM-DD HH:MM:SS) to DD.MM.YYYY
 fn format_date_german(date: &str) -> String {
-    if date.len() == 10 && date.contains('-') {
-        let parts: Vec<&str> = date.split('-').collect();
+    // Handle datetime format "YYYY-MM-DD HH:MM:SS" - take only date part
+    let date_only = date.split_whitespace().next().unwrap_or(date);
+
+    if date_only.len() == 10 && date_only.contains('-') {
+        let parts: Vec<&str> = date_only.split('-').collect();
         if parts.len() == 3 {
             return format!("{}.{}.{}", parts[2], parts[1], parts[0]);
         }
@@ -437,10 +904,77 @@ fn format_number_german(value: f64, decimals: usize) -> String {
     formatted.replace('.', ",")
 }
 
+/// Special formatting for account balance analysis - provides a SHORT, DIRECT explanation
+fn format_account_balance_analysis(rows: &[HashMap<String, serde_json::Value>]) -> String {
+    if rows.is_empty() {
+        return "Keine Buchungen gefunden.".to_string();
+    }
+
+    // Extract summary info from first row
+    let first_row = &rows[0];
+    let account_name = first_row.get("account_name").and_then(|v| v.as_str()).unwrap_or("Konto");
+    let currency = first_row.get("account_currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+    let current_balance = first_row.get("current_balance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    // Find origin transactions (those marked with is_origin = 1)
+    let origin_txns: Vec<&HashMap<String, serde_json::Value>> = rows.iter()
+        .filter(|r| r.get("is_origin").and_then(|v| v.as_i64()).unwrap_or(0) == 1)
+        .collect();
+
+    // Generate SHORT, DIRECT answer
+    if current_balance.abs() < 0.01 {
+        return format!("{}: Saldo 0,00 {} - alle Eingänge wurden ausgegeben.", account_name, currency);
+    }
+
+    if current_balance < 0.0 {
+        return format!("{}: Konto ist {} {} im Minus.", account_name, format_number_german(current_balance.abs(), 2), currency);
+    }
+
+    // Positive balance - explain origin
+    if origin_txns.len() == 1 {
+        let origin = &origin_txns[0];
+        let date = origin.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+        let txn_type = origin.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
+        let security = origin.get("security_name").and_then(|v| v.as_str());
+
+        let source = if let Some(sec) = security {
+            format!("{} von {}", txn_type, sec)
+        } else {
+            txn_type.to_string()
+        };
+
+        format!("{}: Die {} {} stammen aus der {} am {}.",
+            account_name, format_number_german(current_balance, 2), currency, source, date)
+    } else if origin_txns.is_empty() {
+        format!("{}: Saldo {} {} (Summe aller Buchungen).",
+            account_name, format_number_german(current_balance, 2), currency)
+    } else {
+        // Multiple origins - list them briefly
+        let mut output = format!("{}: Die {} {} stammen aus:\n",
+            account_name, format_number_german(current_balance, 2), currency);
+
+        for origin in &origin_txns {
+            let date = origin.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+            let txn_type = origin.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
+            let amount = origin.get("signed_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let security = origin.get("security_name").and_then(|v| v.as_str());
+
+            let sec_str = security.map(|s| format!(" ({})", s)).unwrap_or_default();
+            output.push_str(&format!("• {} {} +{} {}{}\n", date, txn_type, format_number_german(amount, 2), currency, sec_str));
+        }
+        output
+    }
+}
+
 /// Format query results as a simple list (no table)
 fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<String, serde_json::Value>]) -> String {
     if rows.is_empty() {
         return "Keine Ergebnisse gefunden.".to_string();
+    }
+
+    // Special handling for account_balance_analysis - generate summary explanation
+    if template_id == "account_balance_analysis" {
+        return format_account_balance_analysis(rows);
     }
 
     let mut lines: Vec<String> = Vec::new();
@@ -489,6 +1023,108 @@ fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<St
                 let shares = row.get("total_sold").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 format!("• {} – {} Stück verkauft (letzter: {})", name, shares, date)
             }
+            "holding_period_analysis" => {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
+                let purchase_date = row.get("purchase_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
+                let shares = row.get("shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
+                let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
+                let tax_free_date = row.get("tax_free_date").and_then(|v| v.as_str()).map(format_date_german);
+
+                let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⏳" };
+                let date_info = if let Some(date) = tax_free_date {
+                    format!(" → steuerfrei ab {}", date)
+                } else {
+                    String::new()
+                };
+
+                format!("• {}{}{} – Kauf: {}, {} Stück, {} Tage gehalten, {}{}",
+                    status_icon, name, ticker, purchase_date, shares, holding_days, tax_status, date_info)
+            }
+            "fifo_lot_details" => {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let purchase_date = row.get("purchase_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
+                let remaining = row.get("remaining_shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
+                let cost_per = row.get("cost_per_share").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+                let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
+
+                let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⏳" };
+
+                format!("• {} {} – Kauf: {}, {} Stück @ {} {}, {} Tage ({})",
+                    status_icon, name, purchase_date, remaining, cost_per, currency, holding_days, tax_status)
+            }
+            "account_transactions" => {
+                let date = row.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                let account = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let txn_type = row.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
+                let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+                let note = row.get("note").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+                let security = row.get("security_name").and_then(|v| v.as_str());
+                let ticker = row.get("ticker").and_then(|v| v.as_str());
+
+                let mut details = Vec::new();
+                if let Some(sec) = security {
+                    let ticker_str = ticker.map(|t| format!(" ({})", t)).unwrap_or_default();
+                    details.push(format!("Wertpapier: {}{}", sec, ticker_str));
+                }
+                if let Some(n) = note {
+                    details.push(format!("Notiz: {}", n));
+                }
+
+                let details_str = if details.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | {}", details.join(", "))
+                };
+
+                format!("• {} – {} @ {}: {} {}{}", date, txn_type, account, amount, currency, details_str)
+            }
+            "investment_plans" => {
+                let plan_name = row.get("plan_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let security = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
+                let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let interval = row.get("interval").and_then(|v| v.as_str()).unwrap_or("-");
+                let start_date = row.get("start_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+
+                let interval_de = match interval {
+                    "MONTHLY" => "monatlich",
+                    "QUARTERLY" => "quartalsweise",
+                    "YEARLY" => "jährlich",
+                    "WEEKLY" => "wöchentlich",
+                    _ => interval,
+                };
+
+                format!("• {} – {}{}: {} EUR {}, Start: {}", plan_name, security, ticker, amount, interval_de, start_date)
+            }
+            "portfolio_accounts" => {
+                let name = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let balance = row.get("balance").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+                let txn_count = row.get("transaction_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                let last_txn = row.get("last_transaction").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_else(|| "-".to_string());
+                format!("• {} – Saldo: {} {}, {} Buchungen, letzte: {}", name, balance, currency, txn_count, last_txn)
+            }
+            "tax_relevant_sales" => {
+                let sale_date = row.get("sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let shares = row.get("shares_sold").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
+                let sale_amount = row.get("sale_amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+                let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
+                let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
+                let cost_basis = row.get("cost_basis").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+
+                let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⚠️" };
+
+                format!("• {} {} – {} {} Stück verkauft für {} {}, {} Tage gehalten, Einstand: {} {} ({})",
+                    status_icon, sale_date, name, shares, sale_amount, currency, holding_days, cost_basis, currency, tax_status)
+            }
+            // Note: account_balance_analysis is handled by format_account_balance_analysis() above
             _ => format!("{:?}", row),
         };
         lines.push(line);
@@ -600,6 +1236,33 @@ Verfügbare Abfragen:
    Keine Parameter
    Beispiel: "Welche Aktien habe ich verkauft?"
 
+7. holding_period_analysis - HALTEFRIST-ANALYSE (§ 23 EStG)
+   Parameter: asset_type (optional: "crypto", "gold", oder leer für alle)
+   Beispiel: "Welche Krypto-Positionen sind schon steuerfrei?" oder "Haltefrist meines Goldes?"
+   WICHTIG: Krypto und Gold sind in Deutschland nach 1 Jahr Haltefrist steuerfrei!
+   ✅ = steuerfrei (>365 Tage), ⏳ = noch steuerpflichtig (mit Datum wann steuerfrei)
+
+8. fifo_lot_details - Detaillierte FIFO-Lots mit Haltefrist
+   Parameter: security (optional, Name/ISIN/Ticker)
+   Beispiel: "Zeige alle FIFO-Lots für Bitcoin" oder "Alle meine Kaufpositionen"
+
+9. account_transactions - Kontobewegungen
+   Parameter: account (optional, Kontoname), year (optional)
+   Beispiel: "Zeige alle Einzahlungen 2024" oder "Kontobewegungen von Depot 1"
+
+10. investment_plans - Alle Sparpläne
+    Keine Parameter
+    Beispiel: "Welche Sparpläne habe ich?"
+
+11. portfolio_accounts - Konten mit Salden
+    Keine Parameter
+    Beispiel: "Wie hoch sind meine Kontostände?" oder "Zeige alle Konten"
+
+12. tax_relevant_sales - Verkäufe mit Steuerinfo
+    Parameter: year (optional)
+    Beispiel: "Welche Verkäufe 2024 waren steuerpflichtig?" oder "Steuerrelevante Verkäufe"
+    ✅ = steuerfrei (>365 Tage gehalten), ⚠️ = steuerpflichtig
+
 WICHTIG: Wenn du eine Abfrage benötigst, antworte NUR mit diesem JSON-Format:
 ```json
 {"query": "template_id", "params": {"key": "value"}}
@@ -607,11 +1270,21 @@ WICHTIG: Wenn du eine Abfrage benötigst, antworte NUR mit diesem JSON-Format:
 
 Das System führt die Abfrage aus und sendet dir die Ergebnisse. Formuliere dann eine hilfreiche Antwort.
 
+=== HALTEFRIST-REGELUNG (§ 23 EStG) ===
+Private Veräußerungsgeschäfte (Krypto, Gold, andere Rohstoffe) sind nach 1 Jahr Haltefrist STEUERFREI!
+- Bitcoin, Ethereum, andere Kryptowährungen: Nach 365 Tagen steuerfrei
+- Physisches Gold (und Goldmünzen): Nach 365 Tagen steuerfrei
+- Silber, Platin, andere Rohstoffe: Nach 365 Tagen steuerfrei
+- ACHTUNG: Aktien, ETFs, Fonds unterliegen der Abgeltungssteuer (25%) - keine Haltefrist!
+
 Nutze Abfragen für:
 - Konkrete Fragen zu Transaktionen ("Wann habe ich X gekauft/verkauft?")
 - Dividenden-Fragen ("Welche Dividenden von X?")
 - Historische Daten ("Was war mein Einstandskurs?")
 - Zeitraum-Fragen ("Transaktionen im Jahr 2024")
+- HALTEFRIST-Fragen ("Ist mein Bitcoin steuerfrei?", "Wann kann ich Gold steuerfrei verkaufen?")
+- Konto-Fragen ("Meine Einzahlungen", "Kontostände")
+- Sparplan-Fragen ("Welche Sparpläne habe ich?")
 
 Nutze KEINE Abfrage für:
 - Allgemeine Portfolio-Übersicht (diese Daten hast du bereits im Kontext)
@@ -794,7 +1467,7 @@ mod tests {
     #[test]
     fn test_get_all_templates() {
         let templates = get_all_templates();
-        assert_eq!(templates.len(), 6);
+        assert_eq!(templates.len(), 13);
 
         // Check template IDs
         let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
@@ -804,6 +1477,13 @@ mod tests {
         assert!(ids.contains(&"transactions_by_date"));
         assert!(ids.contains(&"security_cost_basis"));
         assert!(ids.contains(&"sold_securities"));
+        assert!(ids.contains(&"holding_period_analysis"));
+        assert!(ids.contains(&"fifo_lot_details"));
+        assert!(ids.contains(&"account_transactions"));
+        assert!(ids.contains(&"investment_plans"));
+        assert!(ids.contains(&"portfolio_accounts"));
+        assert!(ids.contains(&"tax_relevant_sales"));
+        assert!(ids.contains(&"account_balance_analysis"));
     }
 
     #[test]

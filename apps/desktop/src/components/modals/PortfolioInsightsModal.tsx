@@ -11,8 +11,10 @@ import {
   TrendingUp, Target, AlertTriangle, Lightbulb, PieChart, Brain, ShoppingCart
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, type AiProvider } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
+import { AIModelSelector } from '../common';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import ReactMarkdown from 'react-markdown';
 import { useEscapeKey } from '../../lib/hooks';
 
@@ -184,26 +186,31 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
   const {
     aiEnabled,
     aiFeatureSettings,
-    anthropicApiKey,
-    openaiApiKey,
-    geminiApiKey,
-    perplexityApiKey,
     baseCurrency,
   } = useSettingsStore();
 
+  // Secure API keys
+  const { keys } = useSecureApiKeys();
+
+  // Temporary model selection (not persisted unless "save as default" is checked)
+  const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
+
   // Get feature-specific provider and model for Portfolio Insights
-  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.portfolioInsights;
+  // Use temporary selection if set, otherwise use stored config
+  const portfolioConfig = aiFeatureSettings.portfolioInsights;
+  const aiProvider = (tempSelection?.provider ?? portfolioConfig.provider) as AiProvider;
+  const aiModel = tempSelection?.model ?? portfolioConfig.model;
 
   const getApiKey = () => {
     switch (aiProvider) {
       case 'claude':
-        return anthropicApiKey;
+        return keys.anthropicApiKey;
       case 'openai':
-        return openaiApiKey;
+        return keys.openaiApiKey;
       case 'gemini':
-        return geminiApiKey;
+        return keys.geminiApiKey;
       case 'perplexity':
-        return perplexityApiKey;
+        return keys.perplexityApiKey;
       default:
         return '';
     }
@@ -321,9 +328,19 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
       <div className="relative bg-background border border-border rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-semibold">Portfolio Insights</h2>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold">Portfolio Insights</h2>
+            </div>
+            {/* AI Model Selector */}
+            <AIModelSelector
+              featureId="portfolioInsights"
+              value={{ provider: aiProvider, model: aiModel }}
+              onChange={setTempSelection}
+              compact
+              disabled={isLoading}
+            />
           </div>
           <button
             onClick={onClose}

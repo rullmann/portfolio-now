@@ -1083,10 +1083,12 @@ pub async fn analyze_csv_with_ai(
     let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: prompt,
+        attachments: vec![],
     }];
 
     // Use a minimal context for text-only analysis (no portfolio data needed)
     let empty_context = PortfolioInsightsContext {
+        portfolios: vec![],
         holdings: vec![],
         total_value: 0.0,
         total_cost_basis: 0.0,

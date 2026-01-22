@@ -15,23 +15,13 @@ import {
   Loader2,
   Brain,
   X,
-  BarChart3,
-  Lightbulb,
-  MessageSquare,
-  FileText,
-  FileSpreadsheet,
   ChevronRight,
-  Settings,
 } from 'lucide-react';
-import { AIProviderLogo } from '../../components/common/AIProviderLogo';
 import {
   useSettingsStore,
   useUIStore,
   toast,
   type AutoUpdateInterval,
-  AI_FEATURES,
-  AI_MODELS,
-  type AiProvider,
 } from '../../store';
 import {
   usePortfolioAnalysisStore,
@@ -54,31 +44,16 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { PortfolioInsightsModal } from '../../components/modals/PortfolioInsightsModal';
-import { PdfImportModal } from '../../components/modals/PdfImportModal';
-import { CsvImportModal } from '../../components/modals/CsvImportModal';
 
-// Feature icon mapping
-const FEATURE_ICONS: Record<string, typeof BarChart3> = {
-  BarChart3,
-  Lightbulb,
-  MessageSquare,
-  FileText,
-  FileSpreadsheet,
-};
-
-// AI Features Card Component
-interface AiFeaturesCardProps {
+// Portfolio Insights Card Component
+interface PortfolioInsightsCardProps {
   onOpenInsights: () => void;
-  onOpenChat: () => void;
-  onOpenPdfImport: () => void;
-  onOpenCsvImport: () => void;
 }
 
-function AiFeaturesCard({ onOpenInsights, onOpenChat, onOpenPdfImport, onOpenCsvImport }: AiFeaturesCardProps) {
+function PortfolioInsightsCard({ onOpenInsights }: PortfolioInsightsCardProps) {
   const { setCurrentView } = useUIStore();
   const {
     aiEnabled,
-    aiFeatureSettings,
     anthropicApiKey,
     openaiApiKey,
     geminiApiKey,
@@ -88,43 +63,6 @@ function AiFeaturesCard({ onOpenInsights, onOpenChat, onOpenPdfImport, onOpenCsv
   // Check if AI is configured (has at least one API key)
   const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey);
   const aiConfigured = aiEnabled && hasAnyAiApiKey;
-
-  // Get available providers
-  const availableProviders: AiProvider[] = [];
-  if (anthropicApiKey) availableProviders.push('claude');
-  if (openaiApiKey) availableProviders.push('openai');
-  if (geminiApiKey) availableProviders.push('gemini');
-  if (perplexityApiKey) availableProviders.push('perplexity');
-
-  // Handle feature click - navigate to appropriate view/action
-  const handleFeatureClick = (featureId: string) => {
-    switch (featureId) {
-      case 'chartAnalysis':
-        setCurrentView('charts');
-        break;
-      case 'portfolioInsights':
-        onOpenInsights();
-        break;
-      case 'chatAssistant':
-        onOpenChat();
-        break;
-      case 'pdfOcr':
-        onOpenPdfImport();
-        break;
-      case 'csvImport':
-        onOpenCsvImport();
-        break;
-      default:
-        break;
-    }
-  };
-
-  // Get model display name
-  const getModelName = (provider: AiProvider, modelId: string) => {
-    const models = AI_MODELS[provider] || [];
-    const model = models.find((m) => m.id === modelId);
-    return model?.name || modelId.split('-').slice(0, 2).join(' ');
-  };
 
   if (!aiConfigured) {
     return (
@@ -146,57 +84,22 @@ function AiFeaturesCard({ onOpenInsights, onOpenChat, onOpenPdfImport, onOpenCsv
     );
   }
 
-  // Show all features
   return (
-    <div className="glass-card p-3 min-w-[220px] flex flex-col">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-          KI-Funktionen
-        </span>
-        <button
-          onClick={() => setCurrentView('settings')}
-          className="p-1 rounded hover:bg-muted/50 transition-colors"
-          title="KI-Einstellungen"
-        >
-          <Settings size={10} className="text-muted-foreground" />
-        </button>
+    <button
+      onClick={onOpenInsights}
+      className="glass-card p-3 min-w-[140px] flex flex-col items-center justify-center gap-2 hover:bg-muted/50 transition-colors cursor-pointer group"
+      title="Portfolio Insights anzeigen"
+    >
+      <div className="p-2 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors">
+        <Sparkles size={16} className="text-primary" />
       </div>
-      <div className="space-y-1 max-h-[140px] overflow-y-auto">
-        {AI_FEATURES.map((feature) => {
-          const config = aiFeatureSettings[feature.id];
-          const isAvailable = availableProviders.includes(config?.provider);
-          const Icon = FEATURE_ICONS[feature.icon] || Sparkles;
-
-          return (
-            <button
-              key={feature.id}
-              onClick={() => handleFeatureClick(feature.id)}
-              disabled={!isAvailable}
-              className={`w-full flex items-center gap-2 p-1.5 rounded-md transition-colors text-left ${
-                isAvailable
-                  ? 'hover:bg-muted/50 cursor-pointer'
-                  : 'opacity-50 cursor-not-allowed'
-              }`}
-              title={isAvailable ? `${feature.name} öffnen` : 'Provider nicht konfiguriert'}
-            >
-              <Icon size={12} className="text-muted-foreground shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-medium truncate">{feature.name}</div>
-                {isAvailable && config && (
-                  <div className="flex items-center gap-1">
-                    <AIProviderLogo provider={config.provider} size={10} />
-                    <span className="text-[9px] text-muted-foreground truncate">
-                      {getModelName(config.provider, config.model)}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <ChevronRight size={10} className="text-muted-foreground shrink-0" />
-            </button>
-          );
-        })}
-      </div>
-    </div>
+      <span className="text-[11px] font-medium text-center">
+        Portfolio Insights
+      </span>
+      <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
+        Analyse starten <ChevronRight size={10} />
+      </span>
+    </button>
   );
 }
 
@@ -207,7 +110,6 @@ interface DashboardViewProps {
   dbInvestedCapitalHistory: Array<{ date: string; value: number }>;
   onImportPP: () => void;
   onRefresh?: () => void;
-  onOpenChat?: () => void;
 }
 
 // Sparkline component
@@ -528,7 +430,6 @@ export function DashboardView({
   dbInvestedCapitalHistory,
   onImportPP,
   onRefresh,
-  onOpenChat,
 }: DashboardViewProps) {
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
@@ -553,8 +454,6 @@ export function DashboardView({
   const [chartTimeRange, setChartTimeRange] = useState<'1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX'>('1Y');
   const [isSyncing, setIsSyncing] = useState(false);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
-  const [showPdfImportModal, setShowPdfImportModal] = useState(false);
-  const [showCsvImportModal, setShowCsvImportModal] = useState(false);
   const lastSyncTime = useSettingsStore((state) => state.lastSyncTime);
   const setLastSyncTime = useSettingsStore((state) => state.setLastSyncTime);
   const [nextSyncSeconds, setNextSyncSeconds] = useState<number | null>(null);
@@ -998,12 +897,9 @@ Berechnung:
             </div>
           </div>
 
-          {/* KI Features Card */}
-          <AiFeaturesCard
+          {/* Portfolio Insights Card */}
+          <PortfolioInsightsCard
             onOpenInsights={() => setShowInsightsModal(true)}
-            onOpenChat={() => onOpenChat?.()}
-            onOpenPdfImport={() => setShowPdfImportModal(true)}
-            onOpenCsvImport={() => setShowCsvImportModal(true)}
           />
 
           {/* Auto-Update */}
@@ -1196,20 +1092,6 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
         <PortfolioInsightsModal
           isOpen={showInsightsModal}
           onClose={() => setShowInsightsModal(false)}
-        />
-
-        {/* PDF Import Modal */}
-        <PdfImportModal
-          isOpen={showPdfImportModal}
-          onClose={() => setShowPdfImportModal(false)}
-          onSuccess={onRefresh}
-        />
-
-        {/* CSV Import Modal */}
-        <CsvImportModal
-          isOpen={showCsvImportModal}
-          onClose={() => setShowCsvImportModal(false)}
-          onSuccess={onRefresh}
         />
       </div>
     );

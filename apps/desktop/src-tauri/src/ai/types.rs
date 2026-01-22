@@ -410,6 +410,20 @@ pub struct AnnotationAnalysisResponse {
 // Portfolio Insights Types
 // ============================================================================
 
+/// Summary of a portfolio (depot) for AI context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioSummary {
+    pub id: i64,
+    pub name: String,
+    pub total_value: f64,
+    pub total_cost_basis: f64,
+    pub gain_loss_percent: f64,
+    pub holdings_count: usize,
+    /// Reference account name (if linked)
+    pub reference_account: Option<String>,
+}
+
 /// Summary of a single holding for AI context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -432,6 +446,8 @@ pub struct HoldingSummary {
     pub total_fees: f64,
     /// Total taxes paid for this position
     pub total_taxes: f64,
+    /// Portfolio name(s) where this security is held
+    pub portfolio_names: Option<Vec<String>>,
 }
 
 /// Recent transaction for context
@@ -587,6 +603,9 @@ pub struct QuoteSyncInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioInsightsContext {
+    // Portfolios (depots like TradeRepublic, Scalable, etc.)
+    pub portfolios: Vec<PortfolioSummary>,
+
     // Holdings (ALL of them)
     pub holdings: Vec<HoldingSummary>,
     pub total_value: f64,
@@ -655,12 +674,27 @@ pub struct PortfolioInsightsResponse {
 // Chat Types
 // ============================================================================
 
-/// A single chat message
+/// Image attachment for chat messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatImageAttachment {
+    /// Base64-encoded image data
+    pub data: String,
+    /// MIME type (image/png, image/jpeg, image/gif, image/webp)
+    pub mime_type: String,
+    /// Optional filename for display
+    pub filename: Option<String>,
+}
+
+/// A single chat message with optional image attachments
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Image attachments (empty if text-only message)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatImageAttachment>,
 }
 
 /// Suggested action from AI that requires user confirmation
@@ -761,6 +795,17 @@ pub struct PortfolioTransferCommand {
     pub note: Option<String>,
 }
 
+/// Transaction delete command parsed from AI response.
+/// SECURITY: This is returned as a SUGGESTION that requires user confirmation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionDeleteCommand {
+    /// Transaction ID to delete
+    pub transaction_id: i64,
+    /// Description for confirmation display
+    pub description: Option<String>,
+}
+
 /// Result of transaction validation before execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -788,4 +833,89 @@ pub struct AiModelInfo {
     pub name: String,
     pub description: String,
     pub supports_vision: bool,
+}
+
+// ============================================================================
+// Quote Assistant Types
+// ============================================================================
+
+/// Context about a security with quote problems for the AI assistant
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteAssistantContext {
+    pub security_id: i64,
+    pub security_name: String,
+    pub isin: Option<String>,
+    pub ticker: Option<String>,
+    pub currency: String,
+    pub current_feed: Option<String>,
+    pub current_feed_url: Option<String>,
+    /// Problem type: "no_provider", "fetch_error", "stale"
+    pub problem: String,
+    /// Last error message if any
+    pub last_error: Option<String>,
+    /// Days since last successful quote (for stale detection)
+    pub days_since_quote: Option<i32>,
+}
+
+/// AI-generated suggestion for a quote source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiQuoteSuggestion {
+    pub provider: String,
+    pub ticker: String,
+    pub feed_url: Option<String>,
+    pub confidence: f64,
+    pub reason: String,
+}
+
+/// Validated quote suggestion with test result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidatedQuoteSuggestion {
+    pub suggestion: AiQuoteSuggestion,
+    pub validated: bool,
+    pub test_price: Option<f64>,
+    pub test_date: Option<String>,
+    pub test_currency: Option<String>,
+    pub validation_error: Option<String>,
+}
+
+/// Request for quote assistant chat
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteAssistantRequest {
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub security_context: QuoteAssistantContext,
+    /// Optional manual question from user
+    pub user_message: Option<String>,
+    /// Chat history for context
+    pub history: Vec<ChatMessage>,
+}
+
+/// Response from quote assistant
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteAssistantResponse {
+    pub message: String,
+    pub suggestion: Option<ValidatedQuoteSuggestion>,
+    pub tokens_used: Option<u32>,
+}
+
+/// Security with quote issue for the assistant
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblematicSecurity {
+    pub id: i64,
+    pub name: String,
+    pub isin: Option<String>,
+    pub ticker: Option<String>,
+    pub currency: String,
+    pub feed: Option<String>,
+    pub feed_url: Option<String>,
+    pub problem_type: String,
+    pub problem_description: String,
+    pub last_quote_date: Option<String>,
 }

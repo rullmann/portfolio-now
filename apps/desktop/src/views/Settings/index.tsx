@@ -1249,7 +1249,7 @@ export function SettingsView() {
                   <h3 className="text-lg font-semibold text-destructive">Alle Daten löschen</h3>
                 </div>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Löscht alle Daten aus der Datenbank: Wertpapiere, Konten, Depots, Buchungen, Kurse und Einstellungen.
+                  Löscht alle Daten aus der Datenbank: Wertpapiere, Konten, Depots, Buchungen, Kurse, Einstellungen und Chat-Verläufe.
                   <strong className="text-destructive"> Diese Aktion kann nicht rückgängig gemacht werden!</strong>
                 </p>
                 <div className="flex items-end gap-3">

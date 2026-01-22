@@ -316,6 +316,8 @@ export interface QuoteSuggestion {
   ticker: string | null;
   suggestedFeed: string;
   suggestedFeedUrl: string | null;
+  /** Suggested ticker if security has no ticker */
+  suggestedTicker: string | null;
   confidence: number;
   reason: string;
 }
@@ -331,10 +333,11 @@ export interface UnconfiguredSecuritiesInfo {
 /**
  * Get quote provider suggestions for securities without configured feed.
  * Uses rule-based analysis (ISIN prefix, ticker format, crypto detection).
- * @param portfolioId Optional portfolio ID to filter to held securities
+ * @param portfolioId Optional portfolio ID to filter to held securities in specific portfolio
+ * @param heldOnly If true, filter to securities held in any portfolio (ignored if portfolioId is set)
  */
-export async function suggestQuoteProviders(portfolioId?: number): Promise<QuoteSuggestion[]> {
-  return invoke<QuoteSuggestion[]>('suggest_quote_providers', { portfolioId });
+export async function suggestQuoteProviders(portfolioId?: number, heldOnly?: boolean): Promise<QuoteSuggestion[]> {
+  return invoke<QuoteSuggestion[]>('suggest_quote_providers', { portfolioId, heldOnly });
 }
 
 /**
@@ -342,13 +345,15 @@ export async function suggestQuoteProviders(portfolioId?: number): Promise<Quote
  * @param securityId Security to update
  * @param feed Provider name (e.g., "YAHOO", "COINGECKO")
  * @param feedUrl Optional feed URL/suffix (e.g., ".SW" for Swiss stocks)
+ * @param ticker Optional ticker to set (used when suggesting ticker for securities without one)
  */
 export async function applyQuoteSuggestion(
   securityId: number,
   feed: string,
-  feedUrl?: string | null
+  feedUrl?: string | null,
+  ticker?: string | null
 ): Promise<void> {
-  return invoke<void>('apply_quote_suggestion', { securityId, feed, feedUrl });
+  return invoke<void>('apply_quote_suggestion', { securityId, feed, feedUrl, ticker });
 }
 
 /**
@@ -370,10 +375,18 @@ export interface QuoteConfigAuditResult {
   securityName: string;
   ticker?: string;
   feed: string;
-  /** Status: "ok", "stale", "missing" */
-  status: 'ok' | 'stale' | 'missing';
+  /** Status: "ok", "stale", "missing", "config_error", "suspicious", "unconfigured" */
+  status: 'ok' | 'stale' | 'missing' | 'config_error' | 'suspicious' | 'unconfigured';
   lastPriceDate?: string;
   daysSinceLastPrice?: number;
+  /** Error message when status is "config_error" or "unconfigured" */
+  errorMessage?: string;
+  /** Last known price from database */
+  lastKnownPrice?: number;
+  /** Price fetched during audit */
+  fetchedPrice?: number;
+  /** Price deviation in percent (for "suspicious" status) */
+  priceDeviation?: number;
 }
 
 /**
@@ -384,15 +397,151 @@ export interface QuoteAuditSummary {
   okCount: number;
   staleCount: number;
   missingCount: number;
+  /** Count of securities where fetch failed */
+  configErrorCount: number;
+  /** Count of securities with suspicious price deviation (>50%) */
+  suspiciousCount: number;
+  /** Count of securities without configured feed */
+  unconfiguredCount: number;
   results: QuoteConfigAuditResult[];
 }
 
 /**
  * Audit all configured quote sources and provide improvement recommendations.
+ * Now performs actual quote fetches to verify configuration works.
  * @param onlyHeld If true, only audit securities with current holdings (default: true)
+ * @param apiKeys Optional API keys for providers that require authentication
  */
-export async function auditQuoteConfigurations(onlyHeld?: boolean): Promise<QuoteAuditSummary> {
-  return invoke<QuoteAuditSummary>('audit_quote_configurations', { onlyHeld });
+export async function auditQuoteConfigurations(
+  onlyHeld?: boolean,
+  apiKeys?: ApiKeys
+): Promise<QuoteAuditSummary> {
+  return invoke<QuoteAuditSummary>('audit_quote_configurations', { onlyHeld, apiKeys });
+}
+
+/**
+ * Suggestion for fixing a broken quote configuration
+ */
+export interface QuoteFixSuggestion {
+  securityId: number;
+  currentProvider: string;
+  currentSymbol?: string;
+  suggestedProvider: string;
+  suggestedSymbol: string;
+  suggestedFeedUrl?: string;
+  /** Source of the suggestion: "known_mapping", "isin_search", "suffix_variant", "yahoo_search", "tradingview_search" */
+  source: string;
+  /** Confidence score 0-1 */
+  confidence: number;
+  /** Validated price from actual quote fetch (only set if validation succeeded) */
+  validatedPrice?: number;
+}
+
+/**
+ * Get fix suggestions for a security with broken quote configuration.
+ * @param securityId ID of the security
+ * @param apiKeys Optional API keys for providers that require authentication
+ */
+export async function getQuoteFixSuggestions(
+  securityId: number,
+  apiKeys?: ApiKeys
+): Promise<QuoteFixSuggestion[]> {
+  return invoke<QuoteFixSuggestion[]>('get_quote_fix_suggestions', { securityId, apiKeys });
+}
+
+/**
+ * Apply a quote fix suggestion to a security.
+ * @param securityId ID of the security
+ * @param newProvider New quote provider
+ * @param newSymbol New ticker symbol
+ * @param newFeedUrl Optional new feed URL
+ */
+export async function applyQuoteFix(
+  securityId: number,
+  newProvider: string,
+  newSymbol: string,
+  newFeedUrl?: string
+): Promise<void> {
+  return invoke<void>('apply_quote_fix', { securityId, newProvider, newSymbol, newFeedUrl });
+}
+
+// =============================================================================
+// UNIFIED QUOTE MANAGER
+// =============================================================================
+
+/**
+ * A validated suggestion that has been tested and works
+ */
+export interface ValidatedSuggestion {
+  provider: string;
+  symbol: string;
+  feedUrl?: string;
+  /** How the suggestion was found */
+  source: string;
+  /** Validated price from actual fetch */
+  validatedPrice: number;
+}
+
+/**
+ * A security that needs attention (no feed, broken feed, stale prices, etc.)
+ */
+export interface QuoteManagerItem {
+  securityId: number;
+  securityName: string;
+  isin?: string;
+  ticker?: string;
+  currency?: string;
+  /** Current feed (if any) */
+  currentFeed?: string;
+  currentFeedUrl?: string;
+  /** Problem status: "unconfigured", "error", "stale", "no_data" */
+  status: 'unconfigured' | 'error' | 'stale' | 'no_data';
+  statusMessage: string;
+  /** Last known price date */
+  lastPriceDate?: string;
+  /** Days since last price */
+  daysSincePrice?: number;
+  /** Validated fix suggestions (already tested to work) */
+  suggestions: ValidatedSuggestion[];
+}
+
+/**
+ * Summary result from the unified quote manager
+ */
+export interface QuoteManagerResult {
+  totalSecurities: number;
+  totalWithIssues: number;
+  unconfiguredCount: number;
+  errorCount: number;
+  staleCount: number;
+  noDataCount: number;
+  /** All securities with issues and their validated suggestions */
+  items: QuoteManagerItem[];
+}
+
+/**
+ * Unified quote manager - finds all problematic securities and provides validated fix suggestions.
+ * This combines suggest + audit + validate all in one call.
+ * @param onlyHeld If true, only check securities held in portfolios
+ */
+export async function quoteManagerAudit(onlyHeld?: boolean): Promise<QuoteManagerResult> {
+  return invoke<QuoteManagerResult>('quote_manager_audit', { onlyHeld });
+}
+
+/**
+ * Apply a suggestion from the quote manager.
+ * @param securityId ID of the security
+ * @param provider Provider name (e.g., "YAHOO")
+ * @param symbol Symbol to use
+ * @param feedUrl Optional feed URL/suffix
+ */
+export async function applyQuoteManagerSuggestion(
+  securityId: number,
+  provider: string,
+  symbol: string,
+  feedUrl?: string
+): Promise<void> {
+  return invoke<void>('apply_quote_manager_suggestion', { securityId, provider, symbol, feedUrl });
 }
 
 /**
@@ -2939,4 +3088,50 @@ export async function getConsortiumHistory(
   endDate?: string
 ): Promise<ConsortiumHistory> {
   return invoke<ConsortiumHistory>('get_consortium_history', { consortiumId, startDate, endDate });
+}
+
+// ============================================================================
+// Symbol Validation API
+// ============================================================================
+
+import type {
+  ValidationResponse,
+  ValidationResult,
+  ValidationStatusSummary,
+  ValidateSecuritiesRequest,
+  ValidateSingleRequest,
+  ApplyValidationRequest,
+} from './types';
+
+/**
+ * Validate all securities' quote configurations.
+ * @param request Validation request with options
+ */
+export async function validateAllSecurities(request: ValidateSecuritiesRequest): Promise<ValidationResponse> {
+  return invoke<ValidationResponse>('validate_all_securities_cmd', { request });
+}
+
+/**
+ * Validate a single security's quote configuration.
+ * @param request Validation request for single security
+ */
+export async function validateSecurity(request: ValidateSingleRequest): Promise<ValidationResult> {
+  return invoke<ValidationResult>('validate_security_cmd', { request });
+}
+
+/**
+ * Apply a validated configuration to a security.
+ * Updates the security's feed, ticker, and feed_url.
+ * @param request The security ID and validated config to apply
+ */
+export async function applyValidationResult(request: ApplyValidationRequest): Promise<void> {
+  return invoke('apply_validation_result_cmd', { request });
+}
+
+/**
+ * Get validation status summary.
+ * @param onlyHeld Only include held securities in the summary
+ */
+export async function getValidationStatus(onlyHeld: boolean): Promise<ValidationStatusSummary> {
+  return invoke<ValidationStatusSummary>('get_validation_status_cmd', { onlyHeld });
 }

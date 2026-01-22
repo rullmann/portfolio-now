@@ -4,7 +4,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Database, Plus, Trash2, RefreshCw, AlertCircle, FileText, Pencil, CheckSquare, X } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
+import { Database, Plus, Trash2, AlertCircle, FileText, Pencil, CheckSquare, X } from 'lucide-react';
 import { getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { deleteTransaction, deleteTransactionsBulk, getSecurities } from '../../lib/api';
 import { TransactionFormModal, PdfImportModal, BulkDeleteConfirmModal } from '../../components/modals';
@@ -110,6 +111,21 @@ export function TransactionsView() {
 
   useEffect(() => {
     loadTransactions();
+  }, [loadTransactions]);
+
+  // Listen for data_changed events to auto-refresh transactions
+  useEffect(() => {
+    const unlisten = listen<{ entity: string; action: string }>('data_changed', (event) => {
+      // Refresh when transactions or related data changes
+      const relevantEntities = ['transaction', 'transactions', 'import', 'rebalance', 'investment_plan'];
+      if (relevantEntities.some((e) => event.payload.entity?.includes(e))) {
+        loadTransactions();
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [loadTransactions]);
 
   const handleCreate = () => {
@@ -267,14 +283,6 @@ export function TransactionsView() {
             >
               {isSelectionMode ? <X size={16} /> : <CheckSquare size={16} />}
               {isSelectionMode ? 'Abbrechen' : 'Auswählen'}
-            </button>
-            <button
-              onClick={loadTransactions}
-              disabled={isLoading}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
-            >
-              <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-              Aktualisieren
             </button>
             <button
               onClick={() => setIsPdfImportOpen(true)}

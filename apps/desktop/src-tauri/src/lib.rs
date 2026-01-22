@@ -79,6 +79,13 @@ pub fn run() {
             commands::quotes::audit_quote_configurations,
             commands::quotes::get_quote_fix_suggestions,
             commands::quotes::apply_quote_fix,
+            // Unified Quote Manager
+            commands::quotes::quote_manager_audit,
+            commands::quotes::apply_quote_manager_suggestion,
+            // AI Quote Assistant
+            commands::quotes::get_quote_problem_securities,
+            commands::quotes::chat_with_quote_assistant,
+            commands::quotes::apply_quote_assistant_suggestion,
             // New PP Import commands
             commands::import::import_pp_file,
             commands::import::get_imports,
@@ -275,6 +282,7 @@ pub fn run() {
             commands::ai::analyze_chart_enhanced,
             commands::ai::get_ai_models,
             commands::ai::get_vision_models,
+            commands::ai::check_vision_support,
             // AI Portfolio Insights & Chat
             commands::ai::analyze_portfolio_with_ai,
             commands::ai::chat_with_portfolio_assistant,
@@ -282,11 +290,23 @@ pub fn run() {
             // AI Transaction Commands
             commands::ai::execute_confirmed_transaction,
             commands::ai::execute_confirmed_portfolio_transfer,
+            commands::ai::execute_confirmed_transaction_delete,
+            commands::ai::import_extracted_transactions,
+            commands::ai::enrich_extracted_transactions,
             // Chat History Persistence
             commands::chat::save_chat_message,
             commands::chat::get_chat_history,
             commands::chat::clear_chat_history,
             commands::chat::delete_chat_message,
+            commands::chat::save_chat_suggestion,
+            commands::chat::update_suggestion_status,
+            commands::chat::get_suggestions_for_message,
+            commands::chat::get_pending_suggestions,
+            // Chat Conversations
+            commands::chat::get_conversations,
+            commands::chat::create_conversation,
+            commands::chat::update_conversation_title,
+            commands::chat::delete_conversation,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,

@@ -262,6 +262,23 @@ pub fn is_valid_model(model: &str) -> bool {
     VISION_MODELS.iter().any(|m| m.id == model)
 }
 
+/// Check if a model has vision/image input support
+///
+/// Returns true if the model is in the VISION_MODELS registry.
+/// This is the same as `is_valid_model` but with a more semantic name
+/// for use cases where you need to check image support specifically.
+pub fn has_vision_support(model: &str) -> bool {
+    VISION_MODELS.iter().any(|m| m.id == model)
+}
+
+/// Get the provider for a model ID
+pub fn get_model_provider(model: &str) -> Option<&'static str> {
+    VISION_MODELS
+        .iter()
+        .find(|m| m.id == model)
+        .map(|m| m.provider)
+}
+
 /// Get a model by ID
 pub fn get_model(model_id: &str) -> Option<&'static VisionModel> {
     VISION_MODELS.iter().find(|m| m.id == model_id)

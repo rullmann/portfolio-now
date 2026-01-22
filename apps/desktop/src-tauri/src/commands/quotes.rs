@@ -8,7 +8,8 @@
 //! - fetch_exchange_rates: EZB Wechselkurse abrufen
 
 use crate::db;
-use crate::quotes::{self, alphavantage, ecb, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
+use crate::quotes::{self, alphavantage, ecb, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
+use futures::stream::{self, StreamExt};
 use chrono::NaiveDate;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -561,6 +562,7 @@ pub struct SyncResult {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 struct SecurityInfo {
     id: i64,
     name: String,
@@ -1545,22 +1547,31 @@ use crate::quotes::suggestion::{self, QuoteSuggestion, SecurityForSuggestion};
 
 /// Get quote provider suggestions for securities without configured feed
 #[command]
-pub fn suggest_quote_providers(portfolio_id: Option<i64>) -> Result<Vec<QuoteSuggestion>, String> {
+pub fn suggest_quote_providers(
+    portfolio_id: Option<i64>,
+    held_only: Option<bool>,
+) -> Result<Vec<QuoteSuggestion>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
 
     // Valid feed providers that can fetch quotes automatically
     // Note: MANUAL is excluded as it cannot auto-fetch
-    let valid_feeds_condition = "UPPER(TRIM(s.feed)) IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW')";
+    // Condition checks for missing/invalid feed (NULL, empty, or not in valid list)
+    let missing_feed_condition = "(s.feed IS NULL OR TRIM(s.feed) = '' OR UPPER(TRIM(s.feed)) NOT IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW'))";
 
     // Get securities without valid auto-fetch feed
+    // Three modes:
+    // 1. portfolio_id = Some(id) -> only securities held in specific portfolio
+    // 2. held_only = true -> only securities held in any portfolio
+    // 3. else -> all non-retired securities without feed
     let sql = if let Some(pid) = portfolio_id {
+        // Mode 1: Specific portfolio
         format!(
             "SELECT DISTINCT s.id, s.name, s.isin, s.ticker, s.currency
              FROM pp_security s
              JOIN pp_txn t ON t.security_id = s.id
              WHERE s.is_retired = 0
-               AND NOT ({})
+               AND {}
                AND t.owner_type = 'portfolio'
                AND t.owner_id = {}
                AND (
@@ -1570,18 +1581,38 @@ pub fn suggest_quote_providers(portfolio_id: Option<i64>) -> Result<Vec<QuoteSug
                        ELSE 0
                    END), 0)
                    FROM pp_txn t2
-                   WHERE t2.security_id = s.id AND t2.owner_type = 'portfolio'
+                   WHERE t2.security_id = s.id AND t2.owner_type = 'portfolio' AND t2.owner_id = {}
                ) > 0",
-            valid_feeds_condition,
+            missing_feed_condition,
+            pid,
             pid
         )
+    } else if held_only.unwrap_or(false) {
+        // Mode 2: All held securities (across all portfolios)
+        format!(
+            "SELECT DISTINCT s.id, s.name, s.isin, s.ticker, s.currency
+             FROM pp_security s
+             WHERE s.is_retired = 0
+               AND {}
+               AND (
+                   SELECT COALESCE(SUM(CASE
+                       WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                       WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                       ELSE 0
+                   END), 0)
+                   FROM pp_txn t
+                   WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
+               ) > 0",
+            missing_feed_condition
+        )
     } else {
+        // Mode 3: All securities
         format!(
             "SELECT s.id, s.name, s.isin, s.ticker, s.currency
              FROM pp_security s
              WHERE s.is_retired = 0
-               AND NOT ({})",
-            valid_feeds_condition
+               AND {}",
+            missing_feed_condition
         )
     };
 
@@ -1622,6 +1653,7 @@ pub fn apply_quote_suggestion(
     security_id: i64,
     feed: String,
     feed_url: Option<String>,
+    ticker: Option<String>,
 ) -> Result<(), String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
@@ -1632,18 +1664,27 @@ pub fn apply_quote_suggestion(
         return Err(format!("Unknown feed provider: {}", feed));
     }
 
-    // Update security with suggested feed
-    conn.execute(
-        "UPDATE pp_security SET feed = ?1, feed_url = ?2 WHERE id = ?3",
-        params![feed, feed_url, security_id],
-    )
-    .map_err(|e| format!("Failed to update security: {}", e))?;
+    // Update security with suggested feed and optionally ticker
+    if let Some(ref t) = ticker {
+        conn.execute(
+            "UPDATE pp_security SET feed = ?1, feed_url = ?2, ticker = ?3 WHERE id = ?4",
+            params![feed, feed_url, t, security_id],
+        )
+        .map_err(|e| format!("Failed to update security: {}", e))?;
+    } else {
+        conn.execute(
+            "UPDATE pp_security SET feed = ?1, feed_url = ?2 WHERE id = ?3",
+            params![feed, feed_url, security_id],
+        )
+        .map_err(|e| format!("Failed to update security: {}", e))?;
+    }
 
     log::info!(
-        "Applied quote suggestion for security {}: feed={}, feed_url={:?}",
+        "Applied quote suggestion for security {}: feed={}, feed_url={:?}, ticker={:?}",
         security_id,
         feed,
-        feed_url
+        feed_url,
+        ticker
     );
 
     Ok(())
@@ -1655,17 +1696,16 @@ pub fn get_unconfigured_securities_count() -> Result<UnconfiguredSecuritiesInfo,
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
 
-    // Valid feed providers that can fetch quotes automatically
-    // Note: MANUAL is excluded as it cannot auto-fetch
-    let valid_feeds_condition = "UPPER(TRIM(feed)) IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW')";
+    // Condition checks for missing/invalid feed (NULL, empty, or not in valid list)
+    let missing_feed_condition = "(feed IS NULL OR TRIM(feed) = '' OR UPPER(TRIM(feed)) NOT IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW'))";
 
     // Count all securities without valid auto-fetch feed
     let total_unconfigured: i64 = conn
         .query_row(
             &format!(
                 "SELECT COUNT(*) FROM pp_security
-                 WHERE is_retired = 0 AND NOT ({})",
-                valid_feeds_condition
+                 WHERE is_retired = 0 AND {}",
+                missing_feed_condition
             ),
             [],
             |row| row.get(0),
@@ -1673,12 +1713,13 @@ pub fn get_unconfigured_securities_count() -> Result<UnconfiguredSecuritiesInfo,
         .map_err(|e| e.to_string())?;
 
     // Count held securities without valid auto-fetch feed
+    let missing_feed_condition_s = "(s.feed IS NULL OR TRIM(s.feed) = '' OR UPPER(TRIM(s.feed)) NOT IN ('YAHOO', 'YAHOO-ADJUSTEDCLOSE', 'COINGECKO', 'KRAKEN', 'FINNHUB', 'ALPHAVANTAGE', 'TWELVEDATA', 'TRADINGVIEW'))";
     let held_unconfigured: i64 = conn
         .query_row(
             &format!(
                 "SELECT COUNT(DISTINCT s.id) FROM pp_security s
                  WHERE s.is_retired = 0
-                   AND NOT ({})
+                   AND {}
                    AND (
                        SELECT COALESCE(SUM(CASE
                            WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
@@ -1688,7 +1729,7 @@ pub fn get_unconfigured_securities_count() -> Result<UnconfiguredSecuritiesInfo,
                        FROM pp_txn t
                        WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
                    ) > 0",
-                valid_feeds_condition.replace("feed", "s.feed")
+                missing_feed_condition_s
             ),
             [],
             |row| row.get(0),
@@ -1721,10 +1762,18 @@ pub struct QuoteConfigAuditResult {
     pub security_name: String,
     pub ticker: Option<String>,
     pub feed: String,
-    /// Status: "ok", "stale", "missing"
+    /// Status: "ok", "stale", "missing", "config_error", "suspicious"
     pub status: String,
     pub last_price_date: Option<String>,
     pub days_since_last_price: Option<i64>,
+    /// Error message when status is "config_error"
+    pub error_message: Option<String>,
+    /// Last known price from database
+    pub last_known_price: Option<f64>,
+    /// Price fetched during audit
+    pub fetched_price: Option<f64>,
+    /// Price deviation in percent (for "suspicious" status)
+    pub price_deviation: Option<f64>,
 }
 
 /// Summary of audit results
@@ -1733,148 +1782,1323 @@ pub struct QuoteConfigAuditResult {
 pub struct QuoteAuditSummary {
     pub total_audited: usize,
     pub ok_count: usize,
-    pub stale_count: usize,       // > 7 days old
-    pub missing_count: usize,     // no prices at all
+    pub stale_count: usize,         // > 7 days old
+    pub missing_count: usize,       // no prices at all
+    pub config_error_count: usize,  // fetch failed
+    pub suspicious_count: usize,    // price deviation > 50%
+    pub unconfigured_count: usize,  // no feed configured
     pub results: Vec<QuoteConfigAuditResult>,
 }
 
-/// Audit all configured quote sources - checks for missing or stale prices
-#[command]
-pub fn audit_quote_configurations(only_held: Option<bool>) -> Result<QuoteAuditSummary, String> {
+/// Result of testing a quote fetch
+struct QuoteFetchTestResult {
+    success: bool,
+    fetched_price: Option<f64>,
+    error_message: Option<String>,
+}
+
+/// Check if price deviation is suspicious (> 50% change)
+fn check_price_plausibility(last_known: f64, fetched: f64) -> Option<f64> {
+    if last_known <= 0.0 || fetched <= 0.0 {
+        return None;
+    }
+    let deviation = ((fetched - last_known) / last_known) * 100.0;
+    if deviation.abs() > 50.0 {
+        Some(deviation)
+    } else {
+        None
+    }
+}
+
+/// Data loaded from DB for audit (before async operations)
+#[derive(Clone)]
+struct AuditSecurityData {
+    security: SecurityInfo,
+    last_price_date: Option<String>,
+    last_known_price: Option<f64>,
+    days_since: Option<i64>,
+    feed_to_use: String,
+    feed_url_to_use: Option<String>,
+}
+
+/// Load all data from DB synchronously (before async operations)
+fn load_audit_data(only_held: bool) -> Result<Vec<AuditSecurityData>, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
 
-    let only_held = only_held.unwrap_or(true);
-
-    // Valid feeds that can auto-fetch
-    let valid_feeds = ["YAHOO", "YAHOO-ADJUSTEDCLOSE", "COINGECKO", "KRAKEN", "FINNHUB", "ALPHAVANTAGE", "TWELVEDATA", "TRADINGVIEW"];
-    let valid_feeds_condition = valid_feeds.iter()
-        .map(|f| format!("'{}'", f))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    // Get securities with configured feeds
+    // Get ALL securities (including those without configured feeds)
+    // We'll determine their status later based on whether they have a valid feed
+    // Use COALESCE to return empty string for NULL feeds
     let sql = if only_held {
-        format!(
-            "SELECT s.id, s.name, s.feed, s.ticker
-             FROM pp_security s
-             WHERE s.is_retired = 0
-               AND UPPER(TRIM(s.feed)) IN ({})
-               AND (
-                   SELECT COALESCE(SUM(CASE
-                       WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
-                       WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
-                       ELSE 0
-                   END), 0)
-                   FROM pp_txn t
-                   WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
-               ) > 0
-             ORDER BY s.name",
-            valid_feeds_condition
-        )
+        "SELECT s.id, s.name, COALESCE(s.feed, '') as feed, s.feed_url, s.latest_feed, s.latest_feed_url, s.ticker, s.isin, s.currency
+         FROM pp_security s
+         WHERE s.is_retired = 0
+           AND (
+               SELECT COALESCE(SUM(CASE
+                   WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                   WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                   ELSE 0
+               END), 0)
+               FROM pp_txn t
+               WHERE t.security_id = s.id AND t.owner_type = 'portfolio'
+           ) > 0
+         ORDER BY s.name".to_string()
     } else {
-        format!(
-            "SELECT s.id, s.name, s.feed, s.ticker
-             FROM pp_security s
-             WHERE s.is_retired = 0
-               AND UPPER(TRIM(s.feed)) IN ({})
-             ORDER BY s.name",
-            valid_feeds_condition
-        )
+        "SELECT s.id, s.name, COALESCE(s.feed, '') as feed, s.feed_url, s.latest_feed, s.latest_feed_url, s.ticker, s.isin, s.currency
+         FROM pp_security s
+         WHERE s.is_retired = 0
+         ORDER BY s.name".to_string()
     };
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
-    let securities: Vec<(i64, String, String, Option<String>)> = stmt
+    // Load all security info
+    let securities: Vec<SecurityInfo> = stmt
         .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-            ))
+            Ok(SecurityInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                feed: row.get(2)?,
+                feed_url: row.get(3)?,
+                latest_feed: row.get(4)?,
+                latest_feed_url: row.get(5)?,
+                ticker: row.get(6)?,
+                isin: row.get(7)?,
+                currency: row.get(8)?,
+            })
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
 
+    // Load price info for each security
+    let mut result = Vec::new();
+    for security in securities {
+        // Get last price info from database
+        let price_info: Option<(String, f64, i64)> = conn
+            .query_row(
+                "SELECT date, value, (julianday('now') - julianday(date)) as days_ago
+                 FROM pp_latest_price WHERE security_id = ?1",
+                params![security.id],
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?)),
+            )
+            .ok()
+            .map(|(date, value, days)| (date, quotes::price_from_db(value), days as i64))
+            .or_else(|| {
+                conn.query_row(
+                    "SELECT date, value, (julianday('now') - julianday(date)) as days_ago
+                     FROM pp_price WHERE security_id = ?1 ORDER BY date DESC LIMIT 1",
+                    params![security.id],
+                    |row| Ok((row.get(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?)),
+                )
+                .ok()
+                .map(|(date, value, days)| (date, quotes::price_from_db(value), days as i64))
+            });
+
+        let (last_price_date, last_known_price, days_since) = match &price_info {
+            Some((date, price, days)) => (Some(date.clone()), Some(*price), Some(*days)),
+            None => (None, None, None),
+        };
+
+        // Determine which feed to use (latest_feed if set, otherwise feed)
+        let feed_to_use = security.latest_feed.as_ref()
+            .filter(|f| !f.is_empty())
+            .unwrap_or(&security.feed)
+            .to_string();
+        let feed_url_to_use = if security.latest_feed.as_ref().filter(|f| !f.is_empty()).is_some() {
+            security.latest_feed_url.clone()
+        } else {
+            security.feed_url.clone()
+        };
+
+        result.push(AuditSecurityData {
+            security,
+            last_price_date,
+            last_known_price,
+            days_since,
+            feed_to_use,
+            feed_url_to_use,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Audit all configured quote sources - checks for missing, stale, or problematic prices
+/// Check if a feed is a valid auto-fetch provider
+fn is_valid_auto_fetch_feed(feed: &str) -> bool {
+    let valid_feeds = ["YAHOO", "YAHOO-ADJUSTEDCLOSE", "COINGECKO", "KRAKEN", "FINNHUB", "ALPHAVANTAGE", "TWELVEDATA", "TRADINGVIEW"];
+    let feed_upper = feed.trim().to_uppercase();
+    valid_feeds.contains(&feed_upper.as_str())
+}
+
+/// Now performs actual quote fetches to verify configuration works and check plausibility
+#[command]
+pub async fn audit_quote_configurations(
+    only_held: Option<bool>,
+    api_keys: Option<ApiKeys>,
+) -> Result<QuoteAuditSummary, String> {
+    let only_held = only_held.unwrap_or(true);
+    let keys = api_keys.unwrap_or_default();
+
+    // Load all DB data synchronously first (releases DB connection before async)
+    let audit_data = load_audit_data(only_held)?;
+
     let mut results = Vec::new();
     let mut ok_count = 0;
     let mut stale_count = 0;
     let mut missing_count = 0;
+    let mut config_error_count = 0;
+    let mut suspicious_count = 0;
+    let mut unconfigured_count = 0;
 
-    for (id, name, feed, ticker) in securities {
-        // Get last price info - check both pp_latest_price and pp_price
-        let price_info: Option<(String, f64)> = conn
-            .query_row(
-                "SELECT date, (julianday('now') - julianday(date)) as days_ago
-                 FROM pp_latest_price WHERE security_id = ?1",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()
-            .or_else(|| {
-                conn.query_row(
-                    "SELECT date, (julianday('now') - julianday(date)) as days_ago
-                     FROM pp_price WHERE security_id = ?1 ORDER BY date DESC LIMIT 1",
-                    params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()
+    // Now do async operations (no DB connection held)
+    for data in audit_data {
+        // First check if feed is configured at all
+        if !is_valid_auto_fetch_feed(&data.feed_to_use) {
+            // No valid feed configured - mark as unconfigured (no fetch attempt)
+            unconfigured_count += 1;
+            results.push(QuoteConfigAuditResult {
+                security_id: data.security.id,
+                security_name: data.security.name.clone(),
+                ticker: data.security.ticker.clone(),
+                feed: data.feed_to_use.clone(),
+                status: "unconfigured".to_string(),
+                last_price_date: data.last_price_date.clone(),
+                days_since_last_price: data.days_since,
+                error_message: Some("Keine Kursquelle konfiguriert".to_string()),
+                last_known_price: data.last_known_price,
+                fetched_price: None,
+                price_deviation: None,
             });
+            continue;
+        }
 
-        let (status, last_price_date, days_since) = match price_info {
-            Some((date, days)) => {
-                let days_i64 = days as i64;
-                if days_i64 > 7 {
-                    stale_count += 1;
-                    ("stale".to_string(), Some(date), Some(days_i64))
-                } else {
-                    ok_count += 1;
-                    ("ok".to_string(), Some(date), Some(days_i64))
-                }
+        // Try to fetch a quote to verify configuration works
+        let fetch_result = test_quote_fetch(
+            &data.security,
+            &data.feed_to_use,
+            data.feed_url_to_use.as_deref(),
+            &keys
+        ).await;
+
+        // Determine status based on DB state and fetch result
+        let (status, error_message, fetched_price, price_deviation) = if !fetch_result.success {
+            // Configuration error: fetch failed
+            config_error_count += 1;
+            (
+                "config_error".to_string(),
+                fetch_result.error_message,
+                None,
+                None,
+            )
+        } else if let (Some(fetched), Some(last_known)) = (fetch_result.fetched_price, data.last_known_price) {
+            // Check plausibility
+            if let Some(deviation) = check_price_plausibility(last_known, fetched) {
+                suspicious_count += 1;
+                (
+                    "suspicious".to_string(),
+                    None,
+                    Some(fetched),
+                    Some(deviation),
+                )
+            } else if data.days_since.map(|d| d > 7).unwrap_or(false) {
+                stale_count += 1;
+                ("stale".to_string(), None, Some(fetched), None)
+            } else {
+                ok_count += 1;
+                ("ok".to_string(), None, Some(fetched), None)
             }
-            None => {
-                missing_count += 1;
-                ("missing".to_string(), None, None)
-            }
+        } else if data.last_known_price.is_none() {
+            // No price in DB at all
+            missing_count += 1;
+            ("missing".to_string(), None, fetch_result.fetched_price, None)
+        } else if data.days_since.map(|d| d > 7).unwrap_or(false) {
+            stale_count += 1;
+            ("stale".to_string(), None, fetch_result.fetched_price, None)
+        } else {
+            ok_count += 1;
+            ("ok".to_string(), None, fetch_result.fetched_price, None)
         };
 
         // Only add to results if there's an issue
         if status != "ok" {
             results.push(QuoteConfigAuditResult {
-                security_id: id,
-                security_name: name,
-                ticker,
-                feed,
+                security_id: data.security.id,
+                security_name: data.security.name,
+                ticker: data.security.ticker,
+                feed: data.feed_to_use,
                 status,
-                last_price_date,
-                days_since_last_price: days_since,
+                last_price_date: data.last_price_date,
+                days_since_last_price: data.days_since,
+                error_message,
+                last_known_price: data.last_known_price,
+                fetched_price,
+                price_deviation,
             });
         }
     }
 
-    // Sort: missing first, then stale by days descending
+    // Sort: unconfigured first, then config_error, suspicious, missing, stale by days descending
     results.sort_by(|a, b| {
-        match (&a.status[..], &b.status[..]) {
-            ("missing", "stale") => std::cmp::Ordering::Less,
-            ("stale", "missing") => std::cmp::Ordering::Greater,
-            _ => b.days_since_last_price.cmp(&a.days_since_last_price),
+        let status_order = |s: &str| -> i32 {
+            match s {
+                "unconfigured" => 0,
+                "config_error" => 1,
+                "suspicious" => 2,
+                "missing" => 3,
+                "stale" => 4,
+                _ => 5,
+            }
+        };
+        let a_order = status_order(&a.status);
+        let b_order = status_order(&b.status);
+        if a_order != b_order {
+            a_order.cmp(&b_order)
+        } else {
+            b.days_since_last_price.cmp(&a.days_since_last_price)
         }
     });
 
+    let total = ok_count + stale_count + missing_count + config_error_count + suspicious_count + unconfigured_count;
     Ok(QuoteAuditSummary {
-        total_audited: ok_count + stale_count + missing_count,
+        total_audited: total,
         ok_count,
         stale_count,
         missing_count,
+        config_error_count,
+        suspicious_count,
+        unconfigured_count,
         results,
     })
+}
+
+/// Test quote fetch for a single security without saving to database
+async fn test_quote_fetch(
+    security: &SecurityInfo,
+    feed: &str,
+    feed_url: Option<&str>,
+    keys: &ApiKeys,
+) -> QuoteFetchTestResult {
+    let provider = match ProviderType::from_str(feed) {
+        Some(p) => p,
+        None => {
+            return QuoteFetchTestResult {
+                success: false,
+                fetched_price: None,
+                error_message: Some(format!("Unbekannter Provider: {}", feed)),
+            };
+        }
+    };
+
+    // Skip providers that require API key if not provided
+    if provider == ProviderType::Finnhub && keys.finnhub.is_none() {
+        return QuoteFetchTestResult {
+            success: false,
+            fetched_price: None,
+            error_message: Some("Finnhub API-Key erforderlich".to_string()),
+        };
+    }
+    if provider == ProviderType::AlphaVantage && keys.alpha_vantage.is_none() {
+        return QuoteFetchTestResult {
+            success: false,
+            fetched_price: None,
+            error_message: Some("Alpha Vantage API-Key erforderlich".to_string()),
+        };
+    }
+    if provider == ProviderType::TwelveData && keys.twelve_data.is_none() {
+        return QuoteFetchTestResult {
+            success: false,
+            fetched_price: None,
+            error_message: Some("Twelve Data API-Key erforderlich".to_string()),
+        };
+    }
+
+    // Get symbol for fetch
+    let symbol = match security.ticker.clone().or(security.isin.clone()) {
+        Some(s) => s,
+        None => {
+            return QuoteFetchTestResult {
+                success: false,
+                fetched_price: None,
+                error_message: Some("Kein Ticker oder ISIN vorhanden".to_string()),
+            };
+        }
+    };
+
+    // Build request and fetch
+    let api_key = match provider {
+        ProviderType::Finnhub => keys.finnhub.clone(),
+        ProviderType::AlphaVantage => keys.alpha_vantage.clone(),
+        ProviderType::CoinGecko => keys.coingecko.clone(),
+        ProviderType::TwelveData => keys.twelve_data.clone(),
+        _ => None,
+    };
+
+    let request = quotes::SecurityQuoteRequest {
+        id: security.id,
+        symbol,
+        provider,
+        feed_url: feed_url.map(|s| s.to_string()),
+        api_key,
+        currency: security.currency.clone(),
+    };
+
+    let results = quotes::fetch_all_quotes(vec![request]).await;
+
+    match results.first() {
+        Some(r) if r.success && r.latest.is_some() => QuoteFetchTestResult {
+            success: true,
+            fetched_price: r.latest.as_ref().map(|l| l.quote.close),
+            error_message: None,
+        },
+        Some(r) => QuoteFetchTestResult {
+            success: false,
+            fetched_price: None,
+            error_message: r.error.clone().or(Some("Kursabruf fehlgeschlagen".to_string())),
+        },
+        None => QuoteFetchTestResult {
+            success: false,
+            fetched_price: None,
+            error_message: Some("Keine Antwort vom Provider".to_string()),
+        },
+    }
+}
+
+// ============================================================================
+// AUTO-FIX FOR BROKEN QUOTE CONFIGURATIONS
+// ============================================================================
+
+/// Known symbol mappings for common errors (extended)
+fn get_known_symbol_fix(ticker: &str, provider: &str) -> Option<(&'static str, &'static str)> {
+    // Returns (new_provider, new_symbol)
+    match (provider.to_uppercase().as_str(), ticker.to_uppercase().as_str()) {
+        // === COMMODITIES ===
+        // Gold - TradingView doesn't work, use Yahoo Futures
+        ("TRADINGVIEW", "XAUUSD") | ("TRADINGVIEW", "GOLD") => Some(("YAHOO", "GC=F")),
+        (_, "GOLD") | (_, "XAUUSD") => Some(("YAHOO", "GC=F")),
+        // Silver
+        ("TRADINGVIEW", "XAGUSD") | ("TRADINGVIEW", "SILVER") => Some(("YAHOO", "SI=F")),
+        (_, "SILVER") | (_, "XAGUSD") => Some(("YAHOO", "SI=F")),
+        // Platinum
+        (_, "XPTUSD") | (_, "PLATINUM") => Some(("YAHOO", "PL=F")),
+        // Palladium
+        (_, "XPDUSD") | (_, "PALLADIUM") => Some(("YAHOO", "PA=F")),
+        // Oil
+        (_, "CRUDE") | (_, "CRUDEOIL") | (_, "WTI") => Some(("YAHOO", "CL=F")),
+        (_, "BRENT") => Some(("YAHOO", "BZ=F")),
+        // Natural Gas
+        (_, "NATGAS") | (_, "NG") => Some(("YAHOO", "NG=F")),
+
+        // === INDICES ===
+        (_, "SPX") | (_, "SP500") | (_, "S&P500") => Some(("YAHOO", "^GSPC")),
+        (_, "NDX") | (_, "NASDAQ100") | (_, "NASDAQ-100") => Some(("YAHOO", "^NDX")),
+        (_, "DJI") | (_, "DOWJONES") | (_, "DOW") => Some(("YAHOO", "^DJI")),
+        (_, "DAX") | (_, "DAX40") | (_, "DAX30") => Some(("YAHOO", "^GDAXI")),
+        (_, "STOXX50") | (_, "SX5E") | (_, "EUROSTOXX50") => Some(("YAHOO", "^STOXX50E")),
+        (_, "FTSE") | (_, "FTSE100") | (_, "UKX") => Some(("YAHOO", "^FTSE")),
+        (_, "SMI") | (_, "SMI20") => Some(("YAHOO", "^SSMI")),
+        (_, "CAC") | (_, "CAC40") => Some(("YAHOO", "^FCHI")),
+        (_, "NIKKEI") | (_, "N225") => Some(("YAHOO", "^N225")),
+        (_, "HSI") | (_, "HANGSENG") => Some(("YAHOO", "^HSI")),
+        (_, "VIX") => Some(("YAHOO", "^VIX")),
+
+        // === COMMON SWISS TICKER CORRECTIONS ===
+        (_, "NSN.SW") => Some(("YAHOO", "NESN.SW")),  // Nestle typo
+        (_, "NESN") => Some(("YAHOO", "NESN.SW")),    // Nestle without suffix
+        (_, "NOVN") => Some(("YAHOO", "NOVN.SW")),    // Novartis without suffix
+        (_, "ROG") => Some(("YAHOO", "ROG.SW")),      // Roche without suffix
+        (_, "UBSG") => Some(("YAHOO", "UBSG.SW")),    // UBS without suffix
+        (_, "CSGN") => Some(("YAHOO", "CSGN.SW")),    // Credit Suisse (historical)
+        (_, "ZURN") => Some(("YAHOO", "ZURN.SW")),    // Zurich Insurance
+        (_, "ABBN") => Some(("YAHOO", "ABBN.SW")),    // ABB without suffix
+        (_, "SREN") => Some(("YAHOO", "SREN.SW")),    // Swiss Re
+        (_, "LONN") => Some(("YAHOO", "LONN.SW")),    // Lonza
+
+        // === COMMON ETF CORRECTIONS ===
+        (_, "VWRL") => Some(("YAHOO", "VWRL.L")),     // Vanguard FTSE All-World
+        (_, "VWCE") => Some(("YAHOO", "VWCE.DE")),    // Vanguard FTSE All-World ACC
+        (_, "IWDA") => Some(("YAHOO", "IWDA.AS")),    // iShares MSCI World
+        (_, "EUNL") => Some(("YAHOO", "EUNL.DE")),    // iShares Core MSCI World
+        (_, "CSPX") => Some(("YAHOO", "CSPX.L")),     // iShares S&P 500
+        (_, "SXR8") => Some(("YAHOO", "SXR8.DE")),    // iShares S&P 500 EUR
+        (_, "IUSA") => Some(("YAHOO", "IUSA.L")),     // iShares S&P 500 Dist
+
+        // === COMMON GERMAN TICKER CORRECTIONS ===
+        (_, "SAP") => Some(("YAHOO", "SAP.DE")),      // SAP without suffix
+        (_, "ALV") => Some(("YAHOO", "ALV.DE")),      // Allianz without suffix
+        (_, "SIE") => Some(("YAHOO", "SIE.DE")),      // Siemens without suffix
+        (_, "BAS") => Some(("YAHOO", "BAS.DE")),      // BASF without suffix
+        (_, "MUV2") => Some(("YAHOO", "MUV2.DE")),    // Munich Re without suffix
+        (_, "DTE") => Some(("YAHOO", "DTE.DE")),      // Deutsche Telekom without suffix
+        (_, "DBK") => Some(("YAHOO", "DBK.DE")),      // Deutsche Bank without suffix
+        (_, "BMW") => Some(("YAHOO", "BMW.DE")),      // BMW without suffix
+
+        _ => None,
+    }
+}
+
+/// Get Yahoo exchange suffixes for a currency
+fn get_suffixes_for_currency(currency: &str) -> Vec<&'static str> {
+    match currency.to_uppercase().as_str() {
+        "EUR" => vec![".DE", ".PA", ".AS", ".MI", ".MC"],  // DE, Paris, Amsterdam, Milan, Madrid
+        "CHF" => vec![".SW"],
+        "GBP" | "GBX" => vec![".L"],
+        "SEK" => vec![".ST"],
+        "NOK" => vec![".OL"],
+        "DKK" => vec![".CO"],
+        "PLN" => vec![".WA"],
+        "HKD" => vec![".HK"],
+        "JPY" => vec![".T"],
+        "AUD" => vec![".AX"],
+        "CAD" => vec![".TO"],
+        "USD" => vec![""],  // US stocks don't need suffix
+        _ => vec![],
+    }
+}
+
+/// Unvalidated suggestion candidate
+struct UnvalidatedSuggestion {
+    provider: String,
+    symbol: String,
+    source: String,
+}
+
+/// Suggestion for fixing a broken quote configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteFixSuggestion {
+    pub security_id: i64,
+    pub current_provider: String,
+    pub current_symbol: Option<String>,
+    pub suggested_provider: String,
+    pub suggested_symbol: String,
+    pub suggested_feed_url: Option<String>,
+    pub source: String, // "known_mapping", "isin_search", "suffix_variant", "yahoo_search", "tradingview_search"
+    pub confidence: f64,
+    /// Validated price from actual quote fetch (only set if validation succeeded)
+    pub validated_price: Option<f64>,
+}
+
+/// Get fix suggestions for a broken security quote configuration
+///
+/// Uses multi-provider search with parallel validation to find working alternatives.
+#[command]
+pub async fn get_quote_fix_suggestions(
+    security_id: i64,
+    _api_keys: Option<ApiKeys>,
+) -> Result<Vec<QuoteFixSuggestion>, String> {
+    // Load security info from DB
+    let security_info: Option<SecurityInfo> = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        conn.query_row(
+            "SELECT id, name, COALESCE(NULLIF(feed, ''), 'YAHOO') as feed,
+                    feed_url, latest_feed, latest_feed_url, ticker, isin, currency
+             FROM pp_security WHERE id = ?1",
+            params![security_id],
+            |row| {
+                Ok(SecurityInfo {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    feed: row.get(2)?,
+                    feed_url: row.get(3)?,
+                    latest_feed: row.get(4)?,
+                    latest_feed_url: row.get(5)?,
+                    ticker: row.get(6)?,
+                    isin: row.get(7)?,
+                    currency: row.get(8)?,
+                })
+            },
+        )
+        .ok()
+    };
+
+    let Some(security) = security_info else {
+        return Err(format!("Security {} nicht gefunden", security_id));
+    };
+
+    let current_provider = security.latest_feed.as_ref()
+        .filter(|f| !f.is_empty())
+        .unwrap_or(&security.feed)
+        .clone();
+    let current_symbol = security.ticker.clone();
+
+    // 1. Collect all candidates
+    let candidates = collect_fix_candidates(&security, &current_provider).await;
+
+    // 2. Validate candidates in parallel (max 5 concurrent)
+    let validated = validate_candidates(candidates, security_id, &current_provider, &current_symbol).await;
+
+    Ok(validated)
+}
+
+/// Collect potential fix candidates from multiple sources
+async fn collect_fix_candidates(
+    security: &SecurityInfo,
+    current_provider: &str,
+) -> Vec<UnvalidatedSuggestion> {
+    let mut candidates = Vec::new();
+
+    // === Stage 1: Known mappings (highest priority) ===
+    if let Some(ticker) = &security.ticker {
+        if let Some((new_provider, new_symbol)) = get_known_symbol_fix(ticker, current_provider) {
+            candidates.push(UnvalidatedSuggestion {
+                provider: new_provider.to_string(),
+                symbol: new_symbol.to_string(),
+                source: "known_mapping".to_string(),
+            });
+        }
+    }
+
+    // === Stage 2: Intelligent suffix variants (for EUR/CHF/GBP etc.) ===
+    if let Some(ticker) = &security.ticker {
+        let base_ticker = ticker.split('.').next().unwrap_or(ticker);
+        let currency = security.currency.as_deref().unwrap_or("USD");
+        let suffixes = get_suffixes_for_currency(currency);
+
+        for suffix in suffixes {
+            let symbol = format!("{}{}", base_ticker, suffix);
+            if !candidates.iter().any(|c| c.symbol == symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "YAHOO".to_string(),
+                    symbol,
+                    source: "suffix_variant".to_string(),
+                });
+            }
+        }
+    }
+
+    // === Stage 3: Multi-provider search (parallel) ===
+    let search_query = security.ticker.as_deref()
+        .or(security.isin.as_deref())
+        .unwrap_or(&security.name);
+
+    let (yahoo_results, tv_results) = tokio::join!(
+        yahoo::search(search_query),
+        tradingview::search_symbols(search_query, 5)
+    );
+
+    // Yahoo search results
+    if let Ok(results) = yahoo_results {
+        for r in results.into_iter().take(3) {
+            if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "YAHOO".to_string(),
+                    symbol: r.symbol,
+                    source: "yahoo_search".to_string(),
+                });
+            }
+        }
+    }
+
+    // TradingView search results
+    if let Ok(results) = tv_results {
+        for r in results.into_iter().take(3) {
+            if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "TRADINGVIEW".to_string(),
+                    symbol: r.symbol,
+                    source: "tradingview_search".to_string(),
+                });
+            }
+        }
+    }
+
+    // === Stage 4: ISIN-based search (if available, high priority) ===
+    if let Some(isin) = &security.isin {
+        if let Ok(results) = yahoo::search(isin).await {
+            for r in results.into_iter().take(2) {
+                if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                    candidates.push(UnvalidatedSuggestion {
+                        provider: "YAHOO".to_string(),
+                        symbol: r.symbol,
+                        source: "isin_search".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Validate candidates by actually fetching quotes (parallel, max 5 concurrent)
+async fn validate_candidates(
+    candidates: Vec<UnvalidatedSuggestion>,
+    security_id: i64,
+    current_provider: &str,
+    current_symbol: &Option<String>,
+) -> Vec<QuoteFixSuggestion> {
+    let current_provider = current_provider.to_string();
+    let current_symbol = current_symbol.clone();
+
+    // Parallel validation with buffer_unordered (max 5 concurrent)
+    let validated: Vec<Option<QuoteFixSuggestion>> = stream::iter(candidates)
+        .map(|candidate| {
+            let current_provider = current_provider.clone();
+            let current_symbol = current_symbol.clone();
+            async move {
+                let fetch_result = match candidate.provider.as_str() {
+                    "YAHOO" => yahoo::fetch_quote(&candidate.symbol, false).await,
+                    "TRADINGVIEW" => tradingview::fetch_quote(&candidate.symbol).await,
+                    _ => return None,
+                };
+
+                match fetch_result {
+                    Ok(quote) if quote.quote.close > 0.0 => {
+                        Some(QuoteFixSuggestion {
+                            security_id,
+                            current_provider: current_provider.clone(),
+                            current_symbol: current_symbol.clone(),
+                            suggested_provider: candidate.provider,
+                            suggested_symbol: candidate.symbol,
+                            suggested_feed_url: None,
+                            source: candidate.source,
+                            confidence: 1.0, // Validated = 100%
+                            validated_price: Some(quote.quote.close),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        })
+        .buffer_unordered(5)
+        .collect()
+        .await;
+
+    // Filter out None values and sort by source priority
+    let mut results: Vec<_> = validated.into_iter().flatten().collect();
+
+    // Sort by: known_mapping > isin_search > suffix_variant > search
+    results.sort_by(|a, b| {
+        let priority = |s: &str| match s {
+            "known_mapping" => 0,
+            "isin_search" => 1,
+            "suffix_variant" => 2,
+            "yahoo_search" => 3,
+            "tradingview_search" => 4,
+            _ => 5,
+        };
+        priority(&a.source).cmp(&priority(&b.source))
+    });
+
+    // Limit to top 5 results
+    results.truncate(5);
+    results
+}
+
+/// Apply a fix suggestion to a security
+#[command]
+pub fn apply_quote_fix(
+    security_id: i64,
+    new_provider: String,
+    new_symbol: String,
+    new_feed_url: Option<String>,
+) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        "UPDATE pp_security SET
+            latest_feed = ?1,
+            latest_feed_url = ?2,
+            ticker = COALESCE(?3, ticker),
+            updated_at = ?4
+         WHERE id = ?5",
+        params![new_provider, new_feed_url, new_symbol, now, security_id],
+    )
+    .map_err(|e| format!("Fehler beim Aktualisieren: {}", e))?;
+
+    log::info!(
+        "Applied quote fix for security {}: {} -> {} ({})",
+        security_id,
+        new_symbol,
+        new_provider,
+        new_feed_url.unwrap_or_default()
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// UNIFIED QUOTE MANAGER - Combines suggest + audit + validate
+// ============================================================================
+
+/// A security that needs attention (no feed, broken feed, stale prices, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteManagerItem {
+    pub security_id: i64,
+    pub security_name: String,
+    pub isin: Option<String>,
+    pub ticker: Option<String>,
+    pub currency: Option<String>,
+    /// Current feed (if any)
+    pub current_feed: Option<String>,
+    pub current_feed_url: Option<String>,
+    /// Problem status: "unconfigured", "error", "stale", "suspicious", "no_data"
+    pub status: String,
+    pub status_message: String,
+    /// Last known price date
+    pub last_price_date: Option<String>,
+    /// Days since last price
+    pub days_since_price: Option<i64>,
+    /// Validated fix suggestions (already tested to work)
+    pub suggestions: Vec<ValidatedSuggestion>,
+}
+
+/// A validated suggestion that has been tested and works
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidatedSuggestion {
+    pub provider: String,
+    pub symbol: String,
+    pub feed_url: Option<String>,
+    /// How the suggestion was found
+    pub source: String,
+    /// Validated price from actual fetch
+    pub validated_price: f64,
+}
+
+/// Summary result from the unified quote manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteManagerResult {
+    pub total_securities: usize,
+    pub total_with_issues: usize,
+    pub unconfigured_count: usize,
+    pub error_count: usize,
+    pub stale_count: usize,
+    pub no_data_count: usize,
+    /// All securities with issues and their validated suggestions
+    pub items: Vec<QuoteManagerItem>,
+}
+
+/// Unified quote manager - finds all problematic securities and provides validated fix suggestions
+///
+/// This combines the functionality of:
+/// - suggest_quote_providers (find securities without feed)
+/// - audit_quote_configurations (check if feeds work)
+/// - get_quote_fix_suggestions (find alternatives)
+///
+/// All in one call with pre-validated suggestions.
+#[command]
+pub async fn quote_manager_audit(
+    only_held: Option<bool>,
+    _api_keys: Option<ApiKeys>,
+) -> Result<QuoteManagerResult, String> {
+    let only_held = only_held.unwrap_or(true);
+
+    // Step 1: Load all securities with their price info
+    let audit_data = load_audit_data(only_held)?;
+    let total_securities = audit_data.len();
+
+    // Step 2: Find all securities with issues and collect them for processing
+    let mut items_to_process = Vec::new();
+    let mut unconfigured_count = 0;
+    let mut error_count = 0;
+    let mut stale_count = 0;
+    let mut no_data_count = 0;
+
+    for data in &audit_data {
+        let (status, status_message) = determine_security_status(&data).await;
+
+        match status.as_str() {
+            "ok" => continue, // Skip securities that are fine
+            "unconfigured" => unconfigured_count += 1,
+            "error" => error_count += 1,
+            "stale" => stale_count += 1,
+            "no_data" => no_data_count += 1,
+            _ => {}
+        }
+
+        items_to_process.push((data.clone(), status, status_message));
+    }
+
+    // Step 3: For each problematic security, find and validate suggestions (parallel)
+    let items: Vec<QuoteManagerItem> = stream::iter(items_to_process)
+        .map(|(data, status, status_message)| {
+            // Clone what we need for the async block
+            let security = data.security.clone();
+            let feed_to_use = data.feed_to_use.clone();
+            let feed_url_to_use = data.feed_url_to_use.clone();
+            let last_price_date = data.last_price_date.clone();
+            let days_since = data.days_since;
+
+            async move {
+                let suggestions = find_validated_suggestions_for_security(&security).await;
+
+                QuoteManagerItem {
+                    security_id: security.id,
+                    security_name: security.name.clone(),
+                    isin: security.isin.clone(),
+                    ticker: security.ticker.clone(),
+                    currency: security.currency.clone(),
+                    current_feed: if feed_to_use.is_empty() { None } else { Some(feed_to_use) },
+                    current_feed_url: feed_url_to_use,
+                    status,
+                    status_message,
+                    last_price_date,
+                    days_since_price: days_since,
+                    suggestions,
+                }
+            }
+        })
+        .buffer_unordered(3) // Process 3 securities in parallel
+        .collect()
+        .await;
+
+    // Sort: unconfigured first, then by name
+    let mut items = items;
+    items.sort_by(|a, b| {
+        let status_priority = |s: &str| match s {
+            "unconfigured" => 0,
+            "error" => 1,
+            "no_data" => 2,
+            "stale" => 3,
+            _ => 4,
+        };
+        status_priority(&a.status)
+            .cmp(&status_priority(&b.status))
+            .then_with(|| a.security_name.cmp(&b.security_name))
+    });
+
+    Ok(QuoteManagerResult {
+        total_securities,
+        total_with_issues: items.len(),
+        unconfigured_count,
+        error_count,
+        stale_count,
+        no_data_count,
+        items,
+    })
+}
+
+/// Determine the status of a security
+async fn determine_security_status(data: &AuditSecurityData) -> (String, String) {
+    // Check if feed is configured
+    if !is_valid_auto_fetch_feed(&data.feed_to_use) {
+        return ("unconfigured".to_string(), "Keine Kursquelle konfiguriert".to_string());
+    }
+
+    // Check if we have price data
+    match data.days_since {
+        None => {
+            // No prices at all - try to fetch to see if config works
+            let test = test_simple_fetch(&data.security, &data.feed_to_use, data.feed_url_to_use.as_deref()).await;
+            if test {
+                ("no_data".to_string(), "Konfiguration OK, aber keine Kursdaten vorhanden".to_string())
+            } else {
+                ("error".to_string(), "Kursabruf fehlgeschlagen - Konfiguration prüfen".to_string())
+            }
+        }
+        Some(days) if days > 14 => {
+            // Stale data - try to fetch to see if config still works
+            let test = test_simple_fetch(&data.security, &data.feed_to_use, data.feed_url_to_use.as_deref()).await;
+            if test {
+                ("stale".to_string(), format!("Kurse {} Tage alt - Abruf funktioniert", days))
+            } else {
+                ("error".to_string(), format!("Kurse {} Tage alt - Abruf fehlgeschlagen", days))
+            }
+        }
+        _ => ("ok".to_string(), "OK".to_string()),
+    }
+}
+
+/// Simple fetch test - just checks if we can get a price
+async fn test_simple_fetch(security: &SecurityInfo, feed: &str, feed_url: Option<&str>) -> bool {
+    let provider = match ProviderType::from_str(feed) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let symbol = match security.ticker.clone().or(security.isin.clone()) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let request = quotes::SecurityQuoteRequest {
+        id: security.id,
+        symbol,
+        provider,
+        feed_url: feed_url.map(|s| s.to_string()),
+        api_key: None,
+        currency: security.currency.clone(),
+    };
+
+    let results = quotes::fetch_all_quotes(vec![request]).await;
+    results.first().map(|r| r.success && r.latest.is_some()).unwrap_or(false)
+}
+
+/// Find and validate suggestions for a security
+async fn find_validated_suggestions_for_security(security: &SecurityInfo) -> Vec<ValidatedSuggestion> {
+    let mut candidates = Vec::new();
+
+    // === Stage 1: Known mappings ===
+    if let Some(ticker) = &security.ticker {
+        if let Some((provider, symbol)) = get_known_symbol_fix(ticker, "YAHOO") {
+            candidates.push(UnvalidatedSuggestion {
+                provider: provider.to_string(),
+                symbol: symbol.to_string(),
+                source: "known_mapping".to_string(),
+            });
+        }
+    }
+
+    // === Stage 2: ISIN-based search (high priority) ===
+    if let Some(isin) = &security.isin {
+        if let Ok(results) = yahoo::search(isin).await {
+            for r in results.into_iter().take(3) {
+                if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                    candidates.push(UnvalidatedSuggestion {
+                        provider: "YAHOO".to_string(),
+                        symbol: r.symbol,
+                        source: "isin_search".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // === Stage 3: Suffix variants based on currency ===
+    if let Some(ticker) = &security.ticker {
+        let base_ticker = ticker.split('.').next().unwrap_or(ticker);
+        let currency = security.currency.as_deref().unwrap_or("USD");
+        let suffixes = get_suffixes_for_currency(currency);
+
+        for suffix in suffixes {
+            let symbol = format!("{}{}", base_ticker, suffix);
+            if !candidates.iter().any(|c| c.symbol == symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "YAHOO".to_string(),
+                    symbol,
+                    source: "suffix_variant".to_string(),
+                });
+            }
+        }
+    }
+
+    // === Stage 4: Name/ticker search ===
+    let search_query = security.ticker.as_deref()
+        .or(security.name.split_whitespace().next())
+        .unwrap_or(&security.name);
+
+    if let Ok(results) = yahoo::search(search_query).await {
+        for r in results.into_iter().take(3) {
+            if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "YAHOO".to_string(),
+                    symbol: r.symbol,
+                    source: "name_search".to_string(),
+                });
+            }
+        }
+    }
+
+    // === Stage 5: TradingView search ===
+    if let Ok(results) = tradingview::search_symbols(search_query, 3).await {
+        for r in results {
+            if !candidates.iter().any(|c| c.symbol == r.symbol) {
+                candidates.push(UnvalidatedSuggestion {
+                    provider: "TRADINGVIEW".to_string(),
+                    symbol: r.symbol,
+                    source: "tradingview_search".to_string(),
+                });
+            }
+        }
+    }
+
+    // === Validate candidates in parallel ===
+    let validated: Vec<Option<ValidatedSuggestion>> = stream::iter(candidates)
+        .map(|candidate| async move {
+            let fetch_result = match candidate.provider.as_str() {
+                "YAHOO" => yahoo::fetch_quote(&candidate.symbol, false).await,
+                "TRADINGVIEW" => tradingview::fetch_quote(&candidate.symbol).await,
+                _ => return None,
+            };
+
+            match fetch_result {
+                Ok(quote) if quote.quote.close > 0.0 => {
+                    Some(ValidatedSuggestion {
+                        provider: candidate.provider,
+                        symbol: candidate.symbol,
+                        feed_url: None,
+                        source: candidate.source,
+                        validated_price: quote.quote.close,
+                    })
+                }
+                _ => None,
+            }
+        })
+        .buffer_unordered(5)
+        .collect()
+        .await;
+
+    // Filter and sort by priority
+    let mut results: Vec<_> = validated.into_iter().flatten().collect();
+    results.sort_by(|a, b| {
+        let priority = |s: &str| match s {
+            "known_mapping" => 0,
+            "isin_search" => 1,
+            "suffix_variant" => 2,
+            "name_search" => 3,
+            "tradingview_search" => 4,
+            _ => 5,
+        };
+        priority(&a.source).cmp(&priority(&b.source))
+    });
+
+    // Return top 3
+    results.truncate(3);
+    results
+}
+
+/// Apply a suggestion from the quote manager
+#[command]
+pub fn apply_quote_manager_suggestion(
+    security_id: i64,
+    provider: String,
+    symbol: String,
+    feed_url: Option<String>,
+) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Update both feed and ticker
+    conn.execute(
+        "UPDATE pp_security SET
+            feed = ?1,
+            feed_url = ?2,
+            ticker = ?3,
+            latest_feed = ?1,
+            latest_feed_url = ?2,
+            updated_at = ?4
+         WHERE id = ?5",
+        params![provider, feed_url, symbol, now, security_id],
+    )
+    .map_err(|e| format!("Fehler beim Aktualisieren: {}", e))?;
+
+    log::info!(
+        "Applied quote manager suggestion for security {}: {} @ {}",
+        security_id,
+        symbol,
+        provider
+    );
+
+    Ok(())
+}
+
+// ============== AI Quote Assistant ==============
+
+use crate::ai::types::{
+    QuoteAssistantRequest, QuoteAssistantResponse, ProblematicSecurity,
+};
+use crate::ai::prompts::{build_quote_assistant_system_prompt, build_quote_assistant_user_message};
+use crate::quotes::assistant::{parse_ai_suggestion, validate_suggestion, get_problematic_securities, apply_suggestion};
+
+/// Get securities with quote problems (no provider, fetch error, or stale)
+#[command]
+pub fn get_quote_problem_securities(
+    stale_days: Option<i32>,
+) -> Result<Vec<ProblematicSecurity>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    get_problematic_securities(conn, stale_days.unwrap_or(7))
+        .map_err(|e| e.to_string())
+}
+
+/// Chat with the AI quote assistant to find optimal quote sources
+#[command]
+pub async fn chat_with_quote_assistant(
+    request: QuoteAssistantRequest,
+) -> Result<QuoteAssistantResponse, String> {
+    // Build the full prompt with system instructions and context
+    let system_prompt = build_quote_assistant_system_prompt();
+    let user_message = if let Some(ref msg) = request.user_message {
+        msg.clone()
+    } else {
+        build_quote_assistant_user_message(
+            &request.security_context.security_name,
+            request.security_context.isin.as_deref(),
+            request.security_context.ticker.as_deref(),
+            &request.security_context.currency,
+            request.security_context.current_feed.as_deref(),
+            request.security_context.current_feed_url.as_deref(),
+            &request.security_context.problem,
+            request.security_context.last_error.as_deref(),
+        )
+    };
+
+    // Build conversation history as text
+    let mut conversation = String::new();
+    for msg in &request.history {
+        let role = if msg.role == "user" { "User" } else { "Assistant" };
+        conversation.push_str(&format!("\n{}: {}\n", role, msg.content));
+    }
+    conversation.push_str(&format!("\nUser: {}\n\nAssistant:", user_message));
+
+    // Combine system prompt with conversation
+    let full_prompt = format!(
+        "{}\n\n---\n\n## Konversation\n{}",
+        system_prompt, conversation
+    );
+
+    // Call the AI using simple completion
+    let response_text = match request.provider.as_str() {
+        "claude" => {
+            crate::ai::claude::complete_text(&request.model, &request.api_key, &full_prompt)
+                .await
+                .map_err(|e| format!("Claude error: {}", e.message))?
+        }
+        "openai" => {
+            crate::ai::openai::complete_text(&request.model, &request.api_key, &full_prompt)
+                .await
+                .map_err(|e| format!("OpenAI error: {}", e.message))?
+        }
+        "gemini" => {
+            crate::ai::gemini::complete_text(&request.model, &request.api_key, &full_prompt)
+                .await
+                .map_err(|e| format!("Gemini error: {}", e.message))?
+        }
+        "perplexity" => {
+            crate::ai::perplexity::complete_text(&request.model, &request.api_key, &full_prompt)
+                .await
+                .map_err(|e| format!("Perplexity error: {}", e.message))?
+        }
+        _ => {
+            return Err(format!("Unknown AI provider: {}", request.provider));
+        }
+    };
+
+    // Try to parse suggestion from response
+    let suggestion = match parse_ai_suggestion(&response_text) {
+        Ok(parsed) => {
+            log::info!("Parsed AI suggestion: {:?}", parsed);
+            // Validate by fetching a test quote
+            let api_keys = ApiKeys {
+                finnhub: None,
+                alpha_vantage: None,
+                coingecko: None,
+                twelve_data: None,
+            };
+            let validated = validate_suggestion(&parsed, Some(&api_keys)).await;
+            Some(validated)
+        }
+        Err(e) => {
+            log::warn!("Could not parse AI suggestion: {}", e);
+            None
+        }
+    };
+
+    Ok(QuoteAssistantResponse {
+        message: response_text,
+        suggestion,
+        tokens_used: None, // Simple completion doesn't return token usage
+    })
+}
+
+/// Apply a validated AI quote suggestion to a security
+#[command]
+pub fn apply_quote_assistant_suggestion(
+    security_id: i64,
+    provider: String,
+    ticker: String,
+    feed_url: Option<String>,
+) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let suggestion = crate::ai::types::AiQuoteSuggestion {
+        provider,
+        ticker,
+        feed_url,
+        confidence: 1.0,
+        reason: "Applied from AI assistant".to_string(),
+    };
+
+    apply_suggestion(conn, security_id, &suggestion)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_known_symbol_fix() {
+        // Commodities
+        assert_eq!(
+            get_known_symbol_fix("XAUUSD", "TRADINGVIEW"),
+            Some(("YAHOO", "GC=F"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("GOLD", "YAHOO"),
+            Some(("YAHOO", "GC=F"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("BRENT", "YAHOO"),
+            Some(("YAHOO", "BZ=F"))
+        );
+
+        // Indices
+        assert_eq!(
+            get_known_symbol_fix("DAX", "TRADINGVIEW"),
+            Some(("YAHOO", "^GDAXI"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("SPX", "YAHOO"),
+            Some(("YAHOO", "^GSPC"))
+        );
+
+        // Swiss tickers
+        assert_eq!(
+            get_known_symbol_fix("NSN.SW", "YAHOO"),
+            Some(("YAHOO", "NESN.SW"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("NESN", "YAHOO"),
+            Some(("YAHOO", "NESN.SW"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("UBSG", "YAHOO"),
+            Some(("YAHOO", "UBSG.SW"))
+        );
+
+        // German tickers
+        assert_eq!(
+            get_known_symbol_fix("SAP", "YAHOO"),
+            Some(("YAHOO", "SAP.DE"))
+        );
+
+        // ETFs
+        assert_eq!(
+            get_known_symbol_fix("VWRL", "YAHOO"),
+            Some(("YAHOO", "VWRL.L"))
+        );
+        assert_eq!(
+            get_known_symbol_fix("IWDA", "YAHOO"),
+            Some(("YAHOO", "IWDA.AS"))
+        );
+
+        // Unknown ticker
+        assert_eq!(get_known_symbol_fix("AAPL", "YAHOO"), None);
+    }
+
+    #[test]
+    fn test_get_suffixes_for_currency() {
+        assert_eq!(get_suffixes_for_currency("EUR"), vec![".DE", ".PA", ".AS", ".MI", ".MC"]);
+        assert_eq!(get_suffixes_for_currency("CHF"), vec![".SW"]);
+        assert_eq!(get_suffixes_for_currency("GBP"), vec![".L"]);
+        assert_eq!(get_suffixes_for_currency("USD"), vec![""]);
+        assert!(get_suffixes_for_currency("XYZ").is_empty());
+    }
 
     #[test]
     fn test_match_split_ratio_4_to_1() {

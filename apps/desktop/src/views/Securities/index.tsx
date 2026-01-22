@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ChangeEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, Sparkles, GitMerge, Split, ChevronDown, ClipboardCheck } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, Sparkles, GitMerge, Split, ChevronDown } from 'lucide-react';
 import type { SecurityData, TransactionData } from '../../lib/types';
 import {
   getSecurities,
@@ -17,9 +17,9 @@ import {
   deleteSecurityLogo,
   getTransactions,
   deleteTransaction,
-  getUnconfiguredSecuritiesCount,
 } from '../../lib/api';
-import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, QuoteSuggestionModal, QuoteAuditModal, StockSplitModal, MergerModal } from '../../components/modals';
+import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, StockSplitModal, MergerModal } from '../../components/modals';
+import { QuoteManagerModal } from '../../components/modals/QuoteManagerModal';
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
@@ -92,10 +92,8 @@ export function SecuritiesView() {
   const [logoMenuOpen, setLogoMenuOpen] = useState<number | null>(null);
   const [recentlyUploadedLogos, setRecentlyUploadedLogos] = useState<Set<number>>(new Set());
 
-  // Quote suggestion modal state
-  const [isQuoteSuggestionModalOpen, setIsQuoteSuggestionModalOpen] = useState(false);
-  const [isQuoteAuditModalOpen, setIsQuoteAuditModalOpen] = useState(false);
-  const [unconfiguredCount, setUnconfiguredCount] = useState(0);
+  // Quote manager modal state
+  const [isQuoteManagerModalOpen, setIsQuoteManagerModalOpen] = useState(false);
 
   // Corporate actions modal state
   const [isStockSplitModalOpen, setIsStockSplitModalOpen] = useState(false);
@@ -130,9 +128,6 @@ export function SecuritiesView() {
     try {
       const data = await getSecurities();
       setDbSecurities(data);
-      // Also load unconfigured count
-      const countInfo = await getUnconfiguredSecuritiesCount();
-      setUnconfiguredCount(countInfo.totalUnconfigured);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -539,25 +534,14 @@ export function SecuritiesView() {
           Wertpapiere ({filteredSecurities.length} von {dbSecurities.length})
         </h2>
         <div className="flex gap-2">
-          {unconfiguredCount > 0 && (
-            <button
-              onClick={() => setIsQuoteSuggestionModalOpen(true)}
-              disabled={isLoading}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-primary/50 bg-primary/5 text-primary rounded-md hover:bg-primary/10 transition-colors disabled:opacity-50"
-              title="Kursquellen für Wertpapiere ohne Konfiguration vorschlagen"
-            >
-              <Sparkles size={16} />
-              Kursquellen vorschlagen ({unconfiguredCount})
-            </button>
-          )}
           <button
-            onClick={() => setIsQuoteAuditModalOpen(true)}
+            onClick={() => setIsQuoteManagerModalOpen(true)}
             disabled={isLoading}
             className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
-            title="Bestehende Kursquellen-Konfigurationen prüfen und optimieren"
+            title="Kursquellen prüfen und konfigurieren"
           >
-            <ClipboardCheck size={16} />
-            Konfiguration prüfen
+            <Sparkles size={16} />
+            Kursquellen-Manager
           </button>
           <button
             onClick={handleSyncPrices}
@@ -1130,17 +1114,10 @@ export function SecuritiesView() {
         transaction={editingTransaction || undefined}
       />
 
-      {/* Quote Suggestion Modal */}
-      <QuoteSuggestionModal
-        isOpen={isQuoteSuggestionModalOpen}
-        onClose={() => setIsQuoteSuggestionModalOpen(false)}
-        onComplete={loadSecurities}
-      />
-
-      {/* Quote Audit Modal */}
-      <QuoteAuditModal
-        isOpen={isQuoteAuditModalOpen}
-        onClose={() => setIsQuoteAuditModalOpen(false)}
+      {/* Quote Manager Modal */}
+      <QuoteManagerModal
+        isOpen={isQuoteManagerModalOpen}
+        onClose={() => setIsQuoteManagerModalOpen(false)}
         onComplete={loadSecurities}
       />
 

@@ -22,6 +22,9 @@ import { queryClient, invalidateAllQueries } from './lib/queries';
 import { setGlobalErrorHandler } from './lib/errors';
 import { toast } from './store';
 
+// API
+import { validateAllSecurities } from './lib/api';
+
 // Store
 import {
   useUIStore,
@@ -93,7 +96,7 @@ const PROVIDER_NAMES: Record<AiProvider, string> = {
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration } = useSettingsStore();
+  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration, symbolValidation, setSymbolValidationSettings } = useSettingsStore();
 
   // Load API keys from secure storage on app start
   // This syncs secure storage with the Zustand store for component access
@@ -201,6 +204,85 @@ function App() {
       }
     });
   }, [apiKeysLoading, apiKeys, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration]);
+
+  // ============================================================================
+  // Auto Symbol Validation Check
+  // ============================================================================
+
+  useEffect(() => {
+    // Wait for API keys to be loaded
+    if (apiKeysLoading) return;
+
+    const { autoValidateIntervalDays, lastAutoValidation, validateOnlyHeld, enableAiFallback } = symbolValidation;
+
+    // Skip if auto-validation is disabled
+    if (autoValidateIntervalDays === 0) return;
+
+    // Calculate days since last validation
+    const now = new Date();
+    const lastValidation = lastAutoValidation ? new Date(lastAutoValidation) : null;
+    const daysSinceLast = lastValidation
+      ? Math.floor((now.getTime() - lastValidation.getTime()) / (1000 * 60 * 60 * 24))
+      : Infinity;
+
+    // Check if validation is due
+    if (daysSinceLast < autoValidateIntervalDays) return;
+
+    // Run background validation
+    const runBackgroundValidation = async () => {
+      try {
+        // Collect API keys for validation
+        const validationApiKeys = {
+          coingeckoApiKey: apiKeys.coingeckoApiKey || undefined,
+          finnhubApiKey: apiKeys.finnhubApiKey || undefined,
+          alphaVantageApiKey: apiKeys.alphaVantageApiKey || undefined,
+          twelveDataApiKey: apiKeys.twelveDataApiKey || undefined,
+        };
+
+        // Get AI config if enabled
+        const aiConfig = enableAiFallback && aiEnabled ? {
+          enabled: true,
+          provider: aiFeatureSettings.portfolioInsights.provider,
+          model: aiFeatureSettings.portfolioInsights.model,
+          apiKey: (() => {
+            switch (aiFeatureSettings.portfolioInsights.provider) {
+              case 'claude': return apiKeys.anthropicApiKey || '';
+              case 'openai': return apiKeys.openaiApiKey || '';
+              case 'gemini': return apiKeys.geminiApiKey || '';
+              case 'perplexity': return apiKeys.perplexityApiKey || '';
+              default: return '';
+            }
+          })(),
+        } : undefined;
+
+        const result = await validateAllSecurities({
+          onlyHeld: validateOnlyHeld,
+          force: false,
+          apiKeys: validationApiKeys,
+          aiConfig: aiConfig,
+        });
+
+        // Update last validation timestamp
+        setSymbolValidationSettings({ lastAutoValidation: now.toISOString() });
+
+        // Notify user about results
+        const summary = result.summary;
+        if (summary && (summary.validated > 0 || summary.aiSuggested > 0 || summary.failed > 0)) {
+          const messages: string[] = [];
+          if (summary.validated > 0) messages.push(`${summary.validated} validiert`);
+          if (summary.aiSuggested > 0) messages.push(`${summary.aiSuggested} KI-Vorschläge`);
+          if (summary.failed > 0) messages.push(`${summary.failed} fehlgeschlagen`);
+          toast.info(`Symbol-Validierung: ${messages.join(', ')}`);
+        }
+      } catch (err) {
+        console.warn('Auto-validation failed:', err);
+      }
+    };
+
+    // Run after a short delay to not block app startup
+    const timer = setTimeout(runBackgroundValidation, 5000);
+    return () => clearTimeout(timer);
+  }, [apiKeysLoading, apiKeys, symbolValidation, aiEnabled, aiFeatureSettings, setSymbolValidationSettings]);
 
   // ============================================================================
   // Theme Management
@@ -385,7 +467,6 @@ function App() {
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
-            onOpenChat={() => setIsChatOpen(true)}
           />
         );
       case 'portfolio':
@@ -433,7 +514,6 @@ function App() {
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
-            onOpenChat={() => setIsChatOpen(true)}
           />
         );
     }

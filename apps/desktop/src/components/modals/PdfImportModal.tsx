@@ -8,6 +8,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { AIProviderLogo } from '../common/AIProviderLogo';
+import { AIModelSelector } from '../common';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import {
   getSupportedBanks,
   previewPdfImport,
@@ -51,14 +53,19 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
     deliveryMode,
     aiEnabled,
     aiFeatureSettings,
-    anthropicApiKey,
-    openaiApiKey,
-    geminiApiKey,
-    perplexityApiKey,
   } = useSettingsStore();
 
+  // Secure API keys
+  const { keys } = useSecureApiKeys();
+
+  // Temporary model selection (not persisted unless "save as default" is checked)
+  const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
+
   // Get feature-specific provider and model for PDF OCR
-  const { provider: aiProvider, model: aiModel } = aiFeatureSettings.pdfOcr;
+  // Use temporary selection if set, otherwise use stored config
+  const pdfOcrConfig = aiFeatureSettings.pdfOcr;
+  const aiProvider = (tempSelection?.provider ?? pdfOcrConfig.provider) as AiProvider;
+  const aiModel = tempSelection?.model ?? pdfOcrConfig.model;
 
   // ESC key to close
   useEscapeKey(isOpen, onClose);
@@ -107,17 +114,17 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
   // Poppler only required for OpenAI/Perplexity
   const needsPoppler = !providerSupportsDirectPdf;
 
-  // Get the current AI API key based on provider
+  // Get the current AI API key based on provider (from secure storage)
   const getOcrApiKey = () => {
     switch (aiProvider) {
       case 'claude':
-        return anthropicApiKey;
+        return keys.anthropicApiKey;
       case 'openai':
-        return openaiApiKey;
+        return keys.openaiApiKey;
       case 'gemini':
-        return geminiApiKey;
+        return keys.geminiApiKey;
       case 'perplexity':
-        return perplexityApiKey;
+        return keys.perplexityApiKey;
       default:
         return '';
     }
@@ -676,12 +683,18 @@ export function PdfImportModal({ isOpen, onClose, onSuccess }: PdfImportModalPro
                       {/* OCR Status & Warnings */}
                       {aiEnabled && hasOcrApiKey() && (
                         <div className="pl-0 space-y-1.5">
-                          {/* Current Configuration */}
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <AIProviderLogo provider={aiProvider as AiProvider} size={14} />
-                            <span>{aiModel}</span>
+                          {/* AI Model Selector */}
+                          <div className="flex items-center gap-2">
+                            <AIModelSelector
+                              featureId="pdfOcr"
+                              requiresVision={true}
+                              value={{ provider: aiProvider, model: aiModel }}
+                              onChange={setTempSelection}
+                              compact
+                              disabled={isLoading}
+                            />
                             {ocrConsentGiven && (
-                              <span className="text-green-600 font-medium">✓ Zustimmung erteilt</span>
+                              <span className="text-xs text-green-600 font-medium">✓ Zustimmung erteilt</span>
                             )}
                           </div>
 

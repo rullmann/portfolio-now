@@ -8,7 +8,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp, ArrowRight, Clock, MapPin, ToggleLeft, ToggleRight, Trash2, X, Zap, Bell, Target } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
-import { useSettingsStore, useUIStore, AI_MODELS, toast, getModelCapabilities } from '../../store';
+import { useSettingsStore, useUIStore, toast, getModelCapabilities } from '../../store';
 import { usePortfolioAnalysisStore, type TrendDirection, type TrendStrength } from '../../store/portfolioAnalysis';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { calculateRSI, calculateMACD, calculateSMA, calculateEMA, calculateBollinger, calculateATR } from '../../lib/indicators';
@@ -26,7 +26,10 @@ import type {
   AlertSuggestion,
   RiskRewardAnalysis,
 } from '../../lib/types';
-import { AIProviderLogo, AI_PROVIDER_NAMES } from '../common/AIProviderLogo';
+import { AI_PROVIDER_NAMES } from '../common/AIProviderLogo';
+import { AIModelSelector } from '../common';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import type { AiProvider } from '../../store';
 import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
 import { saveAnnotations, getAnnotations } from '../../lib/api';
 
@@ -100,16 +103,19 @@ export function AIAnalysisPanel({
     aiEnabled,
     aiFeatureSettings,
     setAiFeatureSetting,
-    anthropicApiKey,
-    openaiApiKey,
-    geminiApiKey,
-    perplexityApiKey,
   } = useSettingsStore();
 
+  // Secure API keys
+  const { keys } = useSecureApiKeys();
+
+  // Temporary model selection (not persisted unless "save as default" is checked)
+  const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
+
   // Get feature-specific provider and model for Chart Analysis
+  // Use temporary selection if set, otherwise use stored config
   const chartAnalysisConfig = aiFeatureSettings.chartAnalysis;
-  const aiProvider = chartAnalysisConfig.provider as 'claude' | 'openai' | 'gemini' | 'perplexity';
-  const aiModel = chartAnalysisConfig.model;
+  const aiProvider = (tempSelection?.provider ?? chartAnalysisConfig.provider) as AiProvider;
+  const aiModel = tempSelection?.model ?? chartAnalysisConfig.model;
 
   // Update the feature-specific model
   const setAiModel = (model: string) => {
@@ -119,26 +125,19 @@ export function AIAnalysisPanel({
   // Portfolio analysis store for trend indicators in Dashboard
   const { setAnalysis: setPortfolioAnalysis } = usePortfolioAnalysisStore();
 
-  // Get API key for selected provider
+  // Get API key for selected provider (from secure storage)
   const apiKey = useMemo(() => {
     switch (aiProvider) {
       case 'claude':
-        return anthropicApiKey;
+        return keys.anthropicApiKey;
       case 'openai':
-        return openaiApiKey;
+        return keys.openaiApiKey;
       case 'gemini':
-        return geminiApiKey;
+        return keys.geminiApiKey;
       case 'perplexity':
-        return perplexityApiKey;
+        return keys.perplexityApiKey;
     }
-  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey]);
-
-  // Get current model name
-  const modelName = useMemo(() => {
-    const models = AI_MODELS[aiProvider];
-    const model = models.find(m => m.id === aiModel);
-    return model?.name || aiModel;
-  }, [aiProvider, aiModel]);
+  }, [aiProvider, keys]);
 
   // Check if current model supports web search (for news integration)
   const supportsWebSearch = useMemo(() => {
@@ -869,15 +868,18 @@ export function AIAnalysisPanel({
         >
           <Sparkles size={16} className="text-primary" />
           <span className="font-medium">KI-Analyse</span>
-          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-muted rounded border border-border/50">
-            <AIProviderLogo provider={aiProvider} size={14} />
-            <span className="text-xs font-medium">{AI_PROVIDER_NAMES[aiProvider]}</span>
-            <span className="text-xs text-muted-foreground">|</span>
-            <span className="text-xs text-muted-foreground">{modelName}</span>
-          </div>
           {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </button>
         <div className="flex items-center gap-2">
+          {/* AI Model Selector */}
+          <AIModelSelector
+            featureId="chartAnalysis"
+            requiresVision={true}
+            value={{ provider: aiProvider, model: aiModel }}
+            onChange={setTempSelection}
+            compact
+            disabled={isAnalyzing}
+          />
           {/* Clear analysis button - visible when there is analysis or annotations */}
           {(analysis || annotations.length > 0) && (
             <button

@@ -945,6 +945,193 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Created pp_consortium table");
     }
 
+    // Migration: Create pp_symbol_mapping table for symbol validation cache
+    if !table_exists(conn, "pp_symbol_mapping") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_symbol_mapping (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                security_id INTEGER NOT NULL UNIQUE,
+
+                -- Validated configuration
+                validated_feed TEXT NOT NULL,
+                validated_feed_url TEXT,
+                validated_ticker TEXT,
+                validated_exchange TEXT,
+
+                -- Provider search results (JSON)
+                provider_results TEXT,
+
+                -- Status
+                validation_status TEXT NOT NULL DEFAULT 'pending',
+                confidence REAL NOT NULL DEFAULT 0.0,
+                validation_method TEXT,
+
+                -- AI suggestion (JSON)
+                ai_suggestion_json TEXT,
+
+                -- Timestamps
+                last_validated_at TEXT,
+                price_check_success INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_symbol_mapping_security ON pp_symbol_mapping(security_id);
+            CREATE INDEX idx_pp_symbol_mapping_status ON pp_symbol_mapping(validation_status);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_symbol_mapping table");
+    }
+
+    // Migration: Create pp_validation_run table for tracking validation runs
+    if !table_exists(conn, "pp_validation_run") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_validation_run (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                total_securities INTEGER DEFAULT 0,
+                validated_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                ai_suggested_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'running',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_validation_run table");
+    }
+
+    // Migration: Create pp_chat_history table for chat message persistence
+    if !table_exists(conn, "pp_chat_history") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX idx_pp_chat_history_created ON pp_chat_history(created_at);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chat_history table");
+    }
+
+    // Migration: Create pp_chat_suggestion table for suggestion persistence with status
+    if !table_exists(conn, "pp_chat_suggestion") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chat_suggestion (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'confirmed', 'declined')),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (message_id) REFERENCES pp_chat_history(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_chat_suggestion_message ON pp_chat_suggestion(message_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chat_suggestion table");
+    }
+
+    // Migration: Create pp_chat_conversation table for multiple chat sessions
+    if !table_exists(conn, "pp_chat_conversation") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chat_conversation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX idx_pp_chat_conversation_updated ON pp_chat_conversation(updated_at DESC);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chat_conversation table");
+    }
+
+    // Migration: Add conversation_id to pp_chat_history
+    if table_exists(conn, "pp_chat_history") && !column_exists(conn, "pp_chat_history", "conversation_id") {
+        conn.execute(
+            "ALTER TABLE pp_chat_history ADD COLUMN conversation_id INTEGER REFERENCES pp_chat_conversation(id) ON DELETE CASCADE",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pp_chat_history_conversation ON pp_chat_history(conversation_id)",
+            [],
+        )?;
+        log::info!("Migration: Added conversation_id column to pp_chat_history");
+
+        // Migrate existing messages to a default conversation if any exist
+        let has_messages: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pp_chat_history WHERE conversation_id IS NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if has_messages {
+            // Create default conversation for existing messages
+            conn.execute(
+                r#"
+                INSERT INTO pp_chat_conversation (title, created_at, updated_at)
+                SELECT 'Chat-Verlauf',
+                       COALESCE((SELECT MIN(created_at) FROM pp_chat_history), datetime('now')),
+                       COALESCE((SELECT MAX(created_at) FROM pp_chat_history), datetime('now'))
+                "#,
+                [],
+            )?;
+
+            // Update existing messages to use the new conversation
+            conn.execute(
+                "UPDATE pp_chat_history SET conversation_id = (SELECT id FROM pp_chat_conversation ORDER BY id LIMIT 1) WHERE conversation_id IS NULL",
+                [],
+            )?;
+            log::info!("Migration: Migrated existing chat messages to default conversation");
+        }
+    }
+
+    // Migration: Add conversation_id to pp_chat_suggestion (for cascade delete)
+    if table_exists(conn, "pp_chat_suggestion") && !column_exists(conn, "pp_chat_suggestion", "conversation_id") {
+        conn.execute(
+            "ALTER TABLE pp_chat_suggestion ADD COLUMN conversation_id INTEGER REFERENCES pp_chat_conversation(id) ON DELETE CASCADE",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pp_chat_suggestion_conversation ON pp_chat_suggestion(conversation_id)",
+            [],
+        )?;
+
+        // Update existing suggestions with conversation_id from their parent messages
+        conn.execute(
+            r#"
+            UPDATE pp_chat_suggestion
+            SET conversation_id = (
+                SELECT conversation_id FROM pp_chat_history WHERE pp_chat_history.id = pp_chat_suggestion.message_id
+            )
+            WHERE conversation_id IS NULL
+            "#,
+            [],
+        )?;
+        log::info!("Migration: Added conversation_id column to pp_chat_suggestion");
+    }
+
+    // Migration: Add attachments_json column to pp_chat_history for image storage
+    if table_exists(conn, "pp_chat_history") && !column_exists(conn, "pp_chat_history", "attachments_json") {
+        conn.execute(
+            "ALTER TABLE pp_chat_history ADD COLUMN attachments_json TEXT",
+            [],
+        )?;
+        log::info!("Migration: Added attachments_json column to pp_chat_history for image storage");
+    }
+
     Ok(())
 }
 

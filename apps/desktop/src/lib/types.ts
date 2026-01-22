@@ -637,6 +637,12 @@ export interface CsvImportResult {
   errors: string[];
 }
 
+export interface ImageImportTransactionsResult {
+  importedCount: number;
+  duplicates: string[];
+  errors: string[];
+}
+
 export interface BrokerDetectionResult {
   templateId: string | null;
   brokerName: string;
@@ -1980,12 +1986,30 @@ export interface ApplyValidationRequest {
 // Chat History Types
 // ============================================================================
 
+/** An image attachment stored with a chat message */
+export interface ChatHistoryAttachment {
+  data: string;      // Base64 encoded image data
+  mimeType: string;  // e.g., "image/png", "image/jpeg"
+  filename?: string;
+}
+
 /** A chat message stored in the database */
 export interface ChatHistoryMessage {
   id: number;
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  conversationId?: number;
+  attachments?: ChatHistoryAttachment[];
+}
+
+/** A chat conversation (session) */
+export interface Conversation {
+  id: number;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ============================================================================
@@ -2046,4 +2070,84 @@ export function formatAmountFromScaled(scaledAmount: number | undefined, currenc
   if (scaledAmount === undefined) return '-';
   const amount = scaledAmount / 100;
   return formatCurrency(amount, currency);
+}
+
+// ============================================================================
+// Quote Assistant Types
+// ============================================================================
+
+/**
+ * Context about a security with quote problems for the AI assistant
+ */
+export interface QuoteAssistantContext {
+  securityId: number;
+  securityName: string;
+  isin?: string;
+  ticker?: string;
+  currency: string;
+  currentFeed?: string;
+  currentFeedUrl?: string;
+  problem: 'no_provider' | 'fetch_error' | 'stale';
+  lastError?: string;
+  daysSinceQuote?: number;
+}
+
+/**
+ * AI-generated suggestion for a quote source
+ */
+export interface AiQuoteSuggestion {
+  provider: string;
+  ticker: string;
+  feedUrl?: string;
+  confidence: number;
+  reason: string;
+}
+
+/**
+ * Validated quote suggestion with test result
+ */
+export interface ValidatedQuoteSuggestion {
+  suggestion: AiQuoteSuggestion;
+  validated: boolean;
+  testPrice?: number;
+  testDate?: string;
+  testCurrency?: string;
+  validationError?: string;
+}
+
+/**
+ * Request for quote assistant chat
+ */
+export interface QuoteAssistantRequest {
+  provider: string;
+  model: string;
+  apiKey: string;
+  securityContext: QuoteAssistantContext;
+  userMessage?: string;
+  history: Array<{ role: string; content: string }>;
+}
+
+/**
+ * Response from quote assistant
+ */
+export interface QuoteAssistantResponse {
+  message: string;
+  suggestion?: ValidatedQuoteSuggestion;
+  tokensUsed?: number;
+}
+
+/**
+ * Security with quote issue for the assistant
+ */
+export interface ProblematicSecurity {
+  id: number;
+  name: string;
+  isin?: string;
+  ticker?: string;
+  currency: string;
+  feed?: string;
+  feedUrl?: string;
+  problemType: 'no_provider' | 'fetch_error' | 'stale';
+  problemDescription: string;
+  lastQuoteDate?: string;
 }

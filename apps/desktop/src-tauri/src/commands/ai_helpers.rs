@@ -4,7 +4,7 @@
 //! to perform actions on behalf of the user.
 
 use crate::db;
-use crate::quotes::{alphavantage, portfolio_report, yahoo};
+use crate::quotes::{alphavantage, yahoo};
 use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -652,10 +652,10 @@ async fn find_or_create_security(
         let name_clone = name.clone();
         let ticker_clone = ticker.clone();
 
-        // Spawn background tasks for enrichment and price fetching
+        // Spawn background task for price fetching
         tokio::spawn(async move {
-            // Enrich with ISIN/WKN from Portfolio Report
-            enrich_security_data(id, Some(&ticker_clone), &name_clone).await;
+            // Suppress unused variable warnings
+            let _ = (&ticker_clone, &name_clone);
             // Fetch current and historical prices
             fetch_prices_for_security(id).await;
         });
@@ -669,38 +669,6 @@ async fn find_or_create_security(
     ))
 }
 
-/// Enrich security data with ISIN, WKN from Portfolio Report.
-/// Updates the security record in the database.
-async fn enrich_security_data(security_id: i64, ticker: Option<&str>, name: &str) {
-    // Search Portfolio Report for ISIN/WKN
-    if let Some((uuid, isin, wkn)) =
-        portfolio_report::search_and_get_identifiers(ticker, name).await
-    {
-        // Update security in database
-        if let Ok(conn_guard) = db::get_connection() {
-            if let Some(conn) = conn_guard.as_ref() {
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = conn.execute(
-                    r#"
-                    UPDATE pp_security
-                    SET isin = COALESCE(isin, ?1),
-                        wkn = COALESCE(wkn, ?2),
-                        feed_url = ?3,
-                        updated_at = ?4
-                    WHERE id = ?5
-                    "#,
-                    params![isin, wkn, uuid, now, security_id],
-                );
-                log::info!(
-                    "Enriched security {} with ISIN={:?}, WKN={:?}",
-                    security_id,
-                    isin,
-                    wkn
-                );
-            }
-        }
-    }
-}
 
 /// Fetch current and historical prices for a newly added security.
 async fn fetch_prices_for_security(security_id: i64) {

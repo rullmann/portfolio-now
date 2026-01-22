@@ -48,14 +48,14 @@ pub use types::{
     AnnotationType, SignalDirection, TrendDirection, TrendStrength, TrendInfo,
     ChartAnnotation, AnnotationAnalysisJson, AnnotationAnalysisResponse,
     // Portfolio types
-    HoldingSummary, RecentTransaction, DividendPayment, WatchlistItem,
+    PortfolioSummary, HoldingSummary, RecentTransaction, DividendPayment, WatchlistItem,
     SoldPosition, YearlyOverview, PortfolioInsightsContext,
     FeesAndTaxesSummary, YearlyFeesAndTaxes, InvestmentSummary,
     SectorAllocation, PortfolioExtremes,
     QuoteProviderStatusSummary, QuoteSyncInfo,
     PortfolioInsightsResponse,
     // Chat types
-    ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
+    ChatMessage, ChatImageAttachment, PortfolioChatResponse, ChatSuggestedAction,
     // Transaction command types
     TransactionCreateCommand, PortfolioTransferCommand, TransactionValidationResult,
     // Model listing
@@ -94,7 +94,8 @@ pub use parsing::{
 
 pub use models::{
     get_default, get_fallback, get_model, get_model_upgrade, get_models_for_provider,
-    is_valid_model, ModelInfo, VisionModel, DEPRECATED_MODELS, VISION_MODELS,
+    get_model_provider, has_vision_support, is_valid_model,
+    ModelInfo, VisionModel, DEPRECATED_MODELS, VISION_MODELS,
 };
 
 // ============================================================================
@@ -119,6 +120,8 @@ pub use command_parser::{
     // Types
     WatchlistCommand, TransactionQuery, PortfolioValueQuery,
     SuggestedAction, ParsedResponseWithSuggestions,
+    // Extracted transactions from images (returns suggestions, no auto-execution)
+    ExtractedTransaction, ExtractedTransactionsPayload,
 };
 
 // ============================================================================

@@ -5,8 +5,9 @@
 
 use crate::ai::{
     DividendPayment, FeesAndTaxesSummary, HoldingSummary, InvestmentSummary, PortfolioExtremes,
-    PortfolioInsightsContext, QuoteSyncInfo, QuoteProviderStatusSummary, RecentTransaction,
-    SectorAllocation, SoldPosition, WatchlistItem, YearlyFeesAndTaxes, YearlyOverview,
+    PortfolioInsightsContext, PortfolioSummary, QuoteSyncInfo, QuoteProviderStatusSummary,
+    RecentTransaction, SectorAllocation, SoldPosition, WatchlistItem, YearlyFeesAndTaxes,
+    YearlyOverview,
 };
 use crate::currency;
 use crate::db;
@@ -139,6 +140,12 @@ pub fn load_portfolio_context(
         }
     }
 
+    // Load portfolio names for each security
+    let portfolio_names_map = load_security_portfolio_names(conn);
+
+    // Load portfolio summaries
+    let portfolios = load_portfolios(conn, base_currency, today);
+
     for (security_id, name, isin, ticker, security_currency, shares_scaled, price_scaled) in holdings_data.into_iter() {
         let shares_val = shares::to_decimal(shares_scaled);
 
@@ -191,6 +198,9 @@ pub fn load_portfolio_context(
             let first_buy = first_buy_map.get(&security_id).cloned();
             let (sec_fees, sec_taxes) = fees_taxes_map.get(&security_id).cloned().unwrap_or((0.0, 0.0));
 
+            // Get portfolio names where this security is held
+            let sec_portfolio_names = portfolio_names_map.get(&security_id).cloned();
+
             holdings.push(HoldingSummary {
                 name,
                 isin,
@@ -206,6 +216,7 @@ pub fn load_portfolio_context(
                 first_buy_date: first_buy,
                 total_fees: sec_fees,
                 total_taxes: sec_taxes,
+                portfolio_names: sec_portfolio_names,
             });
 
             total_value += current_value;
@@ -325,6 +336,7 @@ pub fn load_portfolio_context(
     let portfolio_extremes = load_portfolio_extremes(conn);
 
     Ok(PortfolioInsightsContext {
+        portfolios,
         holdings,
         total_value,
         total_cost_basis,
@@ -351,6 +363,164 @@ pub fn load_portfolio_context(
         sector_allocation,
         portfolio_extremes,
     })
+}
+
+/// Load portfolio summaries with holdings count and values
+fn load_portfolios(conn: &Connection, base_currency: &str, today: NaiveDate) -> Vec<PortfolioSummary> {
+    let sql = r#"
+        SELECT
+            p.id,
+            p.name,
+            a.name as account_name
+        FROM pp_portfolio p
+        LEFT JOIN pp_account a ON a.id = p.reference_account_id
+        WHERE p.is_retired = 0
+        ORDER BY p.name
+    "#;
+
+    let mut portfolios: Vec<PortfolioSummary> = Vec::new();
+
+    if let Ok(mut stmt) = conn.prepare(sql) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let (portfolio_id, portfolio_name, account_name) = row;
+
+                // Get holdings and values for this portfolio
+                let holdings_sql = r#"
+                    SELECT
+                        s.id as security_id,
+                        s.currency,
+                        SUM(CASE
+                            WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                            WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                            ELSE 0
+                        END) as net_shares,
+                        lp.value as latest_price
+                    FROM pp_txn t
+                    JOIN pp_security s ON s.id = t.security_id
+                    LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+                    WHERE t.owner_type = 'portfolio'
+                      AND t.owner_id = ?1
+                      AND t.shares IS NOT NULL
+                    GROUP BY s.id
+                    HAVING net_shares > 0
+                "#;
+
+                let mut total_value = 0.0;
+                let mut holdings_count = 0;
+
+                if let Ok(mut h_stmt) = conn.prepare(holdings_sql) {
+                    if let Ok(h_rows) = h_stmt.query_map([portfolio_id], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,       // security_id
+                            row.get::<_, String>(1)?,    // currency
+                            row.get::<_, i64>(2)?,       // net_shares
+                            row.get::<_, Option<i64>>(3)?, // latest_price
+                        ))
+                    }) {
+                        for h_row in h_rows.flatten() {
+                            let (security_id, security_currency, shares_scaled, price_scaled) = h_row;
+                            holdings_count += 1;
+
+                            let shares_val = shares::to_decimal(shares_scaled);
+                            let price_val = price_scaled.map(|p| {
+                                let price_decimal = prices::to_decimal(p);
+                                if security_currency == "GBX" || security_currency == "GBp" {
+                                    price_decimal / 100.0
+                                } else {
+                                    price_decimal
+                                }
+                            }).unwrap_or(0.0);
+
+                            let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                                "GBP".to_string()
+                            } else {
+                                security_currency.clone()
+                            };
+
+                            let value_in_security = shares_val * price_val;
+                            let value_converted = if convert_currency == base_currency {
+                                value_in_security
+                            } else {
+                                currency::convert(conn, value_in_security, &convert_currency, base_currency, today)
+                                    .unwrap_or(value_in_security)
+                            };
+
+                            total_value += value_converted;
+                            let _ = security_id; // Silence unused warning
+                        }
+                    }
+                }
+
+                // Get cost basis for this portfolio
+                let total_cost_basis = crate::fifo::get_total_cost_basis_converted(conn, Some(portfolio_id), base_currency)
+                    .unwrap_or(0.0);
+
+                let gain_loss_percent = if total_cost_basis > 0.0 {
+                    (total_value - total_cost_basis) / total_cost_basis * 100.0
+                } else {
+                    0.0
+                };
+
+                portfolios.push(PortfolioSummary {
+                    id: portfolio_id,
+                    name: portfolio_name,
+                    total_value,
+                    total_cost_basis,
+                    gain_loss_percent,
+                    holdings_count,
+                    reference_account: account_name,
+                });
+            }
+        }
+    }
+
+    portfolios
+}
+
+/// Load portfolio names for each security (which portfolios hold this security)
+fn load_security_portfolio_names(conn: &Connection) -> std::collections::HashMap<i64, Vec<String>> {
+    let sql = r#"
+        SELECT
+            s.id as security_id,
+            p.name as portfolio_name,
+            SUM(CASE
+                WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                ELSE 0
+            END) as net_shares
+        FROM pp_txn t
+        JOIN pp_portfolio p ON p.id = t.owner_id AND t.owner_type = 'portfolio'
+        JOIN pp_security s ON s.id = t.security_id
+        WHERE t.shares IS NOT NULL
+        GROUP BY s.id, p.id
+        HAVING net_shares > 0
+        ORDER BY s.id, p.name
+    "#;
+
+    let mut result: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+
+    if let Ok(mut stmt) = conn.prepare(sql) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let (security_id, portfolio_name) = row;
+                result.entry(security_id).or_default().push(portfolio_name);
+            }
+        }
+    }
+
+    result
 }
 
 /// Load recent dividends (last 12 months)

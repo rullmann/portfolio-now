@@ -20,6 +20,14 @@ fn format_datetime(txn: &ParsedTransaction) -> String {
     }
 }
 
+fn dividend_amount_cents(txn: &ParsedTransaction) -> i64 {
+    if txn.gross_amount > 0.0 {
+        (txn.gross_amount * 100.0).round() as i64
+    } else {
+        (txn.net_amount * 100.0).round() as i64
+    }
+}
+
 /// Get possible DB transaction types for duplicate detection.
 /// Returns all types that could match (original + delivery mode variant).
 /// This is needed because a PDF "Buy" could have been imported as "DELIVERY_INBOUND"
@@ -456,7 +464,11 @@ fn import_pdf_transactions_sync(
         // Check for duplicate if skip_duplicates is enabled
         if skip_duplicates {
             if let Some(sec_id) = security_id {
-                let amount_cents = (txn.net_amount * 100.0).round() as i64;
+                let amount_cents = if effective_type == ParsedTransactionType::Dividend {
+                    dividend_amount_cents(txn)
+                } else {
+                    (txn.net_amount * 100.0).round() as i64
+                };
                 // Get all possible DB types (original + delivery mode variant)
                 // This handles the case where the same PDF was previously imported with deliveryMode
                 let txn_types = get_duplicate_check_types(effective_type);
@@ -521,7 +533,11 @@ fn import_pdf_transactions_sync(
 
         // Create transaction
         let uuid = uuid::Uuid::new_v4().to_string();
-        let amount_cents = (txn.net_amount * 100.0).round() as i64;
+        let amount_cents = if effective_type == ParsedTransactionType::Dividend {
+            dividend_amount_cents(txn)
+        } else {
+            (txn.net_amount * 100.0).round() as i64
+        };
         let shares_scaled = txn.shares.map(|s| (s * 100_000_000.0) as i64);
 
         if is_portfolio_txn {
@@ -623,6 +639,11 @@ fn import_pdf_transactions_sync(
         } else {
             // Account-only transaction (DIVIDEND, INTEREST, etc.)
             let txn_type = effective_type.to_account_type();
+            let amount_cents = if effective_type == ParsedTransactionType::Dividend {
+                dividend_amount_cents(txn)
+            } else {
+                amount_cents
+            };
 
             conn.execute(
                 "INSERT INTO pp_txn (import_id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note)

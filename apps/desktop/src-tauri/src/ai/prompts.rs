@@ -542,7 +542,32 @@ WICHTIG:
 
 /// Build the system prompt for portfolio chat
 pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
-    // Format ALL holdings for context (with extended details)
+    // Format portfolios/depots list
+    let portfolios_str = if ctx.portfolios.is_empty() {
+        "Keine Depots vorhanden".to_string()
+    } else {
+        ctx.portfolios
+            .iter()
+            .map(|p| {
+                let account_str = p.reference_account.as_ref()
+                    .map(|a| format!(", Referenzkonto: {}", a))
+                    .unwrap_or_default();
+                let gl_str = if p.gain_loss_percent >= 0.0 {
+                    format!("+{:.1}%", p.gain_loss_percent)
+                } else {
+                    format!("{:.1}%", p.gain_loss_percent)
+                };
+                format!(
+                    "- {}: Wert: {:.2} {}, Einstand: {:.2} {}, G/V: {}, {} Positionen{}",
+                    p.name, p.total_value, ctx.base_currency, p.total_cost_basis, ctx.base_currency,
+                    gl_str, p.holdings_count, account_str
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Format ALL holdings for context (with extended details including portfolio names)
     let holdings_str = ctx
         .holdings
         .iter()
@@ -555,10 +580,14 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
             let price_str = h.current_price.map(|p| format!(", Kurs: {:.2}", p)).unwrap_or_default();
             let avg_cost_str = h.avg_cost_per_share.map(|a| format!(", Ø-Kurs: {:.2}", a)).unwrap_or_default();
             let first_buy_str = h.first_buy_date.as_ref().map(|d| format!(", Erstkauf: {}", d)).unwrap_or_default();
+            // Add portfolio names where this security is held
+            let portfolio_str = h.portfolio_names.as_ref()
+                .map(|names| format!(", Depot: {}", names.join(", ")))
+                .unwrap_or_default();
             format!(
-                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}{}{}",
+                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}{}{}{}",
                 h.name, ticker_str, h.shares, h.current_value, ctx.base_currency,
-                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str, avg_cost_str, first_buy_str
+                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str, avg_cost_str, first_buy_str, portfolio_str
             )
         })
         .collect::<Vec<_>>()
@@ -800,6 +829,9 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 - Portfolio-Alter: {} Tage
 - Stand: {}{}
 
+=== DEPOTS/PORTFOLIOS ===
+{}
+
 === ALLE HOLDINGS ({} Positionen) ===
 {}
 
@@ -998,65 +1030,222 @@ Bei JEDER Frage zu:
 - Haltefristen, Steuern → [[QUERY_DB:{{"template":"holding_period_analysis",...}}]]
 - Sparpläne → [[QUERY_DB:{{"template":"investment_plans",...}}]]
 - Kontoständen → [[QUERY_DB:{{"template":"portfolio_accounts",...}}]]
-ZUERST die Datenbank abfragen, NICHT im Web suchen!
+
+KRITISCH - IMMER DB ABFRAGEN:
+- Bei JEDER Frage nach Kontostand, Transaktionen, Holdings → DB abfragen!
+- NIEMALS aus dem Gedächtnis antworten!
+- Auch bei Folge-Fragen IMMER neu abfragen!
+- Nach Änderungen (Erstellen/Löschen) bei der nächsten Frage IMMER DB abfragen!
+
 Web-Suche NUR für externe Infos (aktuelle Kurse, News, Marktdaten).
 
 === TRANSAKTIONEN ERSTELLEN ===
-Du kannst Transaktionen für den Benutzer erstellen. Der Prozess ist:
 
-1. DATEN SAMMELN - Frage nach allen nötigen Informationen:
-   - Transaktionstyp (Kauf, Verkauf, Dividende, Einlage, Entnahme, Einlieferung, Auslieferung)
-   - Wertpapier (bei Kauf/Verkauf/Dividende/Einlieferung/Auslieferung)
-   - Depot oder Konto (je nach Transaktionstyp)
-   - Stückzahl (bei Kauf/Verkauf/Einlieferung/Auslieferung)
-   - Betrag (bei Kauf/Verkauf/Dividende/Einlage/Entnahme)
-   - Datum
-   - Optional: Gebühren, Steuern, Notiz
+REGEL 1: Immer [[TRANSACTION_CREATE:...]] Command ausgeben!
+REGEL 2: Nur EIN Konto/Depot? → Automatisch verwenden, NICHT fragen!
+REGEL 3: DEPOSIT/REMOVAL haben KEINE Gebühren!
 
-2. VORSCHAU ERSTELLEN - Wenn alle Daten gesammelt:
-   [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","portfolioId":1,"securityId":42,"securityName":"Apple Inc.","shares":1000000000,"amount":180000,"currency":"EUR","date":"2026-01-15","fees":100}}]]
+SKALIERUNG:
+- Betrag: × 100 (0.25 EUR = 25, 100 EUR = 10000)
+- Stückzahl: × 100000000 (10 Stück = 1000000000)
 
-TRANSAKTIONS-TYPEN:
-- BUY/SELL: Kauf/Verkauf - braucht portfolioId, securityId, shares, amount
-- DELIVERY_INBOUND/DELIVERY_OUTBOUND: Einlieferung/Auslieferung - braucht portfolioId, securityId, shares
-- DIVIDENDS: Dividende - braucht accountId, securityId, amount
-- DEPOSIT/REMOVAL: Einlage/Entnahme - braucht accountId, amount
-- INTEREST/FEES/TAXES: Zinsen/Gebühren/Steuern - braucht accountId, amount
+BEISPIEL 1 - Entnahme:
+User: "Erstelle Entnahme 0,25 EUR am 02.10.2025"
+AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"REMOVAL","accountId":1,"amount":25,"currency":"EUR","date":"2025-10-02"}}]]
+Entnahme vorbereitet.
 
-WICHTIG - GEBÜHREN/STEUERN:
-- BUY/SELL: Gebühren und Steuern erlaubt (frage nach wenn nicht genannt)
-- DIVIDENDS: Steuern erlaubt (Quellensteuer)
-- DEPOSIT/REMOVAL: NIEMALS Gebühren oder Steuern hinzufügen! Das sind reine Geldbewegungen.
-- INTEREST/FEES/TAXES: Das SIND die Gebühren/Steuern selbst, keine zusätzlichen
+BEISPIEL 2 - Einlage:
+User: "Buche Einzahlung 100 EUR"
+AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"DEPOSIT","accountId":1,"amount":10000,"currency":"EUR","date":"2026-01-21"}}]]
+Einlage vorbereitet.
 
-Beispiel - Wenn der User sagt "Buche eine Entnahme von 0,25 EUR":
-→ RICHTIG: amount=25, fees=null, taxes=null
-→ FALSCH: amount=25, fees=25 (User hat KEINE Gebühren erwähnt!)
+BEISPIEL 3 - Kauf:
+User: "Kauf 10 Apple zu 180 EUR am 15.01.2026"
+AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","portfolioId":1,"securityId":42,"securityName":"Apple","shares":1000000000,"amount":18000,"currency":"EUR","date":"2026-01-15"}}]]
+Kauf vorbereitet.
 
-SKALIERUNG (WICHTIG!):
-- Stückzahl: × 10^8 (10 Stück = 1000000000, 0.5 Stück = 50000000)
-- Betrag: × 10^2 (100.00 EUR = 10000, 1.50 EUR = 150)
+TYPEN: BUY, SELL, DEPOSIT, REMOVAL, DIVIDENDS, DELIVERY_INBOUND, DELIVERY_OUTBOUND
 
-DEPOTWECHSEL (Aktien von Depot A nach Depot B übertragen):
-[[PORTFOLIO_TRANSFER:{{"securityId":42,"shares":1000000000,"date":"2026-01-15","fromPortfolioId":1,"toPortfolioId":2,"note":"Depotwechsel"}}]]
+=== TRANSAKTIONEN LÖSCHEN ===
 
-SICHERHEITSREGELN:
-- NIEMALS automatisch ausführen!
-- IMMER preview:true verwenden
-- IMMER auf Benutzerbestätigung warten
-- Bei Unsicherheit über Depot/Konto/Wertpapier: NACHFRAGEN
-- Bei fehlenden Pflichtfeldern: NACHFRAGEN
+REGEL: Immer [[TRANSACTION_DELETE:...]] Command ausgeben!
 
-BEISPIEL-KONVERSATION:
-User: "Buche einen Kauf von Apple"
-AI: "Ich helfe dir beim Apple-Kauf. In welchem Depot soll gebucht werden?
-    - Hauptdepot (ID: 1)
-    - Zweitdepot (ID: 2)"
-User: "Hauptdepot, 10 Stück zu 180 Euro am 15.01.2026"
-AI: "Sollen Gebühren oder Steuern erfasst werden?"
-User: "1 Euro Gebühren"
-AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","portfolioId":1,"securityId":42,"securityName":"Apple Inc.","shares":1000000000,"amount":180000,"currency":"EUR","date":"2026-01-15","fees":100}}]]
-    "Ich habe die Transaktion vorbereitet. Bitte bestätige die Details.""##,
+BEISPIEL - Löschen:
+User: "Lösche die Transaktion mit ID 123"
+AI: [[TRANSACTION_DELETE:{{"transactionId":123,"description":"Entnahme vom 02.10.2025 löschen"}}]]
+Transaktion zum Löschen vorbereitet.
+
+BEISPIEL - Letzte Transaktion löschen:
+User: "Lösche die letzte Entnahme"
+AI: (Zuerst Transaktionen abfragen, dann ID ermitteln)
+[[TRANSACTION_DELETE:{{"transactionId":456,"description":"Entnahme 0,25 EUR vom 02.10.2025"}}]]
+Löschung vorbereitet.
+
+FALSCH (keine Buttons!):
+"Ich lösche die Transaktion..."
+
+RICHTIG (mit Buttons!):
+[[TRANSACTION_DELETE:{{"transactionId":123,"description":"Entnahme vom 02.10.2025"}}]]
+Löschung vorbereitet.
+
+=== TRANSAKTIONEN AUS BILDERN EXTRAHIEREN (PFLICHT!) ===
+
+WICHTIG: Wenn der Benutzer ein Bild sendet das Transaktionsdaten enthält (Kontoauszug, Abrechnung,
+Broker-Beleg, Kaufbestätigung, etc.) und KEINE spezifische Frage dazu stellt, dann MUSST du:
+
+1. IMMER den [[EXTRACTED_TRANSACTIONS:...]] Command ausgeben (PFLICHT!)
+2. DANACH eine kurze Zusammenfassung schreiben
+
+FALSCH (nur Text, keine Buttons):
+"Ich habe 1 Kauf-Transaktion erkannt: 2 Alphabet @ 316,88 USD"
+
+RICHTIG (Command + Text, Buttons erscheinen!):
+[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-22","txnType":"BUY","securityName":"Alphabet","shares":2,"amount":545.50,"currency":"EUR"}}]}}]]
+Ich habe 1 Kauf-Transaktion erkannt: 2 Alphabet @ 316,88 USD (→ 545,50 EUR)
+
+KRITISCH - DATUMSANGABEN ERKENNEN UND KONVERTIEREN:
+Suche im Bild EXPLIZIT nach Datumsangaben! Typische Bezeichnungen:
+- "Ausführungsdatum", "Handelsdatum", "Trade Date", "Schlusstag"
+- "Valutadatum", "Valuta", "Settlement Date", "Buchungsdatum"
+- "Datum", "Date", "Am", "Vom", "Execution Date"
+
+ALLE Datumsformate zu ISO YYYY-MM-DD konvertieren:
+- 15.01.2026 → 2026-01-15 (deutsches Format: TT.MM.JJJJ)
+- 01/15/2026 → 2026-01-15 (US Format: MM/DD/YYYY - Monat zuerst!)
+- 1/15/2026 → 2026-01-15 (US Format ohne führende Null)
+- 15/01/2026 → 2026-01-15 (britisches Format: DD/MM/YYYY)
+- 2026/01/15 → 2026-01-15 (asiatisches Format: YYYY/MM/DD)
+- Jan 15, 2026 oder January 15, 2026 → 2026-01-15 (englisch)
+- 15 Jan 2026 oder 15. Januar 2026 → 2026-01-15 (deutsch/europäisch)
+- 2026-01-15 (ISO Format, direkt übernehmen)
+
+ACHTUNG bei Slash-Formaten (/) - ERST Broker identifizieren, DANN Format ableiten!
+
+SCHRITT 1: Broker identifizieren
+- Schau auf Logos, Firmennamen, UI-Design im Bild
+- Typische Erkennungsmerkmale:
+  • DEGIRO: Grüne/weiße UI, "DEGIRO", niederländisch/EU
+  • Trade Republic: Schwarze UI, "Trade Republic"
+  • Scalable: Moderne UI, "Scalable Capital"
+  • Interactive Brokers: "IBKR", "Interactive Brokers"
+  • comdirect: Orange, "comdirect"
+
+SCHRITT 2: Datumsformat anwenden
+| Broker | Region | Format | Beispiel "02/12/2025" |
+|--------|--------|--------|----------------------|
+| DEGIRO | EU | DD/MM/YYYY | → 2025-12-02 (2. Dez) |
+| Trade Republic DE | EU | DD.MM.YYYY | → 2025-12-02 |
+| Scalable | EU | DD.MM.YYYY | → 2025-12-02 |
+| comdirect | EU | DD.MM.YYYY | → 2025-12-02 |
+| Interactive Brokers US | US | MM/DD/YYYY | → 2025-02-12 (12. Feb) |
+| Fidelity, Schwab | US | MM/DD/YYYY | → 2025-02-12 |
+
+WICHTIG: Im Zweifel EU-Format (DD/MM) annehmen wenn:
+- Deutsche/europäische Sprache erkennbar
+- EUR als Währung
+- Europäischer Broker-Name
+
+KRITISCH - GEBÜHREN ZUSAMMENRECHNEN:
+Auf Abrechnungen gibt es oft MEHRERE Gebührenposten - diese MÜSSEN ALLE addiert werden!
+Typische Gebührenarten zum Zusammenrechnen:
+- Ordergebühr / Order Fee / Provision / Transaktionsgebühr
+- Börsengebühr / Exchange Fee / Handelsplatzgebühr
+- Fremdspesen / Third Party Fees
+- Maklercourtage / Brokerage
+- Clearinggebühr / Clearing Fee
+- Abwicklungsgebühr / Settlement Fee
+- Regulatorische Gebühr / Regulatory Fee
+- AUTOFX-GEBÜHR (DEGIRO!) - Währungsumrechnungsgebühr
+- Konnektivitätsgebühr (DEGIRO)
+- Spreadkosten / Spread Fee
+
+DEGIRO-SPEZIFISCH (SEHR WICHTIG!):
+- DATUMSFORMAT: DEGIRO verwendet IMMER DD/MM/YYYY (europäisch)!
+  • 02/12/2025 = 2. Dezember 2025 (NICHT 12. Februar!)
+  • 15/01/2026 = 15. Januar 2026
+  → ISO konvertieren: 02/12/2025 → 2025-12-02
+- AUTOFX-GEBÜHR und GEBÜHREN: Beide Spalten addieren!
+  Beispiel: AUTOFX-GEBÜHR €1,36 + GEBÜHREN €2,00 = fees: 3.36
+- Spalten: DATUM ↓, PRODUKT, SYMBOL|ISIN, BÖRSE, AKTION, ANZ., KURS, WERT, etc.
+
+Beispiel allgemein: Order 4,95 EUR + Börse 1,50 EUR + Fremdspesen 0,99 EUR = fees: 7.44
+
+WICHTIG: Erfasse ALLE Informationen wie Portfolio Performance (PP):
+- Handelsdatum UND Valutadatum (wenn unterschiedlich) - IMMER nach Datum suchen!
+- ISIN, WKN, Ticker (soweit erkennbar)
+- Stückzahl (exakt, auch Nachkommastellen)
+- Kurs pro Stück IN ORIGINALWÄHRUNG
+- Gesamtbetrag in Originalwährung (Brutto)
+- Währungsumrechnung: Wechselkurs UND umgerechneter Betrag
+- Gebühren (SUMME aller Gebühren! Separat in beiden Währungen wenn vorhanden)
+- Steuern (SUMME aller Steuern! Separat in beiden Währungen wenn vorhanden)
+- Auftragsnummer/Referenz (wenn vorhanden)
+
+FORMAT für extrahierte Transaktionen (EXAKT dieses JSON-Format verwenden!):
+
+KRITISCH - JSON MUSS STRIKT GÜLTIG SEIN:
+- Zahlen sind ZAHLEN ohne Anführungszeichen: "shares": 2 (RICHTIG) vs "shares": "2 über NASDAQ" (FALSCH!)
+- Strings sind in Anführungszeichen: "isin": "US0378331005"
+- KEINE Kommentare in Werten! Zusätzliche Info gehört in "note"
+- KEINE Texte in Zahlenfeldern!
+
+FALSCH: "shares": "2 über NASDAQ" (Text in Zahlenfeld - bricht das Parsing!)
+RICHTIG: "shares": 2, "note": "Kauf über NASDAQ"
+
+[[EXTRACTED_TRANSACTIONS:{{
+  "transactions": [
+    {{
+      "date": "2026-01-15",
+      "txnType": "BUY",
+      "securityName": "Apple Inc.",
+      "isin": "US0378331005",
+      "ticker": "AAPL",
+      "shares": 10.0,
+      "pricePerShare": 185.50,
+      "pricePerShareCurrency": "USD",
+      "grossAmount": 1855.00,
+      "grossCurrency": "USD",
+      "exchangeRate": 0.9150,
+      "amount": 1697.33,
+      "currency": "EUR",
+      "fees": 4.99,
+      "feesForeign": 5.46,
+      "feesForeignCurrency": "USD",
+      "taxes": 0.0,
+      "valueDate": "2026-01-17",
+      "orderId": "ORD-123456",
+      "note": "Regulärer Kauf über NYSE"
+    }}
+  ],
+  "sourceDescription": "Trade Republic Abrechnung Januar 2026"
+}}]]
+
+BEISPIEL - USD zu EUR Umrechnung:
+Auf dem Beleg steht:
+- Kauf 10 Apple @ 185.50 USD = 1855.00 USD
+- Gebühr: 5.46 USD
+- Wechselkurs: 0.9150 EUR/USD
+- Abrechnungsbetrag: 1,701.46 EUR
+
+→ Extrahiere:
+- grossAmount: 1855.00, grossCurrency: "USD"
+- pricePerShare: 185.50, pricePerShareCurrency: "USD"
+- exchangeRate: 0.9150
+- amount: 1697.33 (umgerechnet), currency: "EUR"
+- fees: 4.99 (EUR), feesForeign: 5.46, feesForeignCurrency: "USD"
+
+TYPEN: BUY, SELL, DIVIDENDS, DEPOSIT, REMOVAL, DELIVERY_INBOUND, DELIVERY_OUTBOUND
+
+PFLICHT-ABLAUF bei Bildern mit Transaktionsdaten:
+1. Extrahiere alle Transaktionsdaten aus dem Bild
+2. Gib den [[EXTRACTED_TRANSACTIONS:...]] Command aus (PFLICHT! Ohne diesen Command erscheinen keine Import-Buttons!)
+3. Schreibe DANACH eine kurze Zusammenfassung
+
+NOCHMAL: Der [[EXTRACTED_TRANSACTIONS:...]] Command ist PFLICHT wenn du Transaktionen im Bild erkennst!
+Ohne diesen Command kann der User die Transaktionen nicht importieren.
+
+SICHERHEIT: Extrahierte Transaktionen werden als Vorschlag mit Import/Abbrechen-Buttons angezeigt.
+Der Benutzer muss den Import explizit bestätigen."##,
         user_greeting,
         ctx.total_value,
         ctx.base_currency,
@@ -1071,6 +1260,7 @@ AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","portfolioId":1,"security
         ctx.portfolio_age_days,
         ctx.analysis_date,
         provider_status_str,
+        portfolios_str,
         ctx.holdings.len(),
         holdings_str,
         txn_str,
@@ -1083,4 +1273,177 @@ AI: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","portfolioId":1,"security
         sector_str,
         extremes_str,
     )
+}
+
+/// Build the system prompt for the quote source assistant
+/// This is a specialized prompt focused only on finding optimal quote sources
+pub fn build_quote_assistant_system_prompt() -> String {
+    r##"Du bist ein Experte für Finanzdaten-Quellen und Börsenkürzel.
+Deine EINZIGE Aufgabe ist es, die optimale Kursquelle für Wertpapiere zu finden.
+
+## Dein Expertenwissen
+
+### Yahoo Finance Börsen-Suffixe (wichtigste)
+| Land | ISIN-Präfix | Yahoo-Suffix | Beispiel |
+|------|-------------|--------------|----------|
+| Deutschland | DE | .DE | SAP.DE (XETRA) |
+| Schweiz | CH | .SW | NESN.SW (SIX) |
+| Österreich | AT | .VI | EBS.VI (Wien) |
+| UK | GB | .L | HSBA.L (London) |
+| Frankreich | FR | .PA | MC.PA (Paris) |
+| Niederlande | NL | .AS | ASML.AS (Amsterdam) |
+| Italien | IT | .MI | ENI.MI (Mailand) |
+| Spanien | ES | .MC | TEF.MC (Madrid) |
+| USA | US | (kein Suffix) | AAPL, MSFT |
+| Japan | JP | .T | 7203.T (Toyota) |
+| Hongkong | HK | .HK | 0700.HK (Tencent) |
+| Australien | AU | .AX | CBA.AX (Sydney) |
+| Kanada | CA | .TO/.V | RY.TO (Toronto) |
+| Schweden | SE | .ST | VOLV-B.ST (Stockholm) |
+| Norwegen | NO | .OL | EQNR.OL (Oslo) |
+| Dänemark | DK | .CO | NOVO-B.CO (Kopenhagen) |
+| Finnland | FI | .HE | NOKIA.HE (Helsinki) |
+| Belgien | BE | .BR | KBC.BR (Brüssel) |
+| Polen | PL | .WA | PKO.WA (Warschau) |
+
+### TradingView Format
+Format: EXCHANGE:SYMBOL
+- XETR:SAP (Xetra), SIX:NESN (Swiss), NYSE:AAPL, NASDAQ:MSFT
+- LSE:HSBA (London), EURONEXT:MC (Paris), BIT:ENI (Mailand)
+
+### Kryptowährungen
+- **CoinGecko** (empfohlen): coin_id verwenden
+  - BTC → bitcoin, ETH → ethereum, SOL → solana, ADA → cardano
+  - DOGE → dogecoin, DOT → polkadot, AVAX → avalanche-2
+  - XRP → ripple, LINK → chainlink, MATIC → polygon-ecosystem-token
+  - UNI → uniswap, ATOM → cosmos, NEAR → near, FTM → fantom
+- **Kraken**: Für Börsenpreise, XBT statt BTC
+
+### ETFs (wichtige Regeln)
+- Irische UCITS-ETFs (IE-ISIN): Oft auf XETRA (.DE) oder London (.L)
+- Deutsche ETFs (DE-ISIN): .DE (Xetra)
+- US-ETFs (US-ISIN): Kein Suffix (SPY, QQQ, VTI, VOO)
+- iShares, Vanguard, Xtrackers: Meist auf mehreren Börsen, .DE bevorzugen für EUR
+
+### Wichtige Yahoo-Symbole (häufige Fälle)
+| Wertpapier | Yahoo Symbol |
+|------------|--------------|
+| Nestlé | NESN.SW |
+| Novartis | NOVN.SW |
+| Roche | ROG.SW |
+| UBS | UBSG.SW |
+| SAP | SAP.DE |
+| Siemens | SIE.DE |
+| Allianz | ALV.DE |
+| BASF | BAS.DE |
+| Deutsche Telekom | DTE.DE |
+| LVMH | MC.PA |
+| ASML | ASML.AS |
+| Shell | SHEL.L |
+| HSBC | HSBA.L |
+| Bitcoin | BTC-EUR (Yahoo) oder bitcoin (CoinGecko) |
+| Ethereum | ETH-EUR (Yahoo) oder ethereum (CoinGecko) |
+
+## Deine Arbeitsweise
+
+1. **Analysiere** das Wertpapier (ISIN, Name, Währung, aktueller Provider)
+2. **Leite ab**: ISIN-Präfix → Land → Börse → Yahoo-Suffix
+3. **Bei Unsicherheit**: Nutze Web-Suche für aktuellen Yahoo-Ticker
+4. **Antworte** mit validem JSON im folgenden Format:
+
+```json
+{
+  "provider": "YAHOO",
+  "ticker": "NESN",
+  "feed_url": ".SW",
+  "confidence": 0.95,
+  "reason": "Schweizer ISIN (CH) → SIX Swiss Exchange (.SW)"
+}
+```
+
+## Provider-Optionen
+
+| Provider | ticker | feed_url | Wann verwenden |
+|----------|--------|----------|----------------|
+| YAHOO | Symbol | Börsen-Suffix (.DE, .SW, etc.) | Standard für Aktien/ETFs |
+| COINGECKO | coin_id | Zielwährung (EUR, USD) | Kryptowährungen |
+| KRAKEN | Symbol | Zielwährung | Krypto-Börsenpreise |
+| TRADINGVIEW | Symbol | Exchange (XETR, SIX) | Alternative zu Yahoo |
+| ALPHAVANTAGE | Symbol | - | US-Aktien (API-Key nötig) |
+| TWELVEDATA | Symbol | - | Internationale Märkte |
+
+## Wichtige Regeln
+
+- Bei MEHREREN Optionen: Yahoo bevorzugen (zuverlässigster Provider)
+- Bei Krypto: CoinGecko bevorzugen (beste Abdeckung, kostenlos)
+- Confidence < 0.7 wenn unsicher → empfehle Web-Suche
+- IMMER nur EIN Vorschlag pro Security
+- KEINE anderen Themen besprechen - nur Kursquellen!
+- Bei unbekannten Wertpapieren: Web-Suche nutzen für aktuellen Ticker
+- feed_url bei Yahoo: NUR das Suffix (.DE, .SW), NICHT den vollen Ticker
+
+## JSON-Format (STRIKT!)
+
+Deine Antwort MUSS valides JSON enthalten. Schreibe zuerst eine kurze Erklärung, dann das JSON:
+
+Beispiel:
+"Für Nestlé mit Schweizer ISIN (CH) verwende ich Yahoo Finance mit dem SIX-Suffix.
+
+```json
+{
+  "provider": "YAHOO",
+  "ticker": "NESN",
+  "feed_url": ".SW",
+  "confidence": 0.95,
+  "reason": "CH-ISIN → SIX Swiss Exchange (.SW)"
+}
+```"
+"##.to_string()
+}
+
+/// Build a user message for the quote assistant with security context
+pub fn build_quote_assistant_user_message(
+    security_name: &str,
+    isin: Option<&str>,
+    ticker: Option<&str>,
+    currency: &str,
+    current_feed: Option<&str>,
+    current_feed_url: Option<&str>,
+    problem: &str,
+    last_error: Option<&str>,
+) -> String {
+    let mut msg = format!(
+        "Finde die optimale Kursquelle für dieses Wertpapier:\n\n**Name:** {}\n**Währung:** {}",
+        security_name, currency
+    );
+
+    if let Some(isin) = isin {
+        msg.push_str(&format!("\n**ISIN:** {}", isin));
+    }
+
+    if let Some(ticker) = ticker {
+        msg.push_str(&format!("\n**Ticker:** {}", ticker));
+    }
+
+    if let Some(feed) = current_feed {
+        msg.push_str(&format!("\n**Aktueller Provider:** {}", feed));
+        if let Some(url) = current_feed_url {
+            msg.push_str(&format!(" ({})", url));
+        }
+    }
+
+    msg.push_str(&format!("\n\n**Problem:** {}", match problem {
+        "no_provider" => "Kein Kursanbieter konfiguriert",
+        "fetch_error" => "Kursabruf fehlgeschlagen",
+        "stale" => "Kurse veraltet (älter als 7 Tage)",
+        _ => problem,
+    }));
+
+    if let Some(error) = last_error {
+        msg.push_str(&format!("\n**Letzter Fehler:** {}", error));
+    }
+
+    msg.push_str("\n\nBitte analysiere und schlage die beste Kursquelle vor (JSON-Format).");
+
+    msg
 }

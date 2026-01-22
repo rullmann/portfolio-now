@@ -8,7 +8,7 @@
 use crate::ai::{
     claude, gemini, openai, perplexity,
     list_claude_models, list_openai_models, list_gemini_models, list_perplexity_models,
-    get_model_upgrade, get_models_for_provider, ModelInfo,
+    get_model_upgrade, get_models_for_provider, has_vision_support, ModelInfo,
     AiModelInfo, AiError, ChartAnalysisRequest, ChartAnalysisResponse, AnnotationAnalysisResponse,
     EnhancedChartAnalysisRequest, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
@@ -17,7 +17,8 @@ use crate::ai::{
     // Command parsing from ai/command_parser.rs
     parse_response_with_suggestions,
 };
-use serde::Deserialize;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Emitter};
 
 /// Analyze a chart using AI
@@ -146,6 +147,15 @@ pub fn get_vision_models(provider: String) -> Vec<ModelInfo> {
         .collect()
 }
 
+/// Check if a model supports vision/image input.
+///
+/// Returns true if the model can process images, false otherwise.
+/// This is used by the frontend to show/hide image upload UI.
+#[command]
+pub fn check_vision_support(model: String) -> bool {
+    has_vision_support(&model)
+}
+
 // ============================================================================
 // Portfolio Insights Commands
 // ============================================================================
@@ -247,14 +257,14 @@ pub struct PortfolioChatRequest {
 ///
 /// Sends user messages to AI with portfolio context injected.
 /// The AI can execute embedded commands for watchlist management and data queries.
+/// Supports image attachments if the model has vision capability.
 #[command]
 pub async fn chat_with_portfolio_assistant(
     _app: AppHandle,
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
-    // Load portfolio context from database with user name
-    // For chat, we always include technical signals (no progress events needed)
-    let context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
+    // Check if any message has image attachments
+    let has_images = request.messages.iter().any(|m| !m.attachments.is_empty());
 
     // Auto-upgrade deprecated models
     let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
@@ -263,6 +273,18 @@ pub async fn chat_with_portfolio_assistant(
     } else {
         request.model.clone()
     };
+
+    // SECURITY: Check if model supports vision when images are attached
+    if has_images && !has_vision_support(&model) {
+        return Err(format!(
+            "Das Modell '{}' unterstützt keine Bilder. Bitte wähle ein Vision-fähiges Modell wie Claude Sonnet, GPT-4o oder Gemini.",
+            model
+        ));
+    }
+
+    // Load portfolio context from database with user name
+    // For chat, we always include technical signals (no progress events needed)
+    let context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
 
     // Call the appropriate provider
     let result = match request.provider.as_str() {
@@ -349,8 +371,8 @@ pub async fn execute_confirmed_ai_action(
 // Transaction Execution Commands
 // ============================================================================
 
-use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand};
-use crate::commands::crud::{create_transaction, CreateTransactionRequest};
+use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand, TransactionDeleteCommand};
+use crate::commands::crud::{create_transaction, delete_transaction, CreateTransactionRequest, TransactionUnitData};
 use crate::events::{emit_data_changed, DataChangedPayload};
 
 /// Execute a confirmed transaction creation
@@ -472,6 +494,26 @@ pub fn execute_confirmed_portfolio_transfer(
     ))
 }
 
+/// Execute a confirmed transaction deletion
+///
+/// SECURITY: This command should only be called after explicit user confirmation.
+#[command]
+pub fn execute_confirmed_transaction_delete(
+    app: AppHandle,
+    payload: String,
+) -> Result<String, String> {
+    let cmd: TransactionDeleteCommand = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid delete payload: {}", e))?;
+
+    // Delete the transaction
+    delete_transaction(app.clone(), cmd.transaction_id)?;
+
+    Ok(format!(
+        "Transaktion #{} erfolgreich gelöscht",
+        cmd.transaction_id
+    ))
+}
+
 /// Check if transaction type is for portfolios
 fn is_portfolio_transaction(txn_type: &str) -> bool {
     matches!(
@@ -561,4 +603,756 @@ fn get_transaction_type_label(txn_type: &str) -> &'static str {
         "TRANSFER_OUT" => "Umbuchung (Ausgang)",
         _ => "Transaktion",
     }
+}
+
+// ============================================================================
+// Extracted Transactions Import (from image analysis)
+// ============================================================================
+
+/// Input for a single extracted transaction from image analysis
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ExtractedTransactionInput {
+    pub date: String,
+    pub txn_type: String,
+    pub security_name: Option<String>,
+    pub isin: Option<String>,
+    pub shares: Option<f64>,
+    pub gross_amount: Option<f64>,
+    pub gross_currency: Option<String>,
+    pub amount: Option<f64>,
+    pub currency: String,
+    pub fees: Option<f64>,
+    pub fees_foreign: Option<f64>,
+    pub fees_foreign_currency: Option<String>,
+    pub exchange_rate: Option<f64>,
+    pub taxes: Option<f64>,
+    pub note: Option<String>,
+}
+
+/// Result of importing extracted transactions
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportTransactionsResult {
+    pub imported_count: usize,
+    pub duplicates: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// Import error type to distinguish duplicates from other errors
+enum ImportSingleError {
+    Duplicate(String),
+    Other(String),
+}
+
+/// Import extracted transactions from image analysis
+///
+/// SECURITY: This command should only be called after explicit user confirmation.
+/// The transactions were extracted by AI from images and need user review before import.
+///
+/// portfolio_id: The portfolio to import transactions into (required for BUY/SELL/DELIVERY)
+/// delivery_mode: When true, BUY becomes DELIVERY_INBOUND, SELL becomes DELIVERY_OUTBOUND
+/// (same logic as PDF import - SSOT)
+#[command]
+pub fn import_extracted_transactions(
+    app: AppHandle,
+    transactions: Vec<ExtractedTransactionInput>,
+    portfolio_id: Option<i64>,
+    delivery_mode: bool,
+) -> Result<ImportTransactionsResult, String> {
+    if transactions.is_empty() {
+        return Err("Keine Transaktionen zum Importieren".to_string());
+    }
+
+    let mut imported_count = 0;
+    let mut duplicates: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for txn in &transactions {
+        // Each transaction is imported separately to avoid holding DB connection
+        // while calling create_transaction (which also needs the connection)
+        match import_single_extracted_transaction(&app, txn, portfolio_id, delivery_mode) {
+            Ok(_) => imported_count += 1,
+            Err(ImportSingleError::Duplicate(msg)) => duplicates.push(msg),
+            Err(ImportSingleError::Other(msg)) => errors.push(format!("{}: {}", txn.date, msg)),
+        }
+    }
+
+    // Only return error if nothing was imported AND there are real errors (not just duplicates)
+    if imported_count == 0 && duplicates.is_empty() && !errors.is_empty() {
+        return Err(format!("Keine Transaktionen importiert. Fehler: {}", errors.join("; ")));
+    }
+
+    Ok(ImportTransactionsResult {
+        imported_count,
+        duplicates,
+        errors,
+    })
+}
+
+/// Get possible DB transaction types for duplicate detection.
+/// Same logic as in pdf_import.rs - SSOT for duplicate check types.
+fn get_duplicate_check_types_for_string(txn_type: &str) -> Vec<&'static str> {
+    match txn_type.to_uppercase().as_str() {
+        "BUY" => vec!["BUY", "DELIVERY_INBOUND"],
+        "SELL" => vec!["SELL", "DELIVERY_OUTBOUND"],
+        "DELIVERY_INBOUND" | "TRANSFER_IN" => vec!["DELIVERY_INBOUND", "BUY"],
+        "DELIVERY_OUTBOUND" | "TRANSFER_OUT" => vec!["DELIVERY_OUTBOUND", "SELL"],
+        "DIVIDENDS" | "DIVIDEND" => vec!["DIVIDENDS"],
+        "INTEREST" => vec!["INTEREST"],
+        "DEPOSIT" => vec!["DEPOSIT"],
+        "REMOVAL" => vec!["REMOVAL"],
+        _ => vec![],
+    }
+}
+
+fn normalize_extracted_txn_type(raw: &str) -> String {
+    let normalized = raw.trim().to_uppercase();
+    let normalized = normalized.replace(' ', "_").replace('-', "_");
+
+    match normalized.as_str() {
+        "DIVIDEND" | "DIVIDENDS" | "DIVIDENDE" | "DIVIDENDEN" |
+        "AUSSCHÜTTUNG" | "AUSSCHUETTUNG" | "ERTRAG" | "ERTRAGSGUTSCHRIFT" |
+        "DIVIDENDENGUTSCHRIFT" => "DIVIDENDS".to_string(),
+        "BUY" | "KAUF" => "BUY".to_string(),
+        "SELL" | "VERKAUF" => "SELL".to_string(),
+        "DELIVERY_INBOUND" | "EINLIEFERUNG" => "DELIVERY_INBOUND".to_string(),
+        "DELIVERY_OUTBOUND" | "AUSLIEFERUNG" => "DELIVERY_OUTBOUND".to_string(),
+        "TRANSFER_IN" | "UMBUCHUNG_EIN" | "UMBUCHUNG_EINGANG" => "TRANSFER_IN".to_string(),
+        "TRANSFER_OUT" | "UMBUCHUNG_AUS" | "UMBUCHUNG_AUSGANG" => "TRANSFER_OUT".to_string(),
+        "DEPOSIT" | "EINZAHLUNG" | "EINLAGE" => "DEPOSIT".to_string(),
+        "REMOVAL" | "AUSZAHLUNG" | "ENTNAHME" => "REMOVAL".to_string(),
+        "INTEREST" | "ZINS" | "ZINSEN" => "INTEREST".to_string(),
+        "FEES" | "FEE" | "GEBUEHREN" | "GEBÜHREN" => "FEES".to_string(),
+        "TAXES" | "TAX" | "STEUERN" => "TAXES".to_string(),
+        _ => normalized,
+    }
+}
+
+/// Convert transaction type based on delivery mode (same logic as PDF import - SSOT)
+/// Always normalizes to uppercase for consistency.
+fn apply_delivery_mode(txn_type: &str, delivery_mode: bool) -> String {
+    let normalized = normalize_extracted_txn_type(txn_type);
+    if !delivery_mode {
+        return normalized;
+    }
+    match normalized.as_str() {
+        "BUY" => "DELIVERY_INBOUND".to_string(),
+        "SELL" => "DELIVERY_OUTBOUND".to_string(),
+        _ => normalized,
+    }
+}
+
+/// Import a single extracted transaction
+fn import_single_extracted_transaction(
+    app: &AppHandle,
+    txn: &ExtractedTransactionInput,
+    portfolio_id: Option<i64>,
+    delivery_mode: bool,
+) -> Result<i64, ImportSingleError> {
+    use crate::db;
+
+    let normalized_date = normalize_extracted_date(&txn.date, &txn.currency);
+
+    // Apply delivery mode conversion (BUY → DELIVERY_INBOUND, SELL → DELIVERY_OUTBOUND)
+    let effective_txn_type = apply_delivery_mode(&txn.txn_type, delivery_mode);
+
+    // First phase: gather all needed IDs from DB, then drop connection
+    let (security_id, owner_type, owner_id) = {
+        let conn_guard = db::get_connection()
+            .map_err(|e| ImportSingleError::Other(format!("Datenbankfehler: {}", e)))?;
+        let conn = conn_guard.as_ref()
+            .ok_or_else(|| ImportSingleError::Other("Datenbank nicht initialisiert".to_string()))?;
+
+        // Check if this transaction type requires a security
+        let requires_security = is_portfolio_transaction(&effective_txn_type)
+            || effective_txn_type == "DIVIDENDS";
+
+        // Find security if ISIN/name provided
+        let security_id = if let Some(isin) = &txn.isin {
+            // Skip "nicht verfügbar" or similar placeholder values
+            if isin.len() >= 10 && !isin.to_lowercase().contains("nicht") {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM pp_security WHERE isin = ?1 LIMIT 1"
+                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+                let security: Option<i64> = stmt.query_row([isin], |row| row.get(0)).ok();
+
+                if security.is_none() && requires_security {
+                    return Err(ImportSingleError::Other(format!("Wertpapier mit ISIN {} nicht gefunden. Bitte zuerst anlegen.", isin)));
+                }
+                security
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // If no security by ISIN, try by name
+        let security_id = if security_id.is_none() {
+            if let Some(name) = &txn.security_name {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM pp_security WHERE name LIKE ?1 LIMIT 1"
+                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+                let search_name = format!("%{}%", name);
+                let security: Option<i64> = stmt.query_row([&search_name], |row| row.get(0)).ok();
+
+                if security.is_none() && requires_security {
+                    return Err(ImportSingleError::Other(format!("Wertpapier '{}' nicht gefunden. Bitte zuerst anlegen.", name)));
+                }
+                security
+            } else {
+                None
+            }
+        } else {
+            security_id
+        };
+
+        // For DIVIDENDS, we MUST have a security
+        if effective_txn_type == "DIVIDENDS" && security_id.is_none() {
+            return Err(ImportSingleError::Other(
+                "Dividende ohne Wertpapier kann nicht importiert werden. Bitte ISIN oder Name angeben.".to_string()
+            ));
+        }
+
+        // Determine owner (portfolio or account)
+        let (owner_type, owner_id) = if is_portfolio_transaction(&effective_txn_type) {
+            // Use provided portfolio_id or fall back to first portfolio
+            let final_portfolio_id = if let Some(pid) = portfolio_id {
+                // Verify the portfolio exists and is not retired
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM pp_portfolio WHERE id = ?1 AND is_retired = 0"
+                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+                stmt.query_row([pid], |row| row.get::<_, i64>(0))
+                    .map_err(|_| ImportSingleError::Other(format!("Depot mit ID {} nicht gefunden oder inaktiv", pid)))?
+            } else {
+                // Fallback: Get first portfolio
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM pp_portfolio WHERE is_retired = 0 LIMIT 1"
+                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+                stmt.query_row([], |row| row.get(0))
+                    .map_err(|_| ImportSingleError::Other("Kein aktives Depot gefunden".to_string()))?
+            };
+
+            ("portfolio".to_string(), final_portfolio_id)
+        } else {
+            // Get first account matching currency
+            let mut stmt = conn.prepare(
+                "SELECT id FROM pp_account WHERE currency = ?1 AND is_retired = 0 LIMIT 1"
+            ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+            let account_id: Result<i64, _> = stmt.query_row([&txn.currency], |row| row.get(0));
+
+            if let Ok(id) = account_id {
+                ("account".to_string(), id)
+            } else {
+                // Fallback to any account
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM pp_account WHERE is_retired = 0 LIMIT 1"
+                ).map_err(|e| ImportSingleError::Other(format!("SQL Fehler: {}", e)))?;
+
+                let account_id: i64 = stmt.query_row([], |row| row.get(0))
+                    .map_err(|_| ImportSingleError::Other("Kein aktives Konto gefunden".to_string()))?;
+
+                ("account".to_string(), account_id)
+            }
+        };
+
+        // Duplicate detection (same logic as pdf_import.rs - SSOT)
+        if let Some(sec_id) = security_id {
+            let effective_amount = if effective_txn_type == "DIVIDENDS" {
+                compute_dividend_gross_amount(txn).or(txn.amount)
+            } else {
+                txn.amount
+            };
+            let amount_cents = effective_amount.map(|a| (a * 100.0).round() as i64).unwrap_or(0);
+            let txn_types = get_duplicate_check_types_for_string(&effective_txn_type);
+
+            if !txn_types.is_empty() {
+                // Use date prefix for LIKE comparison (handles time differences)
+                let date_pattern = format!("{}%", &normalized_date);
+                let type_placeholders = txn_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", i + 4))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let sql = format!(
+                    r#"
+                    SELECT 1 FROM pp_txn
+                    WHERE security_id = ?1
+                      AND date LIKE ?2
+                      AND ABS(amount - ?3) <= 1
+                      AND txn_type IN ({})
+                    LIMIT 1
+                    "#,
+                    type_placeholders
+                );
+
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    vec![&sec_id, &date_pattern, &amount_cents];
+                for t in &txn_types {
+                    params.push(t);
+                }
+
+                let is_duplicate: bool = conn
+                    .query_row(&sql, params.as_slice(), |_| Ok(true))
+                    .unwrap_or(false);
+
+                if is_duplicate {
+                    return Err(ImportSingleError::Duplicate(format!(
+                        "{} {} vom {} bereits vorhanden",
+                        txn.txn_type,
+                        txn.security_name.as_deref().unwrap_or("Unbekannt"),
+                        normalized_date
+                    )));
+                }
+            }
+        }
+
+        (security_id, owner_type, owner_id)
+    }; // conn_guard is dropped here
+
+    // Scale amounts (amount and fees are in decimal, need to convert to scaled integers)
+    let amount_scaled = if effective_txn_type == "DIVIDENDS" {
+        compute_dividend_gross_amount(txn)
+            .or(txn.amount)
+            .map(|a| (a * 100.0).round() as i64)
+            .unwrap_or(0)
+    } else {
+        txn.amount.map(|a| (a * 100.0).round() as i64).unwrap_or(0)
+    };
+
+    // For DIVIDENDS without shares: calculate shares from current holdings
+    // Formula: gross_amount / shares = dividend_per_share
+    // So we need to look up current holdings and store them as shares
+    let shares_input = txn.shares.filter(|s| *s > 0.0);
+    let shares_scaled = if effective_txn_type == "DIVIDENDS" && shares_input.is_none() {
+        // Look up current holdings for this security
+        if let Some(sec_id) = security_id {
+            let holdings_shares = {
+                let conn_guard = db::get_connection()
+                    .map_err(|e| ImportSingleError::Other(format!("Datenbankfehler: {}", e)))?;
+                let conn = conn_guard.as_ref()
+                    .ok_or_else(|| ImportSingleError::Other("Datenbank nicht initialisiert".to_string()))?;
+
+                // Get total holdings for this security across all portfolios (scaled by 10^8)
+                let sql = r#"
+                    SELECT COALESCE(SUM(CASE
+                        WHEN txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN shares
+                        WHEN txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -shares
+                        ELSE 0
+                    END), 0) as total_shares
+                    FROM pp_txn
+                    WHERE security_id = ?1
+                      AND owner_type = 'portfolio'
+                      AND date <= ?2
+                "#;
+
+                conn.query_row(sql, rusqlite::params![sec_id, &normalized_date], |row| row.get::<_, i64>(0))
+                    .unwrap_or(0)
+            };
+
+            if holdings_shares > 0 {
+                log::info!(
+                    "DIVIDENDS without shares: using current holdings {} for security_id {}",
+                    holdings_shares as f64 / 100_000_000.0,
+                    sec_id
+                );
+                Some(holdings_shares)
+            } else {
+                log::warn!(
+                    "DIVIDENDS without shares: no holdings found for security_id {} at date {}",
+                    sec_id,
+                    normalized_date
+                );
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        shares_input.map(|s| (s * 100_000_000.0).round() as i64)
+    };
+
+    // Build units for fees and taxes
+    let mut units: Vec<TransactionUnitData> = Vec::new();
+    let total_fees = normalize_extracted_fees(txn);
+    if let Some(fees) = total_fees {
+        if fees > 0.0 {
+            units.push(TransactionUnitData {
+                unit_type: "FEE".to_string(),
+                amount: (fees * 100.0).round() as i64,
+                currency: txn.currency.clone(),
+                forex_amount: None,
+                forex_currency: None,
+                exchange_rate: None,
+            });
+        }
+    }
+    if let Some(taxes) = txn.taxes {
+        if taxes > 0.0 {
+            units.push(TransactionUnitData {
+                unit_type: "TAX".to_string(),
+                amount: (taxes * 100.0).round() as i64,
+                currency: txn.currency.clone(),
+                forex_amount: None,
+                forex_currency: None,
+                exchange_rate: None,
+            });
+        }
+    }
+
+    // Build note
+    let mut note_parts: Vec<String> = Vec::new();
+    if let Some(original_note) = &txn.note {
+        note_parts.push(original_note.clone());
+    }
+    note_parts.push("Aus Bild-Erkennung importiert".to_string());
+    let note = Some(note_parts.join(" | "));
+
+    // Second phase: create the transaction (this will get its own DB connection)
+    let request = CreateTransactionRequest {
+        owner_type,
+        owner_id,
+        txn_type: effective_txn_type.clone(),
+        date: normalized_date,
+        amount: amount_scaled,
+        currency: txn.currency.clone(),
+        shares: shares_scaled,
+        security_id,
+        note,
+        units: if units.is_empty() { None } else { Some(units) },
+        reference_account_id: None,
+    };
+
+    let result = create_transaction(app.clone(), request)
+        .map_err(|e| ImportSingleError::Other(format!("Fehler: {}", e)))?;
+
+    Ok(result.id)
+}
+
+fn normalize_extracted_fees(txn: &ExtractedTransactionInput) -> Option<f64> {
+    let mut total = txn.fees.unwrap_or(0.0);
+    if let Some(foreign) = txn.fees_foreign {
+        if let Some(foreign_currency) = txn.fees_foreign_currency.as_ref() {
+            if foreign_currency.eq_ignore_ascii_case(&txn.currency) {
+                total += foreign;
+            } else if let Some(rate) = txn.exchange_rate {
+                total += foreign * rate;
+            }
+        } else if let Some(rate) = txn.exchange_rate {
+            total += foreign * rate;
+        }
+    }
+
+    if total > 0.0 {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+fn compute_dividend_gross_amount(txn: &ExtractedTransactionInput) -> Option<f64> {
+    if let Some(gross) = txn.gross_amount {
+        if let Some(gross_currency) = txn.gross_currency.as_ref() {
+            if gross_currency.eq_ignore_ascii_case(&txn.currency) {
+                return Some(gross);
+            }
+            if let Some(rate) = txn.exchange_rate {
+                return Some(gross * rate);
+            }
+        } else {
+            return Some(gross);
+        }
+    }
+
+    if let (Some(net), Some(taxes)) = (txn.amount, txn.taxes) {
+        if net > 0.0 && taxes >= 0.0 {
+            return Some(net + taxes);
+        }
+    }
+
+    None
+}
+
+fn normalize_extracted_date(raw: &str, currency: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return raw.to_string();
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        return date.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y/%m/%d") {
+        return date.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(date) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S%.f") {
+        return date.date().format("%Y-%m-%d").to_string();
+    }
+    if let Ok(date) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+        return date.date().format("%Y-%m-%d").to_string();
+    }
+
+    let prefer_mdy = currency.eq_ignore_ascii_case("USD");
+    if let Some(date) = parse_numeric_date_with_sep(trimmed, '.', prefer_mdy) {
+        return date.format("%Y-%m-%d").to_string();
+    }
+    if let Some(date) = parse_numeric_date_with_sep(trimmed, '/', prefer_mdy) {
+        return date.format("%Y-%m-%d").to_string();
+    }
+    if let Some(date) = parse_numeric_date_with_sep(trimmed, '-', prefer_mdy) {
+        return date.format("%Y-%m-%d").to_string();
+    }
+    if let Some(date) = parse_month_name_date(trimmed) {
+        return date.format("%Y-%m-%d").to_string();
+    }
+
+    raw.to_string()
+}
+
+fn parse_numeric_date_with_sep(s: &str, sep: char, prefer_mdy: bool) -> Option<NaiveDate> {
+    let parts: Vec<&str> = s.split(sep).map(|p| p.trim()).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let (p0, p1, p2) = (parts[0], parts[1], parts[2]);
+    if p0.len() == 4 {
+        let year = p0.parse::<i32>().ok()?;
+        let month = p1.parse::<u32>().ok()?;
+        let day = p2.parse::<u32>().ok()?;
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+    if p2.len() == 4 {
+        let year = p2.parse::<i32>().ok()?;
+        let a = p0.parse::<u32>().ok()?;
+        let b = p1.parse::<u32>().ok()?;
+        let (month, day) = if a > 12 && b <= 12 {
+            (b, a)
+        } else if b > 12 && a <= 12 {
+            (a, b)
+        } else if prefer_mdy {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
+    None
+}
+
+fn parse_month_name_date(s: &str) -> Option<NaiveDate> {
+    let cleaned = s
+        .to_lowercase()
+        .replace(',', " ")
+        .replace('.', " ");
+    let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return None;
+    }
+
+    if let (Ok(day), Some(month), Ok(year)) = (
+        tokens[0].parse::<u32>(),
+        month_name_to_number(tokens[1]),
+        tokens[2].parse::<i32>(),
+    ) {
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
+    if let (Some(month), Ok(day), Ok(year)) = (
+        month_name_to_number(tokens[0]),
+        tokens[1].parse::<u32>(),
+        tokens[2].parse::<i32>(),
+    ) {
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
+    None
+}
+
+fn month_name_to_number(s: &str) -> Option<u32> {
+    match s {
+        "jan" | "januar" | "january" => Some(1),
+        "feb" | "februar" | "february" => Some(2),
+        "mar" | "mär" | "maerz" | "märz" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" | "mai" => Some(5),
+        "jun" | "juni" | "june" => Some(6),
+        "jul" | "juli" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "okt" | "oktober" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "dez" | "dezember" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+// ============================================================================
+// Transaction Enrichment (for preview with holdings data)
+// ============================================================================
+
+/// Output for enriched transaction (with shares from holdings for dividends)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EnrichedTransactionOutput {
+    pub date: String,
+    pub txn_type: String,
+    pub security_name: Option<String>,
+    pub isin: Option<String>,
+    pub shares: Option<f64>,
+    pub shares_from_holdings: bool,
+    pub gross_amount: Option<f64>,
+    pub gross_currency: Option<String>,
+    pub amount: Option<f64>,
+    pub currency: String,
+    pub fees: Option<f64>,
+    pub fees_foreign: Option<f64>,
+    pub fees_foreign_currency: Option<String>,
+    pub exchange_rate: Option<f64>,
+    pub taxes: Option<f64>,
+    pub note: Option<String>,
+}
+
+/// Enrich extracted transactions with holdings data
+///
+/// For DIVIDEND transactions without shares, this looks up current holdings
+/// and calculates the shares. This allows the preview to show the shares
+/// BEFORE the actual import happens.
+#[command]
+pub fn enrich_extracted_transactions(
+    transactions: Vec<ExtractedTransactionInput>,
+) -> Result<Vec<EnrichedTransactionOutput>, String> {
+    use crate::db;
+
+    let conn_guard = db::get_connection()
+        .map_err(|e| format!("Datenbankfehler: {}", e))?;
+    let conn = conn_guard.as_ref()
+        .ok_or_else(|| "Datenbank nicht initialisiert".to_string())?;
+
+    let mut enriched: Vec<EnrichedTransactionOutput> = Vec::new();
+
+    for txn in &transactions {
+        let normalized_date = normalize_extracted_date(&txn.date, &txn.currency);
+        let effective_txn_type = normalize_extracted_txn_type(&txn.txn_type);
+        let shares_input = txn.shares.filter(|s| *s > 0.0);
+
+        // Check if this is a DIVIDEND without shares
+        let is_dividend_without_shares = effective_txn_type == "DIVIDENDS" && shares_input.is_none();
+
+        let (shares, shares_from_holdings) = if is_dividend_without_shares {
+            // Try to find security and look up holdings
+            let security_id = find_security_id(conn, &txn.isin, &txn.security_name);
+
+            if let Some(sec_id) = security_id {
+                // Get total holdings for this security at the dividend date
+                let sql = r#"
+                    SELECT COALESCE(SUM(CASE
+                        WHEN txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN shares
+                        WHEN txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -shares
+                        ELSE 0
+                    END), 0) as total_shares
+                    FROM pp_txn
+                    WHERE security_id = ?1
+                      AND owner_type = 'portfolio'
+                      AND date <= ?2
+                "#;
+
+                let holdings_shares: i64 = conn
+                    .query_row(sql, rusqlite::params![sec_id, &normalized_date], |row| row.get(0))
+                    .unwrap_or(0);
+
+                if holdings_shares > 0 {
+                    // Convert from scaled (10^8) to decimal
+                    let shares_decimal = holdings_shares as f64 / 100_000_000.0;
+                    log::info!(
+                        "Enriched DIVIDEND with holdings: {} shares for security_id {} at {}",
+                        shares_decimal,
+                        sec_id,
+                        normalized_date
+                    );
+                    (Some(shares_decimal), true)
+                } else {
+                    log::warn!(
+                        "No holdings found for DIVIDEND security_id {} at {}",
+                        sec_id,
+                        normalized_date
+                    );
+                    (None, false)
+                }
+            } else {
+                log::info!(
+                    "Security lookup for DIVIDEND enrichment failed: isin={:?}, name={:?} -> not found in database",
+                    txn.isin,
+                    txn.security_name
+                );
+                (None, false)
+            }
+        } else {
+            (shares_input, false)
+        };
+
+        enriched.push(EnrichedTransactionOutput {
+            date: txn.date.clone(),
+            txn_type: txn.txn_type.clone(),
+            security_name: txn.security_name.clone(),
+            isin: txn.isin.clone(),
+            shares,
+            shares_from_holdings,
+            gross_amount: txn.gross_amount,
+            gross_currency: txn.gross_currency.clone(),
+            amount: txn.amount,
+            currency: txn.currency.clone(),
+            fees: txn.fees,
+            fees_foreign: txn.fees_foreign,
+            fees_foreign_currency: txn.fees_foreign_currency.clone(),
+            exchange_rate: txn.exchange_rate,
+            taxes: txn.taxes,
+            note: txn.note.clone(),
+        });
+    }
+
+    Ok(enriched)
+}
+
+/// Helper to find security ID by ISIN or name
+fn find_security_id(conn: &rusqlite::Connection, isin: &Option<String>, name: &Option<String>) -> Option<i64> {
+    // First try by ISIN
+    if let Some(isin_val) = isin {
+        if isin_val.len() >= 10 && !isin_val.to_lowercase().contains("nicht") {
+            let result: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM pp_security WHERE isin = ?1 LIMIT 1",
+                    [isin_val],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if result.is_some() {
+                return result;
+            }
+        }
+    }
+
+    // Then try by name
+    if let Some(name_val) = name {
+        let search_name = format!("%{}%", name_val);
+        return conn
+            .query_row(
+                "SELECT id FROM pp_security WHERE name LIKE ?1 LIMIT 1",
+                [&search_name],
+                |row| row.get(0),
+            )
+            .ok();
+    }
+
+    None
 }

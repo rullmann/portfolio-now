@@ -813,7 +813,16 @@ pub async fn analyze_opportunities(
     Err(last_error)
 }
 
+/// Request body for multimodal chat (with system instruction)
+#[derive(Serialize)]
+struct MultimodalChatRequest {
+    contents: Vec<Content>,
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<SystemInstruction>,
+}
+
 /// Chat with portfolio assistant using Gemini
+/// Supports both text-only and multimodal (with images) messages
 pub async fn chat(
     model: &str,
     api_key: &str,
@@ -830,25 +839,8 @@ pub async fn chat(
         .build()
         .map_err(|e| AiError::network_error("Gemini", model, &e.to_string()))?;
 
-    // Convert messages to Gemini format
-    let gemini_contents: Vec<TextContent> = messages
-        .iter()
-        .map(|m| TextContent {
-            role: if m.role == "assistant" { "model".to_string() } else { m.role.clone() },
-            parts: vec![TextPart {
-                text: m.content.clone(),
-            }],
-        })
-        .collect();
-
-    let request_body = TextGenerateContentRequest {
-        contents: gemini_contents,
-        system_instruction: Some(SystemInstruction {
-            parts: vec![TextPart {
-                text: build_chat_system_prompt(context),
-            }],
-        }),
-    };
+    // Check if any message has image attachments
+    let has_images = messages.iter().any(|m| !m.attachments.is_empty());
 
     let api_endpoint = api_url(model, api_key);
     let mut last_error = AiError::other("Gemini", model, "No attempts made");
@@ -858,7 +850,71 @@ pub async fn chat(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(&api_endpoint).json(&request_body).send().await {
+        // Use multimodal format if we have images, otherwise use text-only
+        let response = if has_images {
+            // Convert messages to multimodal Gemini format
+            let gemini_contents: Vec<Content> = messages
+                .iter()
+                .map(|m| {
+                    let mut parts: Vec<Part> = Vec::new();
+
+                    // Add images first
+                    for attachment in &m.attachments {
+                        parts.push(Part::InlineData {
+                            inline_data: InlineData {
+                                mime_type: attachment.mime_type.clone(),
+                                data: attachment.data.clone(),
+                            },
+                        });
+                    }
+
+                    // Add text content
+                    if !m.content.is_empty() {
+                        parts.push(Part::Text { text: m.content.clone() });
+                    }
+
+                    Content {
+                        role: if m.role == "assistant" { "model".to_string() } else { m.role.clone() },
+                        parts,
+                    }
+                })
+                .collect();
+
+            let request_body = MultimodalChatRequest {
+                contents: gemini_contents,
+                system_instruction: Some(SystemInstruction {
+                    parts: vec![TextPart {
+                        text: build_chat_system_prompt(context),
+                    }],
+                }),
+            };
+
+            client.post(&api_endpoint).json(&request_body).send().await
+        } else {
+            // Use simple text format for text-only messages
+            let gemini_contents: Vec<TextContent> = messages
+                .iter()
+                .map(|m| TextContent {
+                    role: if m.role == "assistant" { "model".to_string() } else { m.role.clone() },
+                    parts: vec![TextPart {
+                        text: m.content.clone(),
+                    }],
+                })
+                .collect();
+
+            let request_body = TextGenerateContentRequest {
+                contents: gemini_contents,
+                system_instruction: Some(SystemInstruction {
+                    parts: vec![TextPart {
+                        text: build_chat_system_prompt(context),
+                    }],
+                }),
+            };
+
+            client.post(&api_endpoint).json(&request_body).send().await
+        };
+
+        let response = match response {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {

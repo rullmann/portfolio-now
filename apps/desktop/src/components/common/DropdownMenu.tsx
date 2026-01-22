@@ -63,7 +63,7 @@ export function DropdownMenu({
         <div
           className={`absolute top-full mt-1 ${
             align === 'right' ? 'right-0' : 'left-0'
-          } min-w-[180px] bg-popover border border-border rounded-md shadow-lg py-1 z-50`}
+          } min-w-[220px] bg-popover border border-border rounded-md shadow-lg py-1 z-50`}
           role="menu"
         >
           {children}

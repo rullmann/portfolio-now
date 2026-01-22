@@ -934,7 +934,23 @@ pub async fn analyze_opportunities(
     Err(last_error)
 }
 
+/// Multimodal chat message (with images)
+#[derive(Serialize)]
+struct MultimodalChatMessage {
+    role: String,
+    content: Vec<ContentPart>,
+}
+
+/// Multimodal chat completion request
+#[derive(Serialize)]
+struct MultimodalChatCompletionRequest {
+    model: String,
+    max_tokens: u32,
+    messages: Vec<MultimodalChatMessage>,
+}
+
 /// Chat with portfolio assistant using OpenAI
+/// Supports both text-only and multimodal (with images) messages
 pub async fn chat(
     model: &str,
     api_key: &str,
@@ -960,6 +976,9 @@ pub async fn chat(
     let use_responses_api = uses_responses_api(model);
     let use_web_search = supports_web_search(model);
 
+    // Check if any message has image attachments
+    let has_images = messages.iter().any(|m| !m.attachments.is_empty());
+
     let mut last_error = AiError::other("OpenAI", model, "No attempts made");
 
     for attempt in 0..=MAX_RETRIES {
@@ -967,7 +986,7 @@ pub async fn chat(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        // GPT-5 uses Responses API
+        // GPT-5 uses Responses API (text-only for now)
         if use_responses_api {
             // Build messages for Responses API
             let responses_messages: Vec<ResponsesMessage> = messages
@@ -1032,37 +1051,79 @@ pub async fn chat(
         }
 
         // GPT-4.x and older use Chat Completions API
-        let mut openai_messages = vec![TextChatMessage {
-            role: "system".to_string(),
-            content: system_prompt.clone(),
-        }];
+        let response = if has_images {
+            // Build multimodal messages with images
+            let mut openai_messages: Vec<MultimodalChatMessage> = vec![
+                MultimodalChatMessage {
+                    role: "system".to_string(),
+                    content: vec![ContentPart::Text { text: system_prompt.clone() }],
+                }
+            ];
 
-        for m in messages {
-            openai_messages.push(TextChatMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
-            });
-        }
+            for m in messages {
+                let mut content: Vec<ContentPart> = Vec::new();
 
-        // Send request with or without web search tool
-        let response = if use_web_search {
-            let request_body = TextChatWithToolsRequest {
+                // Add images first
+                for attachment in &m.attachments {
+                    content.push(ContentPart::ImageUrl {
+                        image_url: ImageUrl {
+                            url: format!("data:{};base64,{}", attachment.mime_type, attachment.data),
+                        },
+                    });
+                }
+
+                // Add text content
+                if !m.content.is_empty() {
+                    content.push(ContentPart::Text { text: m.content.clone() });
+                }
+
+                openai_messages.push(MultimodalChatMessage {
+                    role: m.role.clone(),
+                    content,
+                });
+            }
+
+            let request_body = MultimodalChatCompletionRequest {
                 model: model.to_string(),
                 max_tokens: MAX_TOKENS_CHAT,
-                messages: openai_messages.clone(),
-                tools: vec![WebSearchTool {
-                    tool_type: "web_search_preview".to_string(),
-                    search_context_size: Some("medium".to_string()),
-                }],
+                messages: openai_messages,
             };
+
             client.post(CHAT_API_URL).json(&request_body).send().await
         } else {
-            let request_body = TextChatCompletionRequest {
-                model: model.to_string(),
-                max_tokens: MAX_TOKENS_CHAT,
-                messages: openai_messages.clone(),
-            };
-            client.post(CHAT_API_URL).json(&request_body).send().await
+            // Text-only messages
+            let mut openai_messages = vec![TextChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.clone(),
+            }];
+
+            for m in messages {
+                openai_messages.push(TextChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                });
+            }
+
+            // Send request with or without web search tool
+            if use_web_search {
+                let request_body = TextChatWithToolsRequest {
+                    model: model.to_string(),
+                    max_tokens: MAX_TOKENS_CHAT,
+                    messages: openai_messages.clone(),
+                    tools: vec![WebSearchTool {
+                        tool_type: "web_search_preview".to_string(),
+                        search_context_size: Some("medium".to_string()),
+                    }],
+                };
+                client.post(CHAT_API_URL).json(&request_body).send().await
+            } else {
+                let request_body = TextChatCompletionRequest {
+                    model: model.to_string(),
+                    max_tokens: MAX_TOKENS_CHAT,
+                    messages: openai_messages.clone(),
+                };
+                client.post(CHAT_API_URL).json(&request_body).send().await
+            }
         };
 
         let response = match response {

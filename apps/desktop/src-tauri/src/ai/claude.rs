@@ -866,7 +866,18 @@ pub async fn analyze_opportunities(
     Err(last_error)
 }
 
+/// Request body for multimodal chat (with system prompt)
+#[derive(Serialize)]
+struct MultimodalChatRequest {
+    model: String,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+    messages: Vec<Message>,
+}
+
 /// Chat with portfolio assistant using Claude
+/// Supports both text-only and multimodal (with images) messages
 pub async fn chat(
     model: &str,
     api_key: &str,
@@ -892,21 +903,8 @@ pub async fn chat(
         .build()
         .map_err(|e| AiError::network_error("Claude", model, &e.to_string()))?;
 
-    // Convert messages to Claude format
-    let claude_messages: Vec<TextMessage> = messages
-        .iter()
-        .map(|m| TextMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        })
-        .collect();
-
-    let request_body = TextMessagesRequest {
-        model: model.to_string(),
-        max_tokens: MAX_TOKENS_CHAT,
-        system: Some(build_chat_system_prompt(context)),
-        messages: claude_messages,
-    };
+    // Check if any message has image attachments
+    let has_images = messages.iter().any(|m| !m.attachments.is_empty());
 
     let mut last_error = AiError::other("Claude", model, "No attempts made");
 
@@ -915,7 +913,68 @@ pub async fn chat(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        let response = match client.post(API_URL).json(&request_body).send().await {
+        // Use multimodal format if we have images, otherwise use text-only
+        let response = if has_images {
+            // Convert messages to multimodal Claude format
+            let claude_messages: Vec<Message> = messages
+                .iter()
+                .map(|m| {
+                    let mut content: Vec<ContentBlock> = Vec::new();
+
+                    // Add images first (if any)
+                    for attachment in &m.attachments {
+                        content.push(ContentBlock::Image {
+                            source: ImageSource {
+                                source_type: "base64".to_string(),
+                                media_type: attachment.mime_type.clone(),
+                                data: attachment.data.clone(),
+                            },
+                        });
+                    }
+
+                    // Add text content
+                    if !m.content.is_empty() {
+                        content.push(ContentBlock::Text {
+                            text: m.content.clone(),
+                        });
+                    }
+
+                    Message {
+                        role: m.role.clone(),
+                        content,
+                    }
+                })
+                .collect();
+
+            let request_body = MultimodalChatRequest {
+                model: model.to_string(),
+                max_tokens: MAX_TOKENS_CHAT,
+                system: Some(build_chat_system_prompt(context)),
+                messages: claude_messages,
+            };
+
+            client.post(API_URL).json(&request_body).send().await
+        } else {
+            // Use simple text format for text-only messages
+            let claude_messages: Vec<TextMessage> = messages
+                .iter()
+                .map(|m| TextMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                })
+                .collect();
+
+            let request_body = TextMessagesRequest {
+                model: model.to_string(),
+                max_tokens: MAX_TOKENS_CHAT,
+                system: Some(build_chat_system_prompt(context)),
+                messages: claude_messages,
+            };
+
+            client.post(API_URL).json(&request_body).send().await
+        };
+
+        let response = match response {
             Ok(resp) => resp,
             Err(e) => {
                 last_error = if e.is_timeout() {

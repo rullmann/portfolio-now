@@ -8,14 +8,13 @@
 //! - Alpha Vantage (Aktien, ETFs - API-Key erforderlich)
 //! - Twelve Data (Schweizer Aktien, internationale Märkte - API-Key erforderlich)
 //! - TradingView (Globale Märkte - inoffizielle API)
-//! - Portfolio Report (Deutsche Fonds, ETFs)
 
 pub mod alphavantage;
+pub mod assistant;
 pub mod coingecko;
 pub mod ecb;
 pub mod finnhub;
 pub mod kraken;
-pub mod portfolio_report;
 pub mod suggestion;
 pub mod tradingview;
 pub mod twelvedata;

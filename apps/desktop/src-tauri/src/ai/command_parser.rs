@@ -8,6 +8,7 @@
 //! injection attacks where malicious data could trigger unwanted actions.
 
 use crate::commands::ai_helpers;
+use chrono::{NaiveDate, Local};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -369,7 +370,7 @@ pub fn execute_db_queries(queries: &[DbQuery]) -> Vec<String> {
 // Transaction Create Commands
 // ============================================================================
 
-use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand};
+use crate::ai::types::{TransactionCreateCommand, PortfolioTransferCommand, TransactionDeleteCommand};
 
 /// Parse transaction create commands from AI response
 ///
@@ -480,6 +481,470 @@ fn format_transfer_description(cmd: &PortfolioTransferCommand) -> String {
     )
 }
 
+/// Parse transaction delete commands from AI response
+///
+/// Extracts `[[TRANSACTION_DELETE:...]]` commands.
+/// SECURITY: These are returned as SUGGESTIONS, never auto-executed.
+pub fn parse_transaction_delete_commands(response: &str) -> (Vec<TransactionDeleteCommand>, String) {
+    let mut commands = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Match [[TRANSACTION_DELETE:{...}]]
+    let cmd_re = Regex::new(r#"\[\[TRANSACTION_DELETE:\s*(\{[^]]+\})\]\]"#).unwrap();
+
+    for cap in cmd_re.captures_iter(response) {
+        let json_str = &cap[1];
+
+        // Try to parse as JSON
+        if let Ok(cmd) = serde_json::from_str::<TransactionDeleteCommand>(json_str) {
+            commands.push(cmd);
+        } else {
+            log::warn!("Failed to parse TRANSACTION_DELETE command: {}", json_str);
+        }
+    }
+
+    // Remove command tags from response
+    let clean_re = Regex::new(r#"\[\[TRANSACTION_DELETE:[^\]]*\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim().to_string();
+
+    (commands, cleaned_response)
+}
+
+// ============================================================================
+// Date Validation and Correction
+// ============================================================================
+
+/// Validate and potentially correct an ISO date string (YYYY-MM-DD)
+///
+/// Returns the corrected date string if valid, or None if the date is invalid.
+/// This function attempts to fix common AI misreadings:
+/// - Swapped month/day (if day > 12 and month <= 12)
+/// - Non-ISO formats that can be converted
+fn validate_and_correct_date(date_str: &str) -> Option<String> {
+    let trimmed = date_str.trim();
+
+    // Try parsing as ISO format first
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        return validate_date_plausibility(date);
+    }
+
+    // Try DD.MM.YYYY (German format) and convert to ISO
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%d.%m.%Y") {
+        return validate_date_plausibility(date);
+    }
+
+    // Try DD/MM/YYYY (EU format) and convert to ISO
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%d/%m/%Y") {
+        return validate_date_plausibility(date);
+    }
+
+    // Try MM/DD/YYYY (US format) - only if it makes sense
+    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%m/%d/%Y") {
+        // US format is less common for EU brokers, validate carefully
+        return validate_date_plausibility(date);
+    }
+
+    // If we have something like "YYYY-MM-DD" with invalid values, try to fix
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    if parts.len() == 3 {
+        if let (Ok(year), Ok(month), Ok(day)) = (
+            parts[0].parse::<i32>(),
+            parts[1].parse::<u32>(),
+            parts[2].parse::<u32>(),
+        ) {
+            // Check if month and day might be swapped
+            if month > 12 && day <= 12 {
+                // Month and day are likely swapped
+                if let Some(date) = NaiveDate::from_ymd_opt(year, day, month) {
+                    log::warn!("Date correction: {} looks like swapped MM/DD, correcting to {}", trimmed, date);
+                    return validate_date_plausibility(date);
+                }
+            }
+        }
+    }
+
+    log::warn!("Could not validate date: {}", trimmed);
+    None
+}
+
+/// Check if a date is plausible (not too far in future, not too old)
+fn validate_date_plausibility(date: NaiveDate) -> Option<String> {
+    let today = Local::now().date_naive();
+    let min_date = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    let max_date = today + chrono::Duration::days(30); // Allow up to 30 days in future for settlements
+
+    if date < min_date {
+        log::warn!("Date {} is too old (before 2000), likely AI misread", date);
+        return None;
+    }
+
+    if date > max_date {
+        log::warn!("Date {} is too far in the future, likely AI misread", date);
+        return None;
+    }
+
+    Some(date.format("%Y-%m-%d").to_string())
+}
+
+/// Validate extracted transaction and fix common issues
+fn normalize_extracted_txn_type(raw: &str) -> String {
+    let normalized = raw.trim().to_uppercase();
+    let normalized = normalized.replace(' ', "_").replace('-', "_");
+
+    match normalized.as_str() {
+        // Dividends
+        "DIVIDEND" | "DIVIDENDS" | "DIVIDENDE" | "DIVIDENDEN" |
+        "AUSSCHÜTTUNG" | "AUSSCHUETTUNG" | "ERTRAG" | "ERTRAGSGUTSCHRIFT" |
+        "DIVIDENDENGUTSCHRIFT" => "DIVIDENDS".to_string(),
+        // Buys / Sells
+        "BUY" | "KAUF" => "BUY".to_string(),
+        "SELL" | "VERKAUF" => "SELL".to_string(),
+        // Transfers / Deliveries
+        "DELIVERY_INBOUND" | "EINLIEFERUNG" => "DELIVERY_INBOUND".to_string(),
+        "DELIVERY_OUTBOUND" | "AUSLIEFERUNG" => "DELIVERY_OUTBOUND".to_string(),
+        "TRANSFER_IN" | "UMBUCHUNG_EIN" | "UMBUCHUNG_EINGANG" => "TRANSFER_IN".to_string(),
+        "TRANSFER_OUT" | "UMBUCHUNG_AUS" | "UMBUCHUNG_AUSGANG" => "TRANSFER_OUT".to_string(),
+        // Cash
+        "DEPOSIT" | "EINZAHLUNG" | "EINLAGE" => "DEPOSIT".to_string(),
+        "REMOVAL" | "AUSZAHLUNG" | "ENTNAHME" => "REMOVAL".to_string(),
+        "INTEREST" | "ZINS" | "ZINSEN" => "INTEREST".to_string(),
+        "FEES" | "FEE" | "GEBUEHREN" | "GEBÜHREN" => "FEES".to_string(),
+        "TAXES" | "TAX" | "STEUERN" => "TAXES".to_string(),
+        _ => normalized,
+    }
+}
+
+fn validate_extracted_transaction(txn: &mut ExtractedTransaction) {
+    let normalized_type = normalize_extracted_txn_type(&txn.txn_type);
+    if normalized_type != txn.txn_type {
+        log::info!(
+            "Normalized txn_type from '{}' to '{}'",
+            txn.txn_type,
+            normalized_type
+        );
+        txn.txn_type = normalized_type;
+    }
+
+    // Validate and correct the date
+    if let Some(corrected) = validate_and_correct_date(&txn.date) {
+        if corrected != txn.date {
+            log::info!("Corrected transaction date from '{}' to '{}'", txn.date, corrected);
+            txn.date = corrected;
+        }
+    } else {
+        log::warn!("Invalid date '{}' in extracted transaction for '{}'",
+            txn.date,
+            txn.security_name.as_deref().unwrap_or("unknown"));
+    }
+
+    // Validate value_date if present
+    if let Some(ref vd) = txn.value_date {
+        if let Some(corrected) = validate_and_correct_date(vd) {
+            if corrected != *vd {
+                log::info!("Corrected value date from '{}' to '{}'", vd, corrected);
+                txn.value_date = Some(corrected);
+            }
+        }
+    }
+
+    // Normalize shares (AI sometimes returns 0 or negative for buys/dividends)
+    if let Some(shares) = txn.shares {
+        if (txn.txn_type == "BUY" || txn.txn_type == "DELIVERY_INBOUND") && shares < 0.0 {
+            txn.shares = Some(shares.abs());
+        } else if shares <= 0.0 {
+            txn.shares = None;
+        }
+    }
+
+    // Ensure amount is positive for buys, negative values might indicate wrong sign
+    if let Some(amount) = txn.amount {
+        if amount < 0.0 && (txn.txn_type == "BUY" || txn.txn_type == "DELIVERY_INBOUND") {
+            txn.amount = Some(amount.abs());
+        }
+    }
+}
+
+// ============================================================================
+// Extracted Transactions from Images
+// ============================================================================
+
+/// A single transaction extracted from an image (e.g., bank statement screenshot)
+///
+/// Supports currency conversion details for foreign currency transactions:
+/// - `gross_amount` / `gross_currency`: Original transaction amount in foreign currency
+/// - `amount` / `currency`: Final amount in account/portfolio currency (after conversion)
+/// - `exchange_rate`: The conversion rate used (foreign → local)
+/// - `price_per_share`: Price per share in the transaction currency
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedTransaction {
+    pub date: String,
+    #[serde(alias = "type")]
+    pub txn_type: String, // BUY, SELL, DIVIDENDS, DEPOSIT, REMOVAL, etc.
+    pub security_name: Option<String>,
+    pub isin: Option<String>,
+    pub wkn: Option<String>,
+    pub ticker: Option<String>,
+    pub shares: Option<f64>, // Unscaled shares (e.g., 10.5)
+
+    // Primary amount (in account/portfolio currency after conversion)
+    pub amount: Option<f64>, // Unscaled amount (e.g., 1500.00 EUR)
+    pub currency: String,    // Account/portfolio currency (e.g., "EUR")
+
+    // Original foreign currency details (if different from account currency)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gross_amount: Option<f64>,   // Original amount in foreign currency (e.g., 1650.00 USD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gross_currency: Option<String>, // Foreign currency (e.g., "USD")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange_rate: Option<f64>,  // Exchange rate (foreign → local, e.g., 0.91 for USD→EUR)
+
+    // Price per share
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_per_share: Option<f64>,         // Price in transaction currency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_per_share_currency: Option<String>, // Currency of price_per_share (usually same as gross_currency or currency)
+
+    // Fees and taxes (can also have foreign currency equivalents)
+    pub fees: Option<f64>,  // Unscaled fees in account currency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fees_foreign: Option<f64>,     // Fees in foreign currency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fees_foreign_currency: Option<String>,
+
+    pub taxes: Option<f64>, // Unscaled taxes in account currency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taxes_foreign: Option<f64>,    // Taxes in foreign currency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taxes_foreign_currency: Option<String>,
+
+    // Additional info
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_date: Option<String>,    // Valuta/settlement date if different from trade date
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,      // Broker order/reference number
+}
+
+/// Container for multiple extracted transactions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedTransactionsPayload {
+    pub transactions: Vec<ExtractedTransaction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_description: Option<String>, // e.g., "Kontoauszug Januar 2024"
+}
+
+/// Parse extracted transactions from AI response (from image analysis)
+///
+/// Extracts `[[EXTRACTED_TRANSACTIONS:...]]` commands.
+/// SECURITY: These are returned as SUGGESTIONS, never auto-executed.
+pub fn parse_extracted_transactions(response: &str) -> (Vec<ExtractedTransactionsPayload>, String) {
+    let mut payloads = Vec::new();
+    let mut cleaned_response = response.to_string();
+    let marker = "[[EXTRACTED_TRANSACTIONS:";
+    let end_marker = "]]";
+
+    // Find all occurrences of the marker and extract JSON by counting braces
+    let mut search_start = 0;
+    while let Some(start_idx) = cleaned_response[search_start..].find(marker) {
+        let abs_start = search_start + start_idx;
+        let json_start = abs_start + marker.len();
+
+        // Find matching closing braces by counting (using char_indices for correct byte positions)
+        let mut brace_count = 0;
+        let mut json_end = None;
+
+        for (byte_offset, c) in cleaned_response[json_start..].char_indices() {
+            match c {
+                '{' => brace_count += 1,
+                '}' => {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        // byte_offset is the start of '}', add 1 for the byte length of '}'
+                        json_end = Some(json_start + byte_offset + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(end_idx) = json_end {
+            let json_str = &cleaned_response[json_start..end_idx];
+
+            // Verify it ends with ]]
+            let after_json = &cleaned_response[end_idx..];
+            if after_json.starts_with(end_marker) {
+                // Try to parse as JSON
+                match serde_json::from_str::<ExtractedTransactionsPayload>(json_str) {
+                    Ok(mut payload) => {
+                        if !payload.transactions.is_empty() {
+                            // Validate and correct each transaction
+                            for txn in &mut payload.transactions {
+                                validate_extracted_transaction(txn);
+                            }
+                            payloads.push(payload);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to parse EXTRACTED_TRANSACTIONS: {} - JSON: {}", e, json_str);
+                        // JSON parsing failed, but we still need to remove the command
+                        // to avoid showing raw JSON to the user
+                    }
+                }
+
+                // ALWAYS remove this command from the response (even if parsing failed)
+                let full_end = end_idx + end_marker.len();
+                cleaned_response = format!(
+                    "{}{}",
+                    &cleaned_response[..abs_start],
+                    &cleaned_response[full_end..]
+                );
+                // Don't advance search_start since we removed content
+            } else {
+                // No closing ]], try to find and remove partial command anyway
+                // Find the next ]] after the marker to clean up malformed commands
+                if let Some(fallback_end) = cleaned_response[abs_start..].find("]]") {
+                    let full_end = abs_start + fallback_end + 2;
+                    log::warn!("Removing malformed EXTRACTED_TRANSACTIONS command");
+                    cleaned_response = format!(
+                        "{}{}",
+                        &cleaned_response[..abs_start],
+                        &cleaned_response[full_end..]
+                    );
+                } else {
+                    search_start = end_idx;
+                }
+            }
+        } else {
+            // No matching brace found, try to remove partial command anyway
+            if let Some(fallback_end) = cleaned_response[abs_start..].find("]]") {
+                let full_end = abs_start + fallback_end + 2;
+                log::warn!("Removing incomplete EXTRACTED_TRANSACTIONS command (no matching braces)");
+                cleaned_response = format!(
+                    "{}{}",
+                    &cleaned_response[..abs_start],
+                    &cleaned_response[full_end..]
+                );
+            } else {
+                // Skip this marker entirely
+                search_start = json_start;
+            }
+        }
+    }
+
+    cleaned_response = cleaned_response.trim().to_string();
+    (payloads, cleaned_response)
+}
+
+/// Format extracted transactions for user preview
+fn format_extracted_transactions_description(payload: &ExtractedTransactionsPayload) -> String {
+    let count = payload.transactions.len();
+    let source = payload.source_description.as_ref()
+        .map(|s| format!(" aus \"{}\"", s))
+        .unwrap_or_default();
+
+    if count == 1 {
+        let txn = &payload.transactions[0];
+        let type_label = get_transaction_type_label_de(&txn.txn_type);
+        let security = txn.security_name.as_ref()
+            .map(|s| format!(" - {}", s))
+            .unwrap_or_default();
+
+        // Format amount with optional foreign currency conversion
+        let amount_str = match (txn.gross_amount, txn.gross_currency.as_ref(), txn.amount) {
+            (Some(gross), Some(gross_curr), Some(net)) if gross_curr != &txn.currency => {
+                // Show both foreign and local amounts
+                let rate_str = txn.exchange_rate
+                    .map(|r| format!(" @ {:.4}", r))
+                    .unwrap_or_default();
+                format!(", {:.2} {} → {:.2} {}{}", gross, gross_curr, net, txn.currency, rate_str)
+            }
+            (_, _, Some(amt)) => format!(", {:.2} {}", amt, txn.currency),
+            _ => String::new(),
+        };
+
+        let shares = txn.shares
+            .map(|s| format!(", {:.4} Stk.", s))
+            .unwrap_or_default();
+
+        let price_str = txn.price_per_share
+            .map(|p| {
+                let curr = txn.price_per_share_currency.as_ref()
+                    .or(txn.gross_currency.as_ref())
+                    .unwrap_or(&txn.currency);
+                format!(" @ {:.2} {}", p, curr)
+            })
+            .unwrap_or_default();
+
+        format!(
+            "1 Transaktion extrahiert{}: {}{} am {}{}{}{}",
+            source, type_label, security, txn.date, shares, price_str, amount_str
+        )
+    } else {
+        // Summarize multiple transactions
+        let mut types: Vec<&str> = Vec::new();
+        let mut total_amount = 0.0f64;
+        let mut currency = "EUR".to_string();
+        let mut has_fx = false;
+
+        for txn in &payload.transactions {
+            let type_label = get_transaction_type_label_de(&txn.txn_type);
+            if !types.contains(&type_label) {
+                types.push(type_label);
+            }
+            if let Some(amt) = txn.amount {
+                total_amount += amt;
+            }
+            currency = txn.currency.clone();
+            if txn.gross_currency.as_ref().is_some_and(|gc| gc != &txn.currency) {
+                has_fx = true;
+            }
+        }
+
+        let fx_note = if has_fx { " (mit Währungsumrechnung)" } else { "" };
+
+        format!(
+            "{} Transaktionen extrahiert{}: {} (Gesamt: {:.2} {}){}",
+            count,
+            source,
+            types.join(", "),
+            total_amount,
+            currency,
+            fx_note
+        )
+    }
+}
+
+/// Get German label for transaction type
+fn get_transaction_type_label_de(txn_type: &str) -> &'static str {
+    match txn_type {
+        "BUY" => "Kauf",
+        "SELL" => "Verkauf",
+        "DELIVERY_INBOUND" => "Einlieferung",
+        "DELIVERY_OUTBOUND" => "Auslieferung",
+        "DIVIDENDS" => "Dividende",
+        "DEPOSIT" => "Einlage",
+        "REMOVAL" => "Entnahme",
+        "INTEREST" => "Zinsen",
+        "INTEREST_CHARGE" => "Zinsbelastung",
+        "FEES" => "Gebühren",
+        "FEES_REFUND" => "Gebührenerstattung",
+        "TAXES" => "Steuern",
+        "TAX_REFUND" => "Steuererstattung",
+        "TRANSFER_IN" => "Umbuchung (Eingang)",
+        "TRANSFER_OUT" => "Umbuchung (Ausgang)",
+        _ => "Transaktion",
+    }
+}
+
+/// Format transaction delete for user confirmation display
+fn format_delete_description(cmd: &TransactionDeleteCommand) -> String {
+    cmd.description.clone().unwrap_or_else(|| format!("Transaktion #{} löschen", cmd.transaction_id))
+}
+
 // ============================================================================
 // Combined Response Processing
 // ============================================================================
@@ -566,6 +1031,30 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
             action_type: "portfolio_transfer".to_string(),
             description: format_transfer_description(&cmd),
             payload: serde_json::to_string(&cmd).unwrap_or_default(),
+        });
+    }
+
+    // Parse transaction delete commands - DO NOT EXECUTE, return as suggestions
+    let (delete_commands, cleaned) = parse_transaction_delete_commands(&current_response);
+    current_response = cleaned;
+
+    for cmd in delete_commands {
+        suggestions.push(SuggestedAction {
+            action_type: "transaction_delete".to_string(),
+            description: format_delete_description(&cmd),
+            payload: serde_json::to_string(&cmd).unwrap_or_default(),
+        });
+    }
+
+    // Parse extracted transactions from images - DO NOT EXECUTE, return as suggestions
+    let (extracted_payloads, cleaned) = parse_extracted_transactions(&current_response);
+    current_response = cleaned;
+
+    for payload in extracted_payloads {
+        suggestions.push(SuggestedAction {
+            action_type: "extracted_transactions".to_string(),
+            description: format_extracted_transactions_description(&payload),
+            payload: serde_json::to_string(&payload).unwrap_or_default(),
         });
     }
 
@@ -893,5 +1382,38 @@ Bitte bestätige."#;
 
         assert!(txn_cmds.is_empty());
         assert!(transfer_cmds.is_empty());
+    }
+
+    #[test]
+    fn test_parse_extracted_transactions_simple() {
+        let response = r#"[[EXTRACTED_TRANSACTIONS:{"transactions":[{"date":"2026-01-15","txnType":"BUY","securityName":"Apple","currency":"EUR","amount":100.0}],"sourceDescription":"Test"}]]
+Some text after."#;
+
+        let (payloads, cleaned) = parse_extracted_transactions(response);
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].transactions.len(), 1);
+        assert_eq!(payloads[0].transactions[0].txn_type, "BUY");
+        assert_eq!(payloads[0].transactions[0].security_name, Some("Apple".to_string()));
+        assert!(!cleaned.contains("EXTRACTED_TRANSACTIONS"));
+        assert!(cleaned.contains("Some text after."));
+    }
+
+    #[test]
+    fn test_parse_extracted_transactions_complex() {
+        let response = r#"[[EXTRACTED_TRANSACTIONS:{ "transactions": [ { "date": "2025-12-24", "txnType": "DIVIDENDS", "securityName": "BlackRock Inc.", "isin": "nicht verfügbar", "ticker": "BLK", "shares": 0.0, "pricePerShare": 0.0, "pricePerShareCurrency": "USD", "grossAmount": 62.52, "grossCurrency": "USD", "exchangeRate": 1.1808, "amount": 53.14, "currency": "EUR", "fees": 0.0, "feesForeign": 0.0, "feesForeignCurrency": "", "taxes": 9.38, "valueDate": "2025-12-24", "orderId": "nicht verfügbar", "note": "Dividende von BlackRock" }, { "date": "2025-12-24", "txnType": "DIVIDENDS", "securityName": "BlackRock Inc.", "isin": "nicht verfügbar", "ticker": "BLK", "shares": 0.0, "pricePerShare": 0.0, "grossAmount": -9.38, "grossCurrency": "USD", "amount": -7.95, "currency": "EUR", "fees": 0.0, "feesForeign": 0.0, "feesForeignCurrency": "", "taxes": 0.0, "valueDate": "2025-12-24", "orderId": "nicht verfügbar", "note": "Dividendensteuer von BlackRock" } ], "sourceDescription": "Kontoauszug" }]]
+Ich habe 2 Transaktionen erkannt."#;
+
+        let (payloads, cleaned) = parse_extracted_transactions(response);
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].transactions.len(), 2);
+        assert_eq!(payloads[0].transactions[0].txn_type, "DIVIDENDS");
+        assert_eq!(payloads[0].transactions[0].security_name, Some("BlackRock Inc.".to_string()));
+        assert_eq!(payloads[0].transactions[0].gross_amount, Some(62.52));
+        assert_eq!(payloads[0].transactions[0].exchange_rate, Some(1.1808));
+        assert_eq!(payloads[0].source_description, Some("Kontoauszug".to_string()));
+        assert!(!cleaned.contains("EXTRACTED_TRANSACTIONS"));
+        assert!(cleaned.contains("Ich habe 2 Transaktionen erkannt."));
     }
 }
