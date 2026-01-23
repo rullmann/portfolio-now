@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Bot, User } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { SafeMarkdown } from '../common/SafeMarkdown';
 import type { ProblematicSecurity, ValidatedQuoteSuggestion } from '../../lib/types';
 import { ValidatedSuggestionCard } from './ValidatedSuggestionCard';
 
@@ -120,7 +120,7 @@ export function QuoteChat({
                     }`}
                   >
                     <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <SafeMarkdown>{msg.content}</SafeMarkdown>
                     </div>
                   </div>
 

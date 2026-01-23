@@ -5,7 +5,7 @@ Cross-Platform Desktop-App zur Portfolio-Verwaltung. Neuimplementierung von [Por
 | Eigenschaft | Wert |
 |-------------|------|
 | **Bundle ID** | `com.portfolio-now.app` |
-| **Version** | 0.1.3 |
+| **Version** | 0.1.5 |
 | **Jahr** | 2026 |
 
 ## Build-Hinweise
@@ -50,7 +50,7 @@ apps/desktop/
 ├── src/                    # React Frontend (TypeScript)
 │   ├── store/              # Zustand State Management
 │   ├── components/         # UI (layout/, common/, modals/, charts/, chat/)
-│   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, ...)
+│   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, SafeMarkdown, ...)
 │   │   ├── charts/         # TradingViewChart, AIAnalysisPanel, DrawingTools, SignalsPanel
 │   │   ├── chat/           # ChatPanel, ChatMessage, ChatButton
 │   │   └── modals/         # PortfolioInsightsModal, TransactionFormModal, etc.
@@ -265,6 +265,7 @@ GROUP BY security_id
 - `export_database_to_portfolio(path)` - Export Round-Trip
 - `rebuild_fifo_lots()` - FIFO-Lots neu berechnen
 - `read_file_as_base64(path)` - PDF als Base64 lesen (für Chat-Attachments)
+- `read_image_as_base64(path)` - Bild als Base64 lesen (für Chat D&D, nur PNG/JPEG/GIF/WebP)
 
 ### Data
 - `get_securities()`, `get_accounts()`, `get_pp_portfolios()`
@@ -626,6 +627,14 @@ API-Keys werden sicher mit `tauri-plugin-store` gespeichert:
 - Hook: `useSecureApiKeys()` für Frontend-Zugriff
 - Shield-Icon zeigt sichere Speicherung in Settings an
 
+> **TODO: OS Keyring (2026-01)**
+> Sobald `tauri-plugin-keyring` als stabiles Tauri v2 Plugin verfügbar ist, auf OS-level verschlüsselte Speicherung upgraden:
+> - macOS: Keychain Access (verschlüsselt mit User-Login-Passwort)
+> - Windows: Credential Manager (DPAPI verschlüsselt)
+> - Linux: Secret Service API (GNOME Keyring, KWallet)
+>
+> Code-Architektur ist vorbereitet: `isUsingKeyring()` API in `secureStorage.ts`
+
 ```typescript
 // Frontend: Sichere API-Keys verwenden
 import { useSecureApiKeys } from '../hooks/useSecureApiKeys';
@@ -695,6 +704,8 @@ check_rate_limit("sync_prices", &limits::price_sync())?;
 17. **Running Balance (Kontostand):** Bei gleicher Tag-Sortierung MÜSSEN INFLOWS (Dividenden, Einzahlungen) VOR OUTFLOWS (Auszahlungen) verarbeitet werden. Nutze `account_balance_analysis` Template aus `query_templates.rs`.
 18. **Drag & Drop Schutz:** App.tsx hat globalen D&D Handler mit `preventDefault()` um Browser-Default (Datei öffnen) zu verhindern. KEIN `stopPropagation()` - das würde Tauri's `onDragDropEvent` blockieren!
 19. **PDF D&D im Chat:** PDFs im ChatPanel werden direkt zum PDF Import Modal weitergeleitet (kein Dialog). Bilder gehen an Vision-API.
+20. **AI-Markdown Sanitization:** Für AI-generierte Inhalte IMMER `<SafeMarkdown>` statt `<ReactMarkdown>` verwenden! Verhindert XSS durch `javascript:`/`data:` URIs.
+21. **PDF Parser Strict Mode:** `ParseContext` hat `strict_mode: true` als Default. Ungültige Datumsformate führen zu Fehlern statt stillem Fallback auf `2000-01-01`. Nutze `parse_date_strict()` für neue Parser.
 
 ---
 

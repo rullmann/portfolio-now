@@ -13,7 +13,13 @@ import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCi
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
-import { readFile } from '@tauri-apps/plugin-fs';
+
+// Result type for read_image_as_base64 command (matches Rust's camelCase serialization)
+interface FileBase64Result {
+  data: string;
+  mimeType: string;  // Rust uses rename_all = "camelCase"
+  filename: string;
+}
 import { useSettingsStore, useUIStore, type AiProvider } from '../../store';
 import { AIModelSelector } from '../common/AIModelSelector';
 import { ChatMessage, type ChatMessageData } from './ChatMessage';
@@ -381,118 +387,159 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     loadPortfolios();
   }, []);
 
+  // Refs for stable access in Tauri drag-drop handler
+  const hasVisionSupportRef = useRef(hasVisionSupport);
+  const imageConsentGivenRef = useRef(imageConsentGiven);
+  const openPdfImportModalRef = useRef(openPdfImportModal);
+  const onCloseRef = useRef(onClose);
+
+  // Keep refs in sync
+  useEffect(() => {
+    hasVisionSupportRef.current = hasVisionSupport;
+  }, [hasVisionSupport]);
+  useEffect(() => {
+    imageConsentGivenRef.current = imageConsentGiven;
+  }, [imageConsentGiven]);
+  useEffect(() => {
+    openPdfImportModalRef.current = openPdfImportModal;
+  }, [openPdfImportModal]);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   // Tauri native drag-drop handler (external files)
+  // Uses refs for mutable values to avoid re-registering listener on every state change
   useEffect(() => {
     if (!isOpen) {
-      console.log('[ChatPanel D&D] Panel not open, skipping listener');
       return;
     }
 
-    console.log('[ChatPanel D&D] Setting up Tauri drag-drop listener...');
     const window = getCurrentWindow();
     let unlistenFn: (() => void) | null = null;
+    let aborted = false;
 
     const setupListener = async () => {
-      console.log('[ChatPanel D&D] Registering onDragDropEvent...');
-      unlistenFn = await window.onDragDropEvent(async (event) => {
-        console.log('[ChatPanel D&D] Tauri event received:', event.payload.type, event.payload);
-        if (event.payload.type === 'drop' && event.payload.paths.length > 0) {
-          // Check for PDF files first - show action dialog
-          const pdfPaths = event.payload.paths.filter((path: string) => {
-            const ext = path.split('.').pop()?.toLowerCase() || '';
-            return PDF_EXTENSIONS.includes(ext);
-          });
+      try {
+        const unlisten = await window.onDragDropEvent(async (event) => {
+          if (aborted) return;
 
-          if (pdfPaths.length > 0) {
-            console.log('[ChatPanel D&D] PDF detected, opening import modal:', pdfPaths[0]);
-            openPdfImportModal(pdfPaths[0]);
-            onClose(); // Close chat panel
+          // Handle enter for visual feedback (external files from Finder)
+          if (event.payload.type === 'enter') {
+            setIsDragging(true);
             return;
           }
 
-          // Filter for image files by extension
-          const imagePaths = event.payload.paths.filter((path: string) => {
-            const ext = path.split('.').pop()?.toLowerCase() || '';
-            return IMAGE_EXTENSIONS.includes(ext);
-          });
-
-          if (imagePaths.length === 0) return;
-
-          if (!hasVisionSupport) {
-            setError('Das aktuelle Modell unterstützt keine Bilder. Bitte wähle ein Vision-fähiges Modell.');
+          // Handle leave
+          if (event.payload.type === 'leave') {
+            setIsDragging(false);
             return;
           }
 
-          // Check consent first
-          if (!imageConsentGiven) {
-            // Store paths for later processing after consent
-            const files: File[] = [];
+          if (event.payload.type === 'drop') {
+            setIsDragging(false); // Reset drag state on drop
+
+            if (event.payload.paths.length === 0) {
+              return;
+            }
+
+            // Check for PDF files first - open import modal directly
+            const pdfPaths = event.payload.paths.filter((path: string) => {
+              const ext = path.split('.').pop()?.toLowerCase() || '';
+              return PDF_EXTENSIONS.includes(ext);
+            });
+
+            if (pdfPaths.length > 0) {
+              openPdfImportModalRef.current(pdfPaths[0]);
+              onCloseRef.current(); // Close chat panel
+              return;
+            }
+
+            // Filter for image files by extension
+            const imagePaths = event.payload.paths.filter((path: string) => {
+              const ext = path.split('.').pop()?.toLowerCase() || '';
+              return IMAGE_EXTENSIONS.includes(ext);
+            });
+
+            if (imagePaths.length === 0) {
+              return;
+            }
+
+            if (!hasVisionSupportRef.current) {
+              setError('Das aktuelle Modell unterstützt keine Bilder. Bitte wähle ein Vision-fähiges Modell.');
+              return;
+            }
+
+            // Check consent first
+            if (!imageConsentGivenRef.current) {
+              // Read and prepare attachments, but show consent first
+              const pendingAttachments: ChatImageAttachment[] = [];
+              for (const path of imagePaths) {
+                try {
+                  // Use Tauri command (security: validated path, returns base64 directly)
+                  const result = await invoke<FileBase64Result>('read_image_as_base64', { path });
+                  pendingAttachments.push({
+                    data: result.data,
+                    mimeType: result.mimeType,
+                    filename: result.filename,
+                  });
+                } catch (err) {
+                  console.error('Failed to read dropped file:', path, err);
+                }
+              }
+              if (pendingAttachments.length > 0) {
+                // Store attachments directly instead of File objects
+                // After consent, we'll add them directly without re-processing
+                setPendingImageUpload(pendingAttachments as unknown as File[]);
+                setShowImageConsent(true);
+              }
+              return;
+            }
+
+            // Process dropped files
+            setError(null);
+            const newAttachments: ChatImageAttachment[] = [];
+
             for (const path of imagePaths) {
               try {
-                const data = await readFile(path);
-                const ext = path.split('.').pop()?.toLowerCase() || 'png';
-                const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
-                const filename = path.split('/').pop() || path.split('\\').pop() || 'image';
-                const blob = new Blob([data], { type: mimeType });
-                files.push(new File([blob], filename, { type: mimeType }));
+                // Use Tauri command instead of fs plugin (security: validated path)
+                const result = await invoke<FileBase64Result>('read_image_as_base64', { path });
+
+                newAttachments.push({
+                  data: result.data,
+                  mimeType: result.mimeType,
+                  filename: result.filename,
+                });
               } catch (err) {
                 console.error('Failed to read dropped file:', path, err);
               }
             }
-            if (files.length > 0) {
-              setPendingImageUpload(files);
-              setShowImageConsent(true);
-            }
-            return;
-          }
 
-          // Process dropped files
-          setError(null);
-          const newAttachments: ChatImageAttachment[] = [];
-
-          for (const path of imagePaths) {
-            try {
-              const data = await readFile(path);
-              const ext = path.split('.').pop()?.toLowerCase() || 'png';
-              const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
-              const filename = path.split('/').pop() || path.split('\\').pop() || 'image';
-
-              // Check file size
-              if (data.byteLength > MAX_IMAGE_SIZE_BYTES) {
-                setError(`Bild zu groß: ${filename} (max. ${MAX_IMAGE_SIZE_MB} MB)`);
-                continue;
-              }
-
-              // Convert to base64
-              const base64 = btoa(
-                new Uint8Array(data).reduce((data, byte) => data + String.fromCharCode(byte), '')
-              );
-
-              newAttachments.push({
-                data: base64,
-                mimeType,
-                filename,
-              });
-            } catch (err) {
-              console.error('Failed to read dropped file:', path, err);
+            if (newAttachments.length > 0) {
+              setAttachments((prev) => [...prev, ...newAttachments]);
             }
           }
+        });
 
-          if (newAttachments.length > 0) {
-            setAttachments((prev) => [...prev, ...newAttachments]);
-          }
+        if (!aborted) {
+          unlistenFn = unlisten;
+        } else {
+          // Already cleaned up, unlisten immediately
+          unlisten();
         }
-      });
+      } catch (err) {
+        console.error('[ChatPanel D&D] Failed to register listener:', err);
+      }
     };
 
     setupListener();
 
     return () => {
+      aborted = true;
       if (unlistenFn) {
         unlistenFn();
       }
     };
-  }, [isOpen, hasVisionSupport, imageConsentGiven]);
+  }, [isOpen]); // Only depends on isOpen - uses refs for other values
 
   // Get provider display name for consent dialog
   const getProviderDisplayName = (provider: AiProvider) => {
@@ -568,21 +615,27 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
     // Process pending uploads directly (don't call handleImageFiles as state isn't updated yet)
     if (pendingImageUpload) {
-      const filesToProcess = pendingImageUpload;
+      const pending = pendingImageUpload;
       setPendingImageUpload(null);
-
       setError(null);
-      const newAttachments: ChatImageAttachment[] = [];
 
-      for (const file of filesToProcess) {
-        const attachment = await processImageFile(file);
-        if (attachment) {
-          newAttachments.push(attachment);
+      // Check if these are already ChatImageAttachment objects (from Tauri D&D)
+      // or File objects (from browser D&D / paste)
+      if (pending.length > 0 && 'mimeType' in pending[0]) {
+        // Already processed attachments from Tauri D&D - add directly
+        setAttachments((prev) => [...prev, ...(pending as unknown as ChatImageAttachment[])]);
+      } else {
+        // File objects from browser - process them
+        const newAttachments: ChatImageAttachment[] = [];
+        for (const file of pending as File[]) {
+          const attachment = await processImageFile(file);
+          if (attachment) {
+            newAttachments.push(attachment);
+          }
         }
-      }
-
-      if (newAttachments.length > 0) {
-        setAttachments((prev) => [...prev, ...newAttachments]);
+        if (newAttachments.length > 0) {
+          setAttachments((prev) => [...prev, ...newAttachments]);
+        }
       }
     }
   };
@@ -610,18 +663,19 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       });
 
       if (selected && selected.length > 0) {
-        // Read files and convert to attachments
+        // Read files and convert to attachments using Tauri command
         const files: File[] = [];
         for (const path of selected) {
           try {
-            const data = await readFile(path);
-            const ext = path.split('.').pop()?.toLowerCase() || 'png';
-            const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
-            const filename = path.split('/').pop() || path.split('\\').pop() || 'image';
-
-            // Create a File-like object
-            const blob = new Blob([data], { type: mimeType });
-            const file = new File([blob], filename, { type: mimeType });
+            const result = await invoke<FileBase64Result>('read_image_as_base64', { path });
+            // Convert base64 back to blob for File object
+            const binaryString = atob(result.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: result.mimeType });
+            const file = new File([blob], result.filename, { type: result.mimeType });
             files.push(file);
           } catch (err) {
             console.error('Failed to read file:', path, err);
@@ -664,9 +718,11 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
+    // Note: No stopPropagation() - allows Tauri native D&D to work alongside React
     setIsDragging(false);
 
+    // Tauri native D&D handles actual file drops from Finder
+    // React handler is only for browser-based D&D (e.g. images from websites)
     if (!hasVisionSupport) {
       setError('Das aktuelle Modell unterstützt keine Bilder. Bitte wähle ein Vision-fähiges Modell.');
       return;
@@ -683,13 +739,13 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
+    // Note: No stopPropagation() - allows Tauri events to pass through
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
-    // Only show drag indicator if dragging files (not text)
+    // Note: No stopPropagation() - Tauri handler sets isDragging for external files
+    // Only show drag indicator if dragging files (not text) - for browser D&D
     if (e.dataTransfer.types.includes('Files')) {
       setIsDragging(true);
     }
@@ -697,7 +753,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
+    // Note: No stopPropagation() - allows Tauri events to pass through
     // Only reset if leaving the panel (not entering a child element)
     const rect = panelRef.current?.getBoundingClientRect();
     if (rect) {
@@ -1597,9 +1653,181 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               </div>
             </div>
           ) : (
-            messages.map((message) => (
-              <ChatMessage key={message.id} message={message} onDelete={deleteMessage} />
-            ))
+            messages.map((message) => {
+              // Get suggestions for this message (if it's an assistant message)
+              const messageSuggestions = message.role === 'assistant'
+                ? suggestions.filter((s) => s.messageId === Number(message.id))
+                : [];
+
+              return (
+                <div key={message.id} className="space-y-3">
+                  <ChatMessage message={message} onDelete={deleteMessage} />
+
+                  {/* Render suggestions inline after their associated message */}
+                  {messageSuggestions.map((suggestion, idx) => {
+                    // Transaction create/transfer suggestions
+                    if (suggestion.actionType === 'transaction_create' || suggestion.actionType === 'portfolio_transfer') {
+                      return (
+                        <div key={`txn-${message.id}-${idx}`} className={cn(suggestion.status !== 'pending' && 'opacity-60')}>
+                          <TransactionConfirmation
+                            suggestion={suggestion}
+                            onConfirm={() => executeSuggestion(suggestion)}
+                            onDecline={() => declineSuggestion(suggestion)}
+                            isExecuting={executingSuggestion === suggestion.payload}
+                          />
+                          {suggestion.status !== 'pending' && (
+                            <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
+                              {suggestion.status === 'confirmed' ? (
+                                <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Bestätigt</>
+                              ) : (
+                                <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // Delete suggestions
+                    if (suggestion.actionType === 'transaction_delete') {
+                      return (
+                        <div key={`delete-${message.id}-${idx}`} className={cn('p-3 rounded-lg border border-red-500/30 bg-red-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
+                          <div className="flex items-start gap-2">
+                            <Trash2 className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-red-600">Transaktion löschen</p>
+                              <p className="text-sm text-muted-foreground">{suggestion.description}</p>
+                              {suggestion.status === 'pending' ? (
+                                <div className="flex gap-2 mt-2">
+                                  <button
+                                    onClick={() => executeSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                                  >
+                                    {executingSuggestion === suggestion.payload ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    )}
+                                    Löschen
+                                  </button>
+                                  <button
+                                    onClick={() => declineSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                                  >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                    Abbrechen
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
+                                  {suggestion.status === 'confirmed' ? (
+                                    <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Gelöscht</>
+                                  ) : (
+                                    <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Extracted transactions from images
+                    if (suggestion.actionType === 'extracted_transactions') {
+                      let payload: ExtractedTransactionsPayload | null = null;
+                      try {
+                        payload = JSON.parse(suggestion.payload);
+                      } catch {
+                        return null;
+                      }
+                      if (!payload) return null;
+
+                      return (
+                        <div
+                          key={`extracted-${message.id}-${idx}`}
+                          className={cn(suggestion.status !== 'pending' && 'opacity-60')}
+                        >
+                          {suggestion.status === 'pending' ? (
+                            <ExtractedTransactionsPreview
+                              payload={payload}
+                              portfolios={portfolios}
+                              onConfirm={(txns, portfolioId) => handleImportExtractedTransactions(suggestion, txns, portfolioId)}
+                              onDiscard={() => handleDiscardExtractedTransactions(suggestion)}
+                              isImporting={importingTransactions === suggestion.payload}
+                            />
+                          ) : (
+                            <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
+                              <div className="flex items-center gap-2 text-sm">
+                                <Receipt className="h-4 w-4 text-amber-600" />
+                                <span>
+                                  {payload.transactions.length} Transaktion{payload.transactions.length !== 1 ? 'en' : ''}
+                                </span>
+                                {suggestion.status === 'confirmed' ? (
+                                  <span className="text-green-600 flex items-center gap-1">
+                                    <CheckCircle className="h-3.5 w-3.5" /> Importiert
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground flex items-center gap-1">
+                                    <XCircle className="h-3.5 w-3.5" /> Verworfen
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // Other suggestions (watchlist, etc.)
+                    return (
+                      <div key={`other-${message.id}-${idx}`} className={cn('p-3 rounded-lg border border-amber-500/30 bg-amber-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm">{suggestion.description}</p>
+                            {suggestion.status === 'pending' ? (
+                              <div className="flex gap-2 mt-2">
+                                <button
+                                  onClick={() => executeSuggestion(suggestion)}
+                                  disabled={executingSuggestion !== null}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                >
+                                  {executingSuggestion === suggestion.payload ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <CheckCircle className="h-3.5 w-3.5" />
+                                  )}
+                                  Bestätigen
+                                </button>
+                                <button
+                                  onClick={() => declineSuggestion(suggestion)}
+                                  disabled={executingSuggestion !== null}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                                >
+                                  <XCircle className="h-3.5 w-3.5" />
+                                  Abbrechen
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
+                                {suggestion.status === 'confirmed' ? (
+                                  <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Bestätigt</>
+                                ) : (
+                                  <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })
           )}
 
           {isLoading && (
@@ -1612,176 +1840,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           {error && (
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
               {error}
-            </div>
-          )}
-
-          {/* Suggestions - Pending require confirmation, completed are shown grayed */}
-          {suggestions.length > 0 && (
-            <div className="space-y-3">
-              {/* Transaction suggestions get special preview treatment */}
-              {suggestions
-                .filter((s) => s.actionType === 'transaction_create' || s.actionType === 'portfolio_transfer')
-                .map((suggestion, idx) => (
-                  <div key={`txn-${idx}`} className={cn(suggestion.status !== 'pending' && 'opacity-60')}>
-                    <TransactionConfirmation
-                      suggestion={suggestion}
-                      onConfirm={() => executeSuggestion(suggestion)}
-                      onDecline={() => declineSuggestion(suggestion)}
-                      isExecuting={executingSuggestion === suggestion.payload}
-                    />
-                    {suggestion.status !== 'pending' && (
-                      <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
-                        {suggestion.status === 'confirmed' ? (
-                          <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Bestätigt</>
-                        ) : (
-                          <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-              {/* Delete suggestions - red/destructive UI */}
-              {suggestions
-                .filter((s) => s.actionType === 'transaction_delete')
-                .map((suggestion, idx) => (
-                  <div key={`delete-${idx}`} className={cn('p-3 rounded-lg border border-red-500/30 bg-red-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
-                    <div className="flex items-start gap-2">
-                      <Trash2 className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-red-600">Transaktion löschen</p>
-                        <p className="text-sm text-muted-foreground">{suggestion.description}</p>
-                        {suggestion.status === 'pending' ? (
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => executeSuggestion(suggestion)}
-                              disabled={executingSuggestion !== null}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
-                            >
-                              {executingSuggestion === suggestion.payload ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-3.5 w-3.5" />
-                              )}
-                              Löschen
-                            </button>
-                            <button
-                              onClick={() => declineSuggestion(suggestion)}
-                              disabled={executingSuggestion !== null}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              Abbrechen
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
-                            {suggestion.status === 'confirmed' ? (
-                              <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Gelöscht</>
-                            ) : (
-                              <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-              {/* Extracted transactions from images */}
-              {suggestions
-                .filter((s) => s.actionType === 'extracted_transactions')
-                .map((suggestion, idx) => {
-                  // Parse the payload to get transactions
-                  let payload: ExtractedTransactionsPayload | null = null;
-                  try {
-                    payload = JSON.parse(suggestion.payload);
-                  } catch {
-                    return null;
-                  }
-                  if (!payload) return null;
-
-                  return (
-                    <div
-                      key={`extracted-${idx}`}
-                      className={cn(suggestion.status !== 'pending' && 'opacity-60')}
-                    >
-                      {suggestion.status === 'pending' ? (
-                        <ExtractedTransactionsPreview
-                          payload={payload}
-                          portfolios={portfolios}
-                          onConfirm={(txns, portfolioId) => handleImportExtractedTransactions(suggestion, txns, portfolioId)}
-                          onDiscard={() => handleDiscardExtractedTransactions(suggestion)}
-                          isImporting={importingTransactions === suggestion.payload}
-                        />
-                      ) : (
-                        <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
-                          <div className="flex items-center gap-2 text-sm">
-                            <Receipt className="h-4 w-4 text-amber-600" />
-                            <span>
-                              {payload.transactions.length} Transaktion{payload.transactions.length !== 1 ? 'en' : ''}
-                            </span>
-                            {suggestion.status === 'confirmed' ? (
-                              <span className="text-green-600 flex items-center gap-1">
-                                <CheckCircle className="h-3.5 w-3.5" /> Importiert
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground flex items-center gap-1">
-                                <XCircle className="h-3.5 w-3.5" /> Verworfen
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-              {/* Other suggestions (watchlist, etc.) - compact UI */}
-              {suggestions
-                .filter((s) => s.actionType !== 'transaction_create' && s.actionType !== 'portfolio_transfer' && s.actionType !== 'transaction_delete' && s.actionType !== 'extracted_transactions')
-                .map((suggestion, idx) => (
-                  <div key={`other-${idx}`} className={cn('p-3 rounded-lg border border-amber-500/30 bg-amber-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm">{suggestion.description}</p>
-                        {suggestion.status === 'pending' ? (
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => executeSuggestion(suggestion)}
-                              disabled={executingSuggestion !== null}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
-                            >
-                              {executingSuggestion === suggestion.payload ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <CheckCircle className="h-3.5 w-3.5" />
-                              )}
-                              Bestätigen
-                            </button>
-                            <button
-                              onClick={() => declineSuggestion(suggestion)}
-                              disabled={executingSuggestion !== null}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              Abbrechen
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
-                            {suggestion.status === 'confirmed' ? (
-                              <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Bestätigt</>
-                            ) : (
-                              <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
             </div>
           )}
 

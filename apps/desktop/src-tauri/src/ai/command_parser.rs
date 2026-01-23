@@ -259,58 +259,94 @@ use crate::db::get_connection;
 use std::collections::HashMap;
 
 /// Database query parsed from AI response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbQuery {
     pub template: String,
+    #[serde(default)]
     pub params: HashMap<String, String>,
 }
 
 /// Parse database query commands from AI response
 ///
-/// Extracts `[[QUERY_DB:...]]` commands
+/// Extracts `[[QUERY_DB:...]]` commands using brace-counting for robust JSON extraction.
+/// This approach correctly handles nested objects and special characters in values.
 pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
     let mut queries = Vec::new();
     let mut cleaned_response = response.to_string();
+    let marker = "[[QUERY_DB:";
+    let end_marker = "]]";
 
-    // Match [[QUERY_DB:{"template":"...", "params":{...}}]]
-    let query_re = Regex::new(r#"\[\[QUERY_DB:\s*\{([^]]+)\}\]\]"#).unwrap();
+    // Find all occurrences of the marker and extract JSON by counting braces
+    let mut search_start = 0;
+    while let Some(start_idx) = cleaned_response[search_start..].find(marker) {
+        let abs_start = search_start + start_idx;
+        let json_start = abs_start + marker.len();
 
-    for cap in query_re.captures_iter(response) {
-        let json_content = &cap[1];
+        // Find matching closing brace by counting (using char_indices for correct byte positions)
+        let mut brace_count = 0;
+        let mut json_end = None;
 
-        // Extract template name
-        let template = Regex::new(r#""template"\s*:\s*"([^"]+)""#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .map(|c| c[1].to_string());
-
-        if let Some(template) = template {
-            // Extract params object
-            let mut params = HashMap::new();
-
-            // Find params section and extract key-value pairs
-            if let Some(params_re) = Regex::new(r#""params"\s*:\s*\{([^}]*)\}"#).ok() {
-                if let Some(params_cap) = params_re.captures(json_content) {
-                    let params_content = &params_cap[1];
-
-                    // Extract individual parameters
-                    if let Some(param_re) = Regex::new(r#""([^"]+)"\s*:\s*"([^"]+)""#).ok() {
-                        for pcap in param_re.captures_iter(params_content) {
-                            params.insert(pcap[1].to_string(), pcap[2].to_string());
-                        }
+        for (byte_offset, c) in cleaned_response[json_start..].char_indices() {
+            match c {
+                '{' => brace_count += 1,
+                '}' => {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        // byte_offset is the start of '}', add 1 for the byte length of '}'
+                        json_end = Some(json_start + byte_offset + 1);
+                        break;
                     }
                 }
+                _ => {}
             }
+        }
 
-            queries.push(DbQuery { template, params });
+        if let Some(end_idx) = json_end {
+            let json_str = &cleaned_response[json_start..end_idx];
+
+            // Verify it ends with ]]
+            let after_json = &cleaned_response[end_idx..];
+            if after_json.starts_with(end_marker) {
+                // Try to parse as JSON using serde
+                match serde_json::from_str::<DbQuery>(json_str) {
+                    Ok(query) => {
+                        queries.push(query);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to parse QUERY_DB: {} - JSON: {}", e, json_str);
+                    }
+                }
+
+                // Always remove this command from the response
+                let full_end = end_idx + end_marker.len();
+                cleaned_response = format!(
+                    "{}{}",
+                    &cleaned_response[..abs_start],
+                    &cleaned_response[full_end..]
+                );
+                // Don't advance search_start since we removed content
+            } else {
+                // No closing ]], try to find and remove partial command anyway
+                if let Some(fallback_end) = cleaned_response[abs_start..].find("]]") {
+                    let full_end = abs_start + fallback_end + 2;
+                    log::warn!("Removing malformed QUERY_DB command");
+                    cleaned_response = format!(
+                        "{}{}",
+                        &cleaned_response[..abs_start],
+                        &cleaned_response[full_end..]
+                    );
+                } else {
+                    search_start = end_idx;
+                }
+            }
+        } else {
+            // No matching brace found, skip this marker
+            search_start = json_start;
         }
     }
 
-    let clean_re = Regex::new(r#"\[\[QUERY_DB:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
-    cleaned_response = cleaned_response.trim_start().to_string();
-
+    cleaned_response = cleaned_response.trim().to_string();
     (queries, cleaned_response)
 }
 
@@ -1415,5 +1451,58 @@ Ich habe 2 Transaktionen erkannt."#;
         assert_eq!(payloads[0].source_description, Some("Kontoauszug".to_string()));
         assert!(!cleaned.contains("EXTRACTED_TRANSACTIONS"));
         assert!(cleaned.contains("Ich habe 2 Transaktionen erkannt."));
+    }
+
+    #[test]
+    fn test_parse_db_query_simple() {
+        let response = r#"[[QUERY_DB:{"template":"all_dividends","params":{"year":"2024"}}]]"#;
+
+        let (queries, cleaned) = parse_db_queries(response);
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].template, "all_dividends");
+        assert_eq!(queries[0].params.get("year"), Some(&"2024".to_string()));
+        assert!(!cleaned.contains("QUERY_DB"));
+    }
+
+    #[test]
+    fn test_parse_db_query_nested_params() {
+        let response = r#"Ich frage die Daten ab.
+[[QUERY_DB:{"template":"account_balance_analysis","params":{"account":"Referenzkonto"}}]]
+Hier sind die Ergebnisse."#;
+
+        let (queries, cleaned) = parse_db_queries(response);
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].template, "account_balance_analysis");
+        assert_eq!(queries[0].params.get("account"), Some(&"Referenzkonto".to_string()));
+        assert!(cleaned.contains("Ich frage die Daten ab."));
+        assert!(cleaned.contains("Hier sind die Ergebnisse."));
+        assert!(!cleaned.contains("QUERY_DB"));
+    }
+
+    #[test]
+    fn test_parse_db_query_empty_params() {
+        let response = r#"[[QUERY_DB:{"template":"sold_securities","params":{}}]]"#;
+
+        let (queries, cleaned) = parse_db_queries(response);
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].template, "sold_securities");
+        assert!(queries[0].params.is_empty());
+        assert!(cleaned.is_empty());
+    }
+
+    #[test]
+    fn test_parse_db_query_multiple() {
+        let response = r#"[[QUERY_DB:{"template":"all_dividends","params":{"year":"2024"}}]]
+[[QUERY_DB:{"template":"security_transactions","params":{"security":"Apple"}}]]"#;
+
+        let (queries, cleaned) = parse_db_queries(response);
+
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].template, "all_dividends");
+        assert_eq!(queries[1].template, "security_transactions");
+        assert!(!cleaned.contains("QUERY_DB"));
     }
 }

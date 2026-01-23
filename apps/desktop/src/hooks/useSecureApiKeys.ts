@@ -14,6 +14,7 @@ import {
   storeApiKey,
   migrateFromLocalStorage,
   isSecureStorageAvailable,
+  isUsingKeyring,
   type ApiKeyType,
 } from '../lib/secureStorage';
 import { useSettingsStore } from '../store';
@@ -103,6 +104,8 @@ interface UseSecureApiKeysReturn {
   keys: SecureApiKeys;
   isLoading: boolean;
   isSecureStorageAvailable: boolean;
+  /** True when using OS Keyring (encrypted storage) */
+  isUsingKeyring: boolean;
   /** True when secure storage is unavailable and localStorage fallback is active */
   isUsingInsecureFallback: boolean;
   setApiKey: (keyType: ApiKeyType, value: string) => Promise<void>;
@@ -140,6 +143,7 @@ const EMPTY_KEYS: SecureApiKeys = {
 export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const [isLoading, setIsLoading] = useState(true);
   const [secureAvailable, setSecureAvailable] = useState(false);
+  const [usingKeyring, setUsingKeyring] = useState(false);
   const [fallbackMode, setFallbackMode] = useState(false);
   const migrationAttempted = useRef(false);
 
@@ -203,6 +207,10 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     try {
       const available = await isSecureStorageAvailable();
       setSecureAvailable(available);
+
+      // Check if using OS keyring (encrypted) or fallback store
+      const keyringActive = await isUsingKeyring();
+      setUsingKeyring(keyringActive);
 
       if (!available) {
         // Secure storage not available - use localStorage fallback
@@ -335,6 +343,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     keys,
     isLoading,
     isSecureStorageAvailable: secureAvailable,
+    isUsingKeyring: usingKeyring,
     isUsingInsecureFallback: fallbackMode,
     setApiKey,
     refreshKeys: loadKeys,

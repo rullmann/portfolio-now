@@ -7,7 +7,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
-import ReactMarkdown from 'react-markdown';
+import { SafeMarkdown } from '../common/SafeMarkdown';
 import { formatDate, type SecurityData, type PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices } from '../../lib/api';
 import { useSettingsStore } from '../../store';
@@ -615,7 +615,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                       </div>
                     ) : analysis ? (
                       <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                        <ReactMarkdown>{analysis}</ReactMarkdown>
+                        <SafeMarkdown>{analysis}</SafeMarkdown>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm">

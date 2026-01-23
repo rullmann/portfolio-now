@@ -7,7 +7,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { Sparkles, RefreshCw, AlertCircle, Settings, ChevronDown, ChevronUp, ArrowRight, Clock, MapPin, ToggleLeft, ToggleRight, Trash2, X, Zap, Bell, Target } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import ReactMarkdown from 'react-markdown';
+import { SafeMarkdown } from '../common/SafeMarkdown';
 import { useSettingsStore, useUIStore, toast, getModelCapabilities } from '../../store';
 import { usePortfolioAnalysisStore, type TrendDirection, type TrendStrength } from '../../store/portfolioAnalysis';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
@@ -1005,7 +1005,7 @@ export function AIAnalysisPanel({
 
                 {/* Analysis text */}
                 <div className="prose prose-xs dark:prose-invert max-w-none text-[13px] leading-relaxed prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2.5 prose-headings:mb-0.5 prose-p:my-0.5 prose-ul:my-0.5 prose-li:my-0 prose-strong:font-semibold">
-                  <ReactMarkdown>{analysis}</ReactMarkdown>
+                  <SafeMarkdown>{analysis}</SafeMarkdown>
                 </div>
 
                 {/* Annotations list */}

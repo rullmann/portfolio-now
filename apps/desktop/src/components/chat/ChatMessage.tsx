@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { User, Bot, X, ImageIcon } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { SafeMarkdown } from '../common/SafeMarkdown';
 import { cn } from '../../lib/utils';
 
 export interface StoredChatAttachment {
@@ -112,7 +112,7 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
           {isUser ? (
             <p className="mb-0">{message.content}</p>
           ) : (
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+            <SafeMarkdown>{message.content}</SafeMarkdown>
           )}
         </div>
       </div>

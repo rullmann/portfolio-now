@@ -64,15 +64,50 @@ pub struct ParseWarning {
     pub severity: WarningSeverity,
 }
 
+/// Options for controlling PDF parsing behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseOptions {
+    /// If true, parsing fails on missing required fields instead of using fallback values.
+    /// This prevents silent data corruption from incorrect fallback dates (e.g., 2000-01-01).
+    /// Default: true (strict mode enabled)
+    pub strict_mode: bool,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            // SECURITY: Strict mode is the default to prevent silent data corruption
+            strict_mode: true,
+        }
+    }
+}
+
 /// Context for collecting warnings during parsing
 #[derive(Debug, Default)]
 pub struct ParseContext {
     pub warnings: Vec<ParseWarning>,
+    pub options: ParseOptions,
 }
 
 impl ParseContext {
     pub fn new() -> Self {
-        Self { warnings: vec![] }
+        Self {
+            warnings: vec![],
+            options: ParseOptions::default(),
+        }
+    }
+
+    /// Create a new context with custom options
+    pub fn with_options(options: ParseOptions) -> Self {
+        Self {
+            warnings: vec![],
+            options,
+        }
+    }
+
+    /// Check if strict mode is enabled
+    pub fn is_strict(&self) -> bool {
+        self.options.strict_mode
     }
 
     /// Add a warning
@@ -117,13 +152,44 @@ impl ParseContext {
         }
     }
 
-    /// Parse German date with warning on failure
+    /// Parse German date with fallback on failure (legacy behavior).
+    /// In strict mode, this logs an error warning. Consider using `parse_date_strict` instead.
     pub fn parse_date(&mut self, field: &str, raw: &str, default: NaiveDate) -> NaiveDate {
         match parse_german_date(raw) {
             Some(d) => d,
             None => {
-                self.warn(field, raw, "Datum konnte nicht geparst werden, verwende Standarddatum");
+                if self.options.strict_mode {
+                    // In strict mode, log as error even though we return a fallback
+                    // This allows callers to detect the issue via has_errors()
+                    self.error(field, raw, "Datum konnte nicht geparst werden");
+                } else {
+                    self.warn(field, raw, "Datum konnte nicht geparst werden, verwende Standarddatum");
+                }
                 default
+            }
+        }
+    }
+
+    /// Parse German date - returns Err in strict mode on failure, or fallback in lenient mode.
+    ///
+    /// This is the preferred method for parsing dates in new code.
+    /// In strict mode: Returns `Err` with a descriptive message on parse failure.
+    /// In lenient mode: Returns fallback date (2000-01-01) and logs a warning.
+    pub fn parse_date_strict(&mut self, field: &str, raw: &str) -> Result<NaiveDate, String> {
+        match parse_german_date(raw) {
+            Some(d) => Ok(d),
+            None if self.options.strict_mode => {
+                let msg = format!(
+                    "Datum '{}' konnte nicht geparst werden (erwartet: DD.MM.YYYY)",
+                    raw.trim()
+                );
+                self.error(field, raw, &msg);
+                Err(msg)
+            }
+            None => {
+                self.warn(field, raw, "Datum konnte nicht geparst werden, verwende Fallback");
+                // Fallback date that's obviously wrong to detect issues
+                Ok(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
             }
         }
     }
@@ -518,5 +584,41 @@ mod tests {
         // No WKN present (only lowercase or wrong length)
         assert_eq!(extract_wkn("no wkn here"), None);
         assert_eq!(extract_wkn("ABC12"), None); // Too short
+    }
+
+    #[test]
+    fn test_parse_context_strict_mode_date() {
+        // Strict mode (default) - should return Err for invalid date
+        let mut ctx = ParseContext::new();
+        assert!(ctx.is_strict());
+
+        let result = ctx.parse_date_strict("date", "invalid-date");
+        assert!(result.is_err());
+        assert!(ctx.has_errors());
+    }
+
+    #[test]
+    fn test_parse_context_strict_mode_valid_date() {
+        let mut ctx = ParseContext::new();
+        let result = ctx.parse_date_strict("date", "15.03.2024");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn test_parse_context_lenient_mode_date() {
+        // Lenient mode - should return fallback for invalid date
+        let options = ParseOptions { strict_mode: false };
+        let mut ctx = ParseContext::with_options(options);
+        assert!(!ctx.is_strict());
+
+        let result = ctx.parse_date_strict("date", "invalid-date");
+        assert!(result.is_ok());
+        // Fallback date is 2000-01-01
+        assert_eq!(result.unwrap(), NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+        // Should have a warning but not an error
+        assert!(!ctx.has_errors());
+        assert!(!ctx.warnings.is_empty());
     }
 }

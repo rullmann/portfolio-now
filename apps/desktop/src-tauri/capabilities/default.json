@@ -16,6 +16,6 @@
     "store:default"
   ],
   "context": {
-    "security_note": "SECURITY: fs and shell permissions removed. File operations are handled through Tauri commands with path validation. Shell execution is disabled except for shell:allow-open (opening URLs/files with default app). store:default is for secure API key storage."
+    "security_note": "SECURITY: fs and shell permissions removed. File operations are handled through Tauri commands with path validation. Shell execution is disabled except for shell:allow-open (opening URLs/files with default app). store:default provides secure API key storage isolated from WebView."
   }
 }

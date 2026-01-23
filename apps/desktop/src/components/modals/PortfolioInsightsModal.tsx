@@ -13,9 +13,8 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore, type AiProvider } from '../../store';
 import { AIProviderLogo } from '../common/AIProviderLogo';
-import { AIModelSelector } from '../common';
+import { AIModelSelector, SafeMarkdown } from '../common';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
-import ReactMarkdown from 'react-markdown';
 import { useEscapeKey } from '../../lib/hooks';
 
 /** Analysis mode selection */
@@ -156,7 +155,7 @@ function InsightCard({ section }: { section: ParsedSection }) {
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-sm mb-2">{section.title}</h3>
           <div className="prose prose-sm dark:prose-invert max-w-none text-[13px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
-            <ReactMarkdown>{section.content}</ReactMarkdown>
+            <SafeMarkdown>{section.content}</SafeMarkdown>
           </div>
         </div>
       </div>
@@ -456,7 +455,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
               ) : (
                 // Fallback to plain markdown if parsing fails
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown>{result.analysis}</ReactMarkdown>
+                  <SafeMarkdown>{result.analysis}</SafeMarkdown>
                 </div>
               )}
             </div>

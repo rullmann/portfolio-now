@@ -509,3 +509,57 @@ pub async fn read_file_as_base64(path: String) -> Result<FileBase64Result, Strin
         filename,
     })
 }
+
+/// Read an image file as base64 (for drag & drop in chat)
+/// SECURITY: Only allows image file extensions
+#[command]
+pub async fn read_image_as_base64(path: String) -> Result<FileBase64Result, String> {
+    // SECURITY: Validate the file path - only allow image files
+    let validated_path =
+        security::validate_file_path_with_extension(&path, Some(&["png", "jpg", "jpeg", "gif", "webp"]))?;
+
+    if !validated_path.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    // Read the file
+    let data = std::fs::read(&validated_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // Check file size (max 10MB for images)
+    const MAX_SIZE: usize = 10 * 1024 * 1024;
+    if data.len() > MAX_SIZE {
+        return Err(format!("Image too large (max {} MB)", MAX_SIZE / 1024 / 1024));
+    }
+
+    // Encode as base64
+    let base64_data = BASE64.encode(&data);
+
+    // Extract filename and determine MIME type
+    let filename = validated_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image.png")
+        .to_string();
+
+    let ext = validated_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime_type = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/png",
+    }
+    .to_string();
+
+    Ok(FileBase64Result {
+        data: base64_data,
+        mime_type,
+        filename,
+    })
+}

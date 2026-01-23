@@ -8,11 +8,13 @@
  * - Isolated to the Tauri application context
  *
  * SECURITY NOTES:
- * - Keys are stored in app_data_dir/secure-keys.json (NOT encrypted, but isolated)
+ * - Keys are stored in app_data_dir/secure-keys.json (isolated from WebView)
  * - The store is only accessible from the Tauri app, not arbitrary JS
  * - Keys are never logged or exposed in error messages
- * - For truly encrypted storage, consider using tauri-plugin-stronghold
- *   or the OS keychain (tauri-plugin-keyring)
+ *
+ * FUTURE: When tauri-plugin-keyring becomes stable for Tauri v2,
+ * this can be upgraded to use OS-level encrypted storage (macOS Keychain,
+ * Windows Credential Manager, Linux Secret Service).
  */
 
 import { load, type Store } from '@tauri-apps/plugin-store';
@@ -216,4 +218,18 @@ export async function isSecureStorageAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Check if using OS keyring (encrypted) or store (isolated but not encrypted)
+ *
+ * Currently always returns false as keyring is not yet available for Tauri v2.
+ * This function is provided for future compatibility.
+ *
+ * @returns true if OS keyring is being used (currently always false)
+ */
+export async function isUsingKeyring(): Promise<boolean> {
+  // Keyring not available yet - return false
+  // When keyring becomes available, this will check if keyring is working
+  return false;
 }

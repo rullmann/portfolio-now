@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Building2, Target, Bell } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { SafeMarkdown } from '../../components/common/SafeMarkdown';
 import { getAllHoldings, suggestRebalanceWithAi } from '../../lib/api';
 import type { AggregatedHolding, AiRebalanceSuggestion } from '../../lib/types';
 import { toast, useSettingsStore } from '../../store';
@@ -474,7 +474,7 @@ export function RebalancingView() {
               <div>
                 <h4 className="text-sm font-medium text-muted-foreground mb-2">Gesamtbegründung</h4>
                 <div className="prose prose-sm prose-slate dark:prose-invert max-w-none">
-                  <ReactMarkdown>{aiSuggestion.reasoning}</ReactMarkdown>
+                  <SafeMarkdown>{aiSuggestion.reasoning}</SafeMarkdown>
                 </div>
               </div>
 
@@ -485,7 +485,7 @@ export function RebalancingView() {
                   Risikoeinschätzung
                 </h4>
                 <div className="prose prose-sm prose-slate dark:prose-invert max-w-none text-muted-foreground">
-                  <ReactMarkdown>{aiSuggestion.riskAssessment}</ReactMarkdown>
+                  <SafeMarkdown>{aiSuggestion.riskAssessment}</SafeMarkdown>
                 </div>
               </div>
             </div>

@@ -57,6 +57,7 @@ pub fn run() {
             commands::file::get_portfolio_stats,
             commands::file::export_database_to_portfolio,
             commands::file::read_file_as_base64,
+            commands::file::read_image_as_base64,
             // Quotes
             commands::quotes::fetch_quotes,
             commands::quotes::sync_security_prices,
