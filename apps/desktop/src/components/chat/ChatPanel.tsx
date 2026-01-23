@@ -20,7 +20,7 @@ interface FileBase64Result {
   mimeType: string;  // Rust uses rename_all = "camelCase"
   filename: string;
 }
-import { useSettingsStore, useUIStore, type AiProvider } from '../../store';
+import { useSettingsStore, useUIStore, toast, type AiProvider } from '../../store';
 import { AIModelSelector } from '../common/AIModelSelector';
 import { ChatMessage, type ChatMessageData } from './ChatMessage';
 import { VisionIndicator } from './VisionIndicator';
@@ -281,6 +281,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastFailedInput, setLastFailedInput] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<SuggestedAction[]>([]);
   const [executingSuggestion, setExecutingSuggestion] = useState<string | null>(null);
   const [importingTransactions, setImportingTransactions] = useState<string | null>(null);
@@ -918,6 +919,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     }
     setIsLoading(true);
     setError(null);
+    setLastFailedInput(null);
 
     try {
       // Build user message content (include attachment indicator)
@@ -1159,12 +1161,18 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       const errorMessage = typeof err === 'string' ? err : String(err);
 
       // Try to parse structured error
+      let displayError = errorMessage;
       try {
         const parsed = JSON.parse(errorMessage);
-        setError(parsed.message || errorMessage);
+        displayError = parsed.message || errorMessage;
       } catch {
-        setError(errorMessage);
+        // Keep original errorMessage
       }
+
+      // Show toast for API errors
+      toast.error(displayError);
+      setError(displayError);
+      setLastFailedInput(trimmedContent);
     } finally {
       setIsLoading(false);
     }
@@ -1839,7 +1847,18 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
           {error && (
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-              {error}
+              <p className="mb-2">{error}</p>
+              {lastFailedInput && (
+                <button
+                  onClick={() => {
+                    setError(null);
+                    sendMessage(lastFailedInput);
+                  }}
+                  className="text-xs px-2 py-1 rounded bg-destructive/20 hover:bg-destructive/30 transition-colors"
+                >
+                  Erneut versuchen
+                </button>
+              )}
             </div>
           )}
 

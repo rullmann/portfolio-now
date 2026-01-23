@@ -3,6 +3,7 @@
 //! Provides safe, predefined SQL query templates that the AI can use
 //! to answer questions about transactions, dividends, and holdings.
 
+use chrono::Datelike;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -217,6 +218,69 @@ pub fn get_all_templates() -> Vec<QueryTemplate> {
                 },
             ],
         },
+        // ============================================================================
+        // NEW: Performance & Allocation Templates (Phase 1)
+        // ============================================================================
+        QueryTemplate {
+            id: "portfolio_performance_summary".to_string(),
+            description: "Rendite-Übersicht: TTWROR, IRR, Gewinn/Verlust für einen Zeitraum".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "period".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Zeitraum: 'ytd' (Jahr bis heute), '1y' (1 Jahr), '3y', '5y', 'all' (seit Beginn)".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "current_holdings".to_string(),
+            description: "Aktuelle Bestände mit Stückzahlen, Wert, Gewinn/Verlust".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "security".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Name, ISIN oder Ticker (optional, ohne = alle)".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "unrealized_gains_losses".to_string(),
+            description: "Nicht realisierte Gewinne/Verluste aller offenen Positionen".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "filter".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Filter: 'gains' (nur Gewinne), 'losses' (nur Verluste), oder leer für alle".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "realized_gains_by_year".to_string(),
+            description: "Realisierte Gewinne/Verluste pro Jahr aus Verkäufen".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "year".to_string(),
+                    param_type: "year".to_string(),
+                    required: false,
+                    description: "Jahr filtern (z.B. 2024), oder leer für alle Jahre".to_string(),
+                },
+            ],
+        },
+        QueryTemplate {
+            id: "portfolio_allocation".to_string(),
+            description: "Gewichtung/Allokation des Portfolios nach Währung oder Sektor".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "by".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Gruppierung: 'currency' (Währung), 'type' (Assetklasse), oder leer für beides".to_string(),
+                },
+            ],
+        },
     ]
 }
 
@@ -243,6 +307,12 @@ pub fn execute_template(
         "portfolio_accounts" => execute_portfolio_accounts(conn, &request.parameters),
         "tax_relevant_sales" => execute_tax_relevant_sales(conn, &request.parameters),
         "account_balance_analysis" => execute_account_balance_analysis(conn, &request.parameters),
+        // NEW: Performance & Allocation Templates
+        "portfolio_performance_summary" => execute_portfolio_performance_summary(conn, &request.parameters),
+        "current_holdings" => execute_current_holdings(conn, &request.parameters),
+        "unrealized_gains_losses" => execute_unrealized_gains_losses(conn, &request.parameters),
+        "realized_gains_by_year" => execute_realized_gains_by_year(conn, &request.parameters),
+        "portfolio_allocation" => execute_portfolio_allocation(conn, &request.parameters),
         _ => Err(format!("Unbekanntes Template: {}", request.template_id)),
     }
 }
@@ -259,7 +329,7 @@ fn execute_security_transactions(
     let search_pattern = format!("%{}%", security);
 
     // Build SQL with optional txn_type filter
-    if let Some(tt) = txn_type {
+    let result = if let Some(tt) = txn_type {
         let sql = r#"
             SELECT
                 t.date,
@@ -297,6 +367,16 @@ fn execute_security_transactions(
             LIMIT 50
         "#;
         execute_query(conn, sql, &[&search_pattern], "security_transactions")
+    };
+
+    // If no results, provide helpful error with suggestions
+    match result {
+        Ok(qr) if qr.row_count == 0 => {
+            let mut enhanced = qr;
+            enhanced.formatted_markdown = security_not_found_error(conn, security);
+            Ok(enhanced)
+        }
+        other => other,
     }
 }
 
@@ -862,8 +942,561 @@ fn execute_account_balance_analysis(
 }
 
 // ============================================================================
-// Helper
+// NEW: Performance & Allocation Templates (Phase 1)
 // ============================================================================
+
+/// Portfolio performance summary (TTWROR, gains/losses)
+fn execute_portfolio_performance_summary(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let period = params.get("period").map(|s| s.to_lowercase());
+
+    // Calculate date range based on period
+    let today = chrono::Local::now().date_naive();
+    let (start_date, period_label) = match period.as_deref() {
+        Some("ytd") => {
+            let year_start = chrono::NaiveDate::from_ymd_opt(today.year(), 1, 1)
+                .ok_or("Ungültiges Datum")?;
+            (year_start, "Jahr bis heute (YTD)".to_string())
+        }
+        Some("1y") => {
+            let one_year_ago = today - chrono::Duration::days(365);
+            (one_year_ago, "Letzte 12 Monate".to_string())
+        }
+        Some("3y") => {
+            let three_years_ago = today - chrono::Duration::days(3 * 365);
+            (three_years_ago, "Letzte 3 Jahre".to_string())
+        }
+        Some("5y") => {
+            let five_years_ago = today - chrono::Duration::days(5 * 365);
+            (five_years_ago, "Letzte 5 Jahre".to_string())
+        }
+        _ => {
+            // "all" or default - find first transaction date
+            let first_date: String = conn
+                .query_row(
+                    "SELECT MIN(date) FROM pp_txn WHERE owner_type IN ('portfolio', 'account')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| today.to_string());
+            let parsed = chrono::NaiveDate::parse_from_str(&first_date, "%Y-%m-%d")
+                .unwrap_or(today - chrono::Duration::days(365));
+            (parsed, "Seit Beginn".to_string())
+        }
+    };
+
+    // Query aggregated portfolio data
+    let sql = r#"
+        WITH portfolio_stats AS (
+            -- Total cost basis from FIFO lots
+            SELECT
+                COALESCE(SUM(l.gross_amount), 0) / 100.0 as total_cost_basis,
+                COALESCE(SUM(l.remaining_shares), 0) / 100000000.0 as total_shares
+            FROM pp_fifo_lot l
+            WHERE l.remaining_shares > 0
+        ),
+        current_values AS (
+            -- Current portfolio value based on holdings × latest price
+            SELECT
+                COALESCE(SUM(
+                    (l.remaining_shares / 100000000.0) * (lp.value / 100000000.0)
+                ), 0) as total_value
+            FROM pp_fifo_lot l
+            JOIN pp_latest_price lp ON lp.security_id = l.security_id
+            WHERE l.remaining_shares > 0
+        ),
+        period_transactions AS (
+            -- Count transactions in period
+            SELECT
+                COUNT(*) as txn_count,
+                SUM(CASE WHEN txn_type IN ('BUY', 'DELIVERY_INBOUND') THEN 1 ELSE 0 END) as buy_count,
+                SUM(CASE WHEN txn_type IN ('SELL', 'DELIVERY_OUTBOUND') THEN 1 ELSE 0 END) as sell_count
+            FROM pp_txn
+            WHERE date >= ?1 AND date <= ?2
+        ),
+        dividends AS (
+            -- Total dividends in period
+            SELECT COALESCE(SUM(amount), 0) / 100.0 as total_dividends
+            FROM pp_txn
+            WHERE txn_type = 'DIVIDENDS'
+              AND date >= ?1 AND date <= ?2
+        ),
+        realized AS (
+            -- Realized gains from FIFO consumptions
+            SELECT
+                COALESCE(SUM(
+                    (t.amount / 100.0) - (c.gross_amount / 100.0)
+                ), 0) as realized_gains
+            FROM pp_fifo_consumption c
+            JOIN pp_txn t ON t.id = c.sale_txn_id
+            WHERE t.date >= ?1 AND t.date <= ?2
+        )
+        SELECT
+            ps.total_cost_basis,
+            cv.total_value,
+            CASE
+                WHEN ps.total_cost_basis > 0
+                THEN ((cv.total_value - ps.total_cost_basis) / ps.total_cost_basis) * 100
+                ELSE 0
+            END as unrealized_return_pct,
+            cv.total_value - ps.total_cost_basis as unrealized_gain_loss,
+            pt.txn_count,
+            pt.buy_count,
+            pt.sell_count,
+            d.total_dividends,
+            r.realized_gains,
+            ?3 as period_label,
+            ?1 as start_date,
+            ?2 as end_date
+        FROM portfolio_stats ps, current_values cv, period_transactions pt, dividends d, realized r
+    "#;
+
+    let start_str = start_date.to_string();
+    let end_str = today.to_string();
+
+    execute_query(conn, sql, &[&start_str, &end_str, &period_label], "portfolio_performance_summary")
+}
+
+/// Current holdings with shares, value, and gain/loss
+fn execute_current_holdings(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let security = params.get("security");
+
+    // Use SSOT HOLDINGS_SUM_SQL pattern from pp/common.rs
+    if let Some(sec) = security {
+        let search_pattern = format!("%{}%", sec);
+        let sql = r#"
+            SELECT
+                s.name as security_name,
+                s.ticker,
+                s.isin,
+                s.currency,
+                SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) / 100000000.0 as shares,
+                COALESCE(lp.value, 0) / 100000000.0 as current_price,
+                (SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as current_value,
+                COALESCE(l.cost_basis, 0) as cost_basis,
+                CASE
+                    WHEN COALESCE(l.cost_basis, 0) > 0
+                    THEN (((SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0)) - COALESCE(l.cost_basis, 0)) / COALESCE(l.cost_basis, 0) * 100
+                    ELSE 0
+                END as gain_loss_pct
+            FROM pp_txn t
+            JOIN pp_security s ON s.id = t.security_id
+            LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+            LEFT JOIN (
+                SELECT security_id, SUM(gross_amount) / 100.0 as cost_basis
+                FROM pp_fifo_lot
+                WHERE remaining_shares > 0
+                GROUP BY security_id
+            ) l ON l.security_id = s.id
+            WHERE t.owner_type = 'portfolio'
+              AND t.shares IS NOT NULL
+              AND (s.name LIKE ?1 OR s.isin LIKE ?1 OR s.ticker LIKE ?1)
+            GROUP BY s.id
+            HAVING shares > 0.0001
+            ORDER BY current_value DESC
+        "#;
+        let result = execute_query(conn, sql, &[&search_pattern], "current_holdings");
+
+        // If no results for specific security search, provide helpful error
+        match result {
+            Ok(qr) if qr.row_count == 0 => {
+                let mut enhanced = qr;
+                enhanced.formatted_markdown = security_not_found_error(conn, sec);
+                Ok(enhanced)
+            }
+            other => other,
+        }
+    } else {
+        let sql = r#"
+            SELECT
+                s.name as security_name,
+                s.ticker,
+                s.isin,
+                s.currency,
+                SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) / 100000000.0 as shares,
+                COALESCE(lp.value, 0) / 100000000.0 as current_price,
+                (SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as current_value,
+                COALESCE(l.cost_basis, 0) as cost_basis,
+                CASE
+                    WHEN COALESCE(l.cost_basis, 0) > 0
+                    THEN (((SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0)) - COALESCE(l.cost_basis, 0)) / COALESCE(l.cost_basis, 0) * 100
+                    ELSE 0
+                END as gain_loss_pct
+            FROM pp_txn t
+            JOIN pp_security s ON s.id = t.security_id
+            LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+            LEFT JOIN (
+                SELECT security_id, SUM(gross_amount) / 100.0 as cost_basis
+                FROM pp_fifo_lot
+                WHERE remaining_shares > 0
+                GROUP BY security_id
+            ) l ON l.security_id = s.id
+            WHERE t.owner_type = 'portfolio'
+              AND t.shares IS NOT NULL
+            GROUP BY s.id
+            HAVING shares > 0.0001
+            ORDER BY current_value DESC
+            LIMIT 50
+        "#;
+        execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "current_holdings")
+    }
+}
+
+/// Unrealized gains/losses for all open positions
+fn execute_unrealized_gains_losses(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let filter = params.get("filter").map(|s| s.to_lowercase());
+
+    let having_clause = match filter.as_deref() {
+        Some("gains") | Some("gewinne") => "HAVING gain_loss > 0",
+        Some("losses") | Some("verluste") => "HAVING gain_loss < 0",
+        _ => "",
+    };
+
+    let sql = format!(r#"
+        SELECT
+            s.name as security_name,
+            s.ticker,
+            s.currency,
+            SUM(l.remaining_shares) / 100000000.0 as shares,
+            SUM(l.gross_amount) / 100.0 as cost_basis,
+            COALESCE(lp.value, 0) / 100000000.0 as current_price,
+            (SUM(l.remaining_shares) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as current_value,
+            ((SUM(l.remaining_shares) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0)) - (SUM(l.gross_amount) / 100.0) as gain_loss,
+            CASE
+                WHEN SUM(l.gross_amount) > 0
+                THEN ((((SUM(l.remaining_shares) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0)) - (SUM(l.gross_amount) / 100.0)) / (SUM(l.gross_amount) / 100.0)) * 100
+                ELSE 0
+            END as gain_loss_pct
+        FROM pp_fifo_lot l
+        JOIN pp_security s ON s.id = l.security_id
+        LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+        WHERE l.remaining_shares > 0
+        GROUP BY s.id
+        {}
+        ORDER BY gain_loss DESC
+    "#, having_clause);
+
+    execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "unrealized_gains_losses")
+}
+
+/// Realized gains by year from FIFO consumptions
+fn execute_realized_gains_by_year(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let year = params.get("year");
+
+    if let Some(y) = year {
+        let sql = r#"
+            SELECT
+                strftime('%Y', t.date) as year,
+                s.name as security_name,
+                s.ticker,
+                t.date as sale_date,
+                c.shares_consumed / 100000000.0 as shares_sold,
+                c.gross_amount / 100.0 as cost_basis,
+                t.amount / 100.0 as sale_amount,
+                (t.amount / 100.0) - (c.gross_amount / 100.0) as realized_gain,
+                CASE
+                    WHEN c.gross_amount > 0
+                    THEN (((t.amount / 100.0) - (c.gross_amount / 100.0)) / (c.gross_amount / 100.0)) * 100
+                    ELSE 0
+                END as realized_gain_pct,
+                l.purchase_date,
+                julianday(t.date) - julianday(l.purchase_date) as holding_days
+            FROM pp_fifo_consumption c
+            JOIN pp_txn t ON t.id = c.sale_txn_id
+            JOIN pp_fifo_lot l ON l.id = c.lot_id
+            JOIN pp_security s ON s.id = l.security_id
+            WHERE strftime('%Y', t.date) = ?1
+            ORDER BY t.date DESC
+            LIMIT 100
+        "#;
+        let result = execute_query(conn, sql, &[&y.as_str()], "realized_gains_by_year")?;
+
+        if result.rows.is_empty() {
+            return Err(no_transactions_for_year_error("Realisierte Gewinne/Verluste", y));
+        }
+        Ok(result)
+    } else {
+        // Summary by year
+        let sql = r#"
+            SELECT
+                strftime('%Y', t.date) as year,
+                COUNT(DISTINCT t.id) as sale_count,
+                SUM(c.shares_consumed) / 100000000.0 as total_shares_sold,
+                SUM(c.gross_amount) / 100.0 as total_cost_basis,
+                SUM(t.amount) / 100.0 as total_sale_amount,
+                SUM((t.amount / 100.0) - (c.gross_amount / 100.0)) as total_realized_gain
+            FROM pp_fifo_consumption c
+            JOIN pp_txn t ON t.id = c.sale_txn_id
+            JOIN pp_fifo_lot l ON l.id = c.lot_id
+            GROUP BY strftime('%Y', t.date)
+            ORDER BY year DESC
+        "#;
+        execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "realized_gains_by_year")
+    }
+}
+
+/// Portfolio allocation by currency or asset type
+fn execute_portfolio_allocation(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let group_by = params.get("by").map(|s| s.to_lowercase());
+
+    match group_by.as_deref() {
+        Some("currency") | Some("währung") => {
+            let sql = r#"
+                WITH holdings AS (
+                    SELECT
+                        s.id,
+                        s.currency,
+                        (SUM(CASE
+                            WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                            WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                            ELSE 0
+                        END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as value
+                    FROM pp_txn t
+                    JOIN pp_security s ON s.id = t.security_id
+                    LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+                    WHERE t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+                    GROUP BY s.id
+                    HAVING SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END) > 0
+                ),
+                totals AS (
+                    SELECT SUM(value) as total_value FROM holdings
+                )
+                SELECT
+                    h.currency,
+                    COUNT(*) as position_count,
+                    SUM(h.value) as total_value,
+                    (SUM(h.value) / t.total_value) * 100 as allocation_pct
+                FROM holdings h, totals t
+                WHERE t.total_value > 0
+                GROUP BY h.currency
+                ORDER BY allocation_pct DESC
+            "#;
+            execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "portfolio_allocation")
+        }
+        Some("type") | Some("typ") | Some("asset") => {
+            // Asset type based on security feed/characteristics
+            let sql = r#"
+                WITH holdings AS (
+                    SELECT
+                        s.id,
+                        s.feed,
+                        s.name,
+                        (SUM(CASE
+                            WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                            WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                            ELSE 0
+                        END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as value
+                    FROM pp_txn t
+                    JOIN pp_security s ON s.id = t.security_id
+                    LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+                    WHERE t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+                    GROUP BY s.id
+                    HAVING SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END) > 0
+                ),
+                classified AS (
+                    SELECT
+                        CASE
+                            WHEN h.feed IN ('COINGECKO', 'KRAKEN') THEN 'Krypto'
+                            WHEN LOWER(h.name) LIKE '%etf%' OR LOWER(h.name) LIKE '%index%' THEN 'ETF/Fonds'
+                            WHEN LOWER(h.name) LIKE '%gold%' OR LOWER(h.name) LIKE '%silber%' THEN 'Edelmetalle'
+                            WHEN LOWER(h.name) LIKE '%bond%' OR LOWER(h.name) LIKE '%anleihe%' THEN 'Anleihen'
+                            ELSE 'Aktien'
+                        END as asset_type,
+                        h.value
+                    FROM holdings h
+                ),
+                totals AS (
+                    SELECT SUM(value) as total_value FROM holdings
+                )
+                SELECT
+                    c.asset_type,
+                    COUNT(*) as position_count,
+                    SUM(c.value) as total_value,
+                    (SUM(c.value) / t.total_value) * 100 as allocation_pct
+                FROM classified c, totals t
+                WHERE t.total_value > 0
+                GROUP BY c.asset_type
+                ORDER BY allocation_pct DESC
+            "#;
+            execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "portfolio_allocation")
+        }
+        _ => {
+            // Both: show currency and position count
+            let sql = r#"
+                WITH holdings AS (
+                    SELECT
+                        s.id,
+                        s.name,
+                        s.currency,
+                        s.feed,
+                        (SUM(CASE
+                            WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                            WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                            ELSE 0
+                        END) / 100000000.0) * (COALESCE(lp.value, 0) / 100000000.0) as value
+                    FROM pp_txn t
+                    JOIN pp_security s ON s.id = t.security_id
+                    LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+                    WHERE t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+                    GROUP BY s.id
+                    HAVING SUM(CASE
+                        WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                        WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                        ELSE 0
+                    END) > 0
+                ),
+                totals AS (
+                    SELECT SUM(value) as total_value FROM holdings
+                )
+                SELECT
+                    'Gesamt' as category,
+                    COUNT(*) as position_count,
+                    SUM(h.value) as total_value,
+                    100.0 as allocation_pct,
+                    GROUP_CONCAT(DISTINCT h.currency) as currencies
+                FROM holdings h, totals t
+                UNION ALL
+                SELECT
+                    h.currency as category,
+                    COUNT(*) as position_count,
+                    SUM(h.value) as total_value,
+                    (SUM(h.value) / t.total_value) * 100 as allocation_pct,
+                    h.currency as currencies
+                FROM holdings h, totals t
+                WHERE t.total_value > 0
+                GROUP BY h.currency
+                ORDER BY CASE WHEN category = 'Gesamt' THEN 0 ELSE 1 END, allocation_pct DESC
+            "#;
+            execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "portfolio_allocation")
+        }
+    }
+}
+
+// ============================================================================
+// Helper - Improved Error Handling with Suggestions
+// ============================================================================
+
+/// Find similar securities for error messages with suggestions
+fn find_similar_securities(conn: &Connection, search: &str) -> Vec<String> {
+    let search_lower = search.to_lowercase();
+
+    // Try to find securities with similar names
+    let sql = r#"
+        SELECT name, ticker, isin
+        FROM pp_security
+        WHERE name IS NOT NULL
+        ORDER BY
+            CASE
+                WHEN LOWER(name) LIKE ? THEN 1
+                WHEN LOWER(ticker) LIKE ? THEN 2
+                WHEN LOWER(name) LIKE ? THEN 3
+                ELSE 4
+            END,
+            name
+        LIMIT 5
+    "#;
+
+    let exact_pattern = format!("{}%", search_lower);
+    let contains_pattern = format!("%{}%", search_lower);
+
+    conn.prepare(sql)
+        .and_then(|mut stmt| {
+            stmt.query_map([&exact_pattern, &exact_pattern, &contains_pattern], |row| {
+                let name: String = row.get(0)?;
+                let ticker: Option<String> = row.get(1)?;
+                let isin: Option<String> = row.get(2)?;
+
+                let mut result = name.clone();
+                if let Some(t) = ticker {
+                    result = format!("{} ({})", name, t);
+                } else if let Some(i) = isin {
+                    result = format!("{} [{}]", name, i);
+                }
+                Ok(result)
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+        })
+        .unwrap_or_default()
+}
+
+/// Generate an error message when security is not found, with suggestions
+fn security_not_found_error(conn: &Connection, search: &str) -> String {
+    let suggestions = find_similar_securities(conn, search);
+
+    if suggestions.is_empty() {
+        format!("Wertpapier '{}' nicht gefunden. Keine ähnlichen Wertpapiere in der Datenbank.", search)
+    } else {
+        format!(
+            "Wertpapier '{}' nicht gefunden. Meinten Sie: {}?",
+            search,
+            suggestions.join(", ")
+        )
+    }
+}
+
+/// Generate an error message when no transactions are found for a year
+fn no_transactions_for_year_error(search_type: &str, year: &str) -> String {
+    let current_year = chrono::Local::now().format("%Y").to_string();
+    let prev_year = (year.parse::<i32>().unwrap_or(2024) - 1).to_string();
+
+    if year == current_year {
+        format!(
+            "Keine {} für {} gefunden. Versuche das Vorjahr ({}) oder 'all' für alle Jahre.",
+            search_type, year, prev_year
+        )
+    } else {
+        format!(
+            "Keine {} für {} gefunden. Versuche ein anderes Jahr oder 'all' für alle Jahre.",
+            search_type, year
+        )
+    }
+}
 
 /// Translate transaction type to user-friendly German
 fn translate_txn_type(txn_type: &str) -> &str {
@@ -1123,6 +1756,76 @@ fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<St
 
                 format!("• {} {} – {} {} Stück verkauft für {} {}, {} Tage gehalten, Einstand: {} {} ({})",
                     status_icon, sale_date, name, shares, sale_amount, currency, holding_days, cost_basis, currency, tax_status)
+            }
+            // NEW: Performance & Allocation Templates (Phase 1)
+            "portfolio_performance_summary" => {
+                let period = row.get("period_label").and_then(|v| v.as_str()).unwrap_or("Gesamt");
+                let cost_basis = row.get("total_cost_basis").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let value = row.get("total_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let unrealized_pct = row.get("unrealized_return_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let unrealized_gl = row.get("unrealized_gain_loss").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let dividends = row.get("total_dividends").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let realized = row.get("realized_gains").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+
+                let gain_icon = if unrealized_pct >= 0.0 { "📈" } else { "📉" };
+                format!(
+                    "**{}**\n• Einstandswert: {} EUR\n• Aktueller Wert: {} EUR\n• {} Unrealisiert: {} EUR ({:+.2}%)\n• Dividenden: {} EUR\n• Realisierte G/V: {} EUR",
+                    period, cost_basis, value, gain_icon, unrealized_gl, unrealized_pct, dividends, realized
+                )
+            }
+            "current_holdings" => {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
+                let shares = row.get("shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
+                let value = row.get("current_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+                let gain_pct = row.get("gain_loss_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                let gain_icon = if gain_pct >= 0.0 { "🟢" } else { "🔴" };
+                format!("• {}{}{} – {} Stück = {} {} ({:+.2}%)", gain_icon, name, ticker, shares, value, currency, gain_pct)
+            }
+            "unrealized_gains_losses" => {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
+                let gain = row.get("gain_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let gain_pct = row.get("gain_loss_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
+
+                let gain_icon = if gain >= 0.0 { "🟢" } else { "🔴" };
+                format!("• {}{}{} – {:+.2} {} ({:+.2}%)", gain_icon, name, ticker, gain, currency, gain_pct)
+            }
+            "realized_gains_by_year" => {
+                // Check if it's summary (has year, sale_count) or detail (has sale_date)
+                if row.contains_key("sale_count") {
+                    // Summary view
+                    let year = row.get("year").and_then(|v| v.as_str()).unwrap_or("-");
+                    let count = row.get("sale_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let total_gain = row.get("total_realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                    let gain_icon = if total_gain >= 0.0 { "📈" } else { "📉" };
+                    format!("• {} {} – {} Verkäufe, Gesamt: {:+.2} EUR", gain_icon, year, count, total_gain)
+                } else {
+                    // Detail view
+                    let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                    let sale_date = row.get("sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                    let gain = row.get("realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
+
+                    let gain_icon = if gain >= 0.0 { "🟢" } else { "🔴" };
+                    format!("• {}{} – {} – {:+.2} EUR ({} Tage gehalten)", gain_icon, sale_date, name, gain, holding_days)
+                }
+            }
+            "portfolio_allocation" => {
+                let category = row.get("category").or(row.get("currency")).or(row.get("asset_type")).and_then(|v| v.as_str()).unwrap_or("-");
+                let count = row.get("position_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                let value = row.get("total_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+                let pct = row.get("allocation_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                if category == "Gesamt" {
+                    format!("**{}**: {} Positionen, {} EUR", category, count, value)
+                } else {
+                    format!("• {} – {} Positionen, {} EUR ({:.1}%)", category, count, value, pct)
+                }
             }
             // Note: account_balance_analysis is handled by format_account_balance_analysis() above
             _ => format!("{:?}", row),
