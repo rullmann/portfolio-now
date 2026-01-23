@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Database, Plus, Trash2, AlertCircle, FileText, Pencil, CheckSquare, X } from 'lucide-react';
 import { getTransactionTypeLabel, formatDate } from '../../lib/types';
-import { deleteTransaction, deleteTransactionsBulk, getSecurities } from '../../lib/api';
+import { deleteTransaction, deleteTransactionsBulk, getSecurities, getAllHoldings } from '../../lib/api';
 import { TransactionFormModal, PdfImportModal, BulkDeleteConfirmModal } from '../../components/modals';
 import { TableSkeleton, SecurityLogo } from '../../components/common';
 import { useCachedLogos } from '../../lib/hooks';
@@ -51,6 +51,9 @@ export function TransactionsView() {
   const [error, setError] = useState<string | null>(null);
   const [filterOwnerType, setFilterOwnerType] = useState<string>('all');
   const [filterTxnType, setFilterTxnType] = useState<string>('all');
+  const [filterSecurityId, setFilterSecurityId] = useState<string>('all');
+  const [onlyInHoldings, setOnlyInHoldings] = useState<boolean>(true);
+  const [holdingSecurityIds, setHoldingSecurityIds] = useState<Set<number>>(new Set());
   const [displayLimit, setDisplayLimit] = useState(100);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPdfImportOpen, setIsPdfImportOpen] = useState(false);
@@ -84,12 +87,12 @@ export function TransactionsView() {
   // Load logos
   const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
-  // Load transactions and securities from database
+  // Load transactions, securities, and holdings from database
   const loadTransactions = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [transactions, secs] = await Promise.all([
+      const [transactions, secs, holdings] = await Promise.all([
         invoke<TransactionData[]>('get_transactions', {
           ownerType: null,
           ownerId: null,
@@ -98,9 +101,13 @@ export function TransactionsView() {
           offset: null,
         }),
         getSecurities(),
+        getAllHoldings(),
       ]);
       setDbTransactions(transactions);
       setSecurities(secs.map((s) => ({ id: s.id, uuid: s.uuid, name: s.name, ticker: s.ticker })));
+      // Build set of security IDs that are in holdings (flatMap because AggregatedHolding has securityIds array)
+      const holdingIds = new Set(holdings.filter(h => h.totalShares > 0).flatMap(h => h.securityIds));
+      setHoldingSecurityIds(holdingIds);
     } catch (err) {
       console.error('Failed to load transactions:', err);
       setError(err instanceof Error ? err.message : String(err));
@@ -214,14 +221,38 @@ export function TransactionsView() {
     }
   };
 
-  // Filter transactions by type
+  // Filter transactions by type, owner, security, and holdings
   const filteredTransactions = useMemo(() => {
     return dbTransactions.filter(tx => {
       if (filterOwnerType !== 'all' && tx.ownerType !== filterOwnerType) return false;
       if (filterTxnType !== 'all' && tx.txnType !== filterTxnType) return false;
+      if (filterSecurityId !== 'all') {
+        if (filterSecurityId === 'none') {
+          // Filter for transactions without security
+          if (tx.securityId != null) return false;
+        } else {
+          // Filter for specific security
+          if (tx.securityId !== parseInt(filterSecurityId, 10)) return false;
+        }
+      }
+      // If "only in holdings" is active and no specific security selected,
+      // only show transactions for securities currently in holdings
+      if (onlyInHoldings && filterSecurityId === 'all') {
+        if (tx.securityId == null || !holdingSecurityIds.has(tx.securityId)) return false;
+      }
       return true;
     });
-  }, [dbTransactions, filterOwnerType, filterTxnType]);
+  }, [dbTransactions, filterOwnerType, filterTxnType, filterSecurityId, onlyInHoldings, holdingSecurityIds]);
+
+  // Get securities that have transactions (for filter dropdown)
+  // If onlyInHoldings is true, only show securities that are currently held
+  const securitiesWithTransactions = useMemo(() => {
+    const securityIds = new Set(dbTransactions.filter(tx => tx.securityId != null).map(tx => tx.securityId));
+    return securities
+      .filter(s => securityIds.has(s.id))
+      .filter(s => !onlyInHoldings || holdingSecurityIds.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [dbTransactions, securities, onlyInHoldings, holdingSecurityIds]);
 
   // Get unique transaction types for filter
   const uniqueTxnTypes = useMemo(() => {
@@ -342,6 +373,31 @@ export function TransactionsView() {
                 ))}
               </select>
             </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-muted-foreground">Wertpapier:</label>
+              <select
+                value={filterSecurityId}
+                onChange={(e) => setFilterSecurityId(e.target.value)}
+                className="text-sm rounded-md border border-input bg-background px-2 py-1 max-w-[200px]"
+              >
+                <option value="all">Alle</option>
+                <option value="none">Ohne Wertpapier</option>
+                {securitiesWithTransactions.map(sec => (
+                  <option key={sec.id} value={sec.id}>
+                    {sec.ticker ? `${sec.name} (${sec.ticker})` : sec.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={onlyInHoldings}
+                onChange={(e) => setOnlyInHoldings(e.target.checked)}
+                className="w-4 h-4 rounded border-input"
+              />
+              <span className="text-sm text-muted-foreground">Nur im Bestand</span>
+            </label>
           </div>
         </div>
 

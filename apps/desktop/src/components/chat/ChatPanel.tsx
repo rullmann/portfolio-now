@@ -1547,7 +1547,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         </div>
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
             {/* New Conversation Button */}
             <button
               onClick={handleNewConversation}
@@ -1558,14 +1558,15 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
             </button>
 
             {/* Conversation Dropdown */}
-            <DropdownMenu
-              trigger={
-                <span className="truncate max-w-[180px]">
-                  {currentConversation?.title || 'Neuer Chat'}
-                </span>
-              }
-              align="left"
-            >
+            <div className="min-w-0 flex-1">
+              <DropdownMenu
+                trigger={
+                  <span className="truncate block max-w-[140px]">
+                    {currentConversation?.title || 'Neuer Chat'}
+                  </span>
+                }
+                align="left"
+              >
               {conversations.map((conv) => (
                 <DropdownItem
                   key={conv.id}
@@ -1585,7 +1586,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                   Keine Conversations
                 </div>
               )}
-            </DropdownMenu>
+              </DropdownMenu>
+            </div>
           </div>
 
           <div className="flex items-center gap-1 shrink-0">

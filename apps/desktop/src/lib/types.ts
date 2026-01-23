@@ -2148,6 +2148,52 @@ export interface QuoteAssistantResponse {
   tokensUsed?: number;
 }
 
+// ============================================================================
+// User-defined Query Template Types
+// ============================================================================
+
+/** Parameter definition for a user template */
+export interface UserTemplateParam {
+  id?: number;
+  paramName: string;
+  paramType: 'string' | 'number' | 'date' | 'year';
+  required: boolean;
+  description: string;
+  defaultValue?: string;
+}
+
+/** User-defined query template */
+export interface UserTemplate {
+  id: number;
+  templateId: string;
+  name: string;
+  description: string;
+  sqlQuery: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  parameters: UserTemplateParam[];
+}
+
+/** Input for creating/updating a user template */
+export interface UserTemplateInput {
+  name: string;
+  description: string;
+  sqlQuery: string;
+  enabled?: boolean;
+  parameters: UserTemplateParam[];
+}
+
+/** Result of testing a user template */
+export interface UserTemplateTestResult {
+  success: boolean;
+  rowCount: number;
+  columns: string[];
+  previewRows: Record<string, unknown>[];
+  formattedMarkdown: string;
+  error?: string;
+}
+
 /**
  * Security with quote issue for the assistant
  */

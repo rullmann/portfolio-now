@@ -281,6 +281,18 @@ pub fn get_all_templates() -> Vec<QueryTemplate> {
                 },
             ],
         },
+        QueryTemplate {
+            id: "securities_in_multiple_portfolios".to_string(),
+            description: "Wertpapiere die in mehreren Depots gehalten werden".to_string(),
+            parameters: vec![
+                QueryParameter {
+                    name: "min_portfolios".to_string(),
+                    param_type: "number".to_string(),
+                    required: false,
+                    description: "Mindestanzahl Depots (Standard: 2)".to_string(),
+                },
+            ],
+        },
     ]
 }
 
@@ -313,7 +325,24 @@ pub fn execute_template(
         "unrealized_gains_losses" => execute_unrealized_gains_losses(conn, &request.parameters),
         "realized_gains_by_year" => execute_realized_gains_by_year(conn, &request.parameters),
         "portfolio_allocation" => execute_portfolio_allocation(conn, &request.parameters),
-        _ => Err(format!("Unbekanntes Template: {}", request.template_id)),
+        "securities_in_multiple_portfolios" => execute_securities_in_multiple_portfolios(conn, &request.parameters),
+        // Check for user-defined templates
+        _ => {
+            // Try to find a user template with this ID
+            if super::user_templates::is_user_template(&request.template_id) {
+                match super::user_templates::get_user_template_by_id(conn, &request.template_id) {
+                    Ok(user_template) => {
+                        if !user_template.enabled {
+                            return Err(format!("Template '{}' ist deaktiviert", request.template_id));
+                        }
+                        super::user_templates::execute_user_template(conn, &user_template, &request.parameters)
+                    }
+                    Err(_) => Err(format!("Unbekanntes Template: {}", request.template_id)),
+                }
+            } else {
+                Err(format!("Unbekanntes Template: {}", request.template_id))
+            }
+        }
     }
 }
 
@@ -1418,6 +1447,64 @@ fn execute_portfolio_allocation(
     }
 }
 
+/// Securities held in multiple portfolios
+fn execute_securities_in_multiple_portfolios(
+    conn: &Connection,
+    params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let min_portfolios = params
+        .get("min_portfolios")
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(2);
+
+    let sql = r#"
+        WITH current_holdings AS (
+            -- Step 1: Calculate current holdings per security per portfolio
+            SELECT
+                t.security_id,
+                t.owner_id as portfolio_id,
+                SUM(CASE
+                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) / 100000000.0 as shares
+            FROM pp_txn t
+            WHERE t.owner_type = 'portfolio' AND t.shares IS NOT NULL
+            GROUP BY t.security_id, t.owner_id
+        ),
+        positive_holdings AS (
+            -- Step 2: Only keep holdings with actual positive shares (> 0.01)
+            SELECT
+                h.security_id,
+                h.portfolio_id,
+                h.shares,
+                s.name as security_name,
+                s.ticker,
+                s.isin,
+                p.name as portfolio_name
+            FROM current_holdings h
+            JOIN pp_security s ON s.id = h.security_id
+            JOIN pp_portfolio p ON p.id = h.portfolio_id
+            WHERE h.shares > 0.01
+        )
+        -- Step 3: Aggregate by ISIN (same underlying security across different listings)
+        SELECT
+            MIN(security_name) as security_name,
+            GROUP_CONCAT(DISTINCT ticker) as ticker,
+            isin,
+            COUNT(*) as depot_count,
+            GROUP_CONCAT(portfolio_name || ': ' || PRINTF('%.2f', shares) || ' Stk.', ' | ') as in_depots,
+            ROUND(SUM(shares), 2) as gesamt
+        FROM positive_holdings
+        WHERE isin IS NOT NULL AND LENGTH(isin) > 0
+        GROUP BY isin
+        HAVING COUNT(*) >= ?1
+        ORDER BY depot_count DESC, gesamt DESC
+    "#;
+
+    execute_query(conn, sql, &[&min_portfolios], "securities_in_multiple_portfolios")
+}
+
 // ============================================================================
 // Helper - Improved Error Handling with Suggestions
 // ============================================================================
@@ -1827,6 +1914,15 @@ fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<St
                     format!("• {} – {} Positionen, {} EUR ({:.1}%)", category, count, value, pct)
                 }
             }
+            "securities_in_multiple_portfolios" => {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
+                let depot_count = row.get("depot_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                let in_depots = row.get("in_depots").and_then(|v| v.as_str()).unwrap_or("-");
+                let gesamt = row.get("gesamt").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                format!("• **{}{}** ({} Depots, {:.2} Stk. gesamt): {}", name, ticker, depot_count, gesamt, in_depots)
+            }
             // Note: account_balance_analysis is handled by format_account_balance_analysis() above
             _ => format!("{:?}", row),
         };
@@ -1993,6 +2089,47 @@ Nutze KEINE Abfrage für:
 - Allgemeine Portfolio-Übersicht (diese Daten hast du bereits im Kontext)
 - Aktuelle Holdings und Werte
 - Performance-Berechnungen"#.to_string()
+}
+
+/// Generate the query templates section including user-defined templates
+pub fn get_templates_for_prompt_with_user_templates(conn: &Connection) -> String {
+    let mut prompt = get_templates_for_prompt();
+
+    // Append user-defined templates if any exist
+    if let Ok(user_templates) = super::user_templates::get_enabled_user_templates(conn) {
+        if !user_templates.is_empty() {
+            prompt.push_str("\n\n=== BENUTZERDEFINIERTE ABFRAGEN ===\n");
+            prompt.push_str("Der Benutzer hat eigene Abfragen definiert:\n\n");
+
+            for (i, template) in user_templates.iter().enumerate() {
+                prompt.push_str(&format!(
+                    "{}. {} - {}\n",
+                    i + 13, // Continue numbering from built-in templates
+                    template.template_id,
+                    template.description
+                ));
+
+                if !template.parameters.is_empty() {
+                    prompt.push_str("   Parameter: ");
+                    let param_strs: Vec<String> = template
+                        .parameters
+                        .iter()
+                        .map(|p| {
+                            if p.required {
+                                format!("{} ({})", p.param_name, p.param_type)
+                            } else {
+                                format!("{} (optional, {})", p.param_name, p.param_type)
+                            }
+                        })
+                        .collect();
+                    prompt.push_str(&param_strs.join(", "));
+                    prompt.push('\n');
+                }
+            }
+        }
+    }
+
+    prompt
 }
 
 // ============================================================================

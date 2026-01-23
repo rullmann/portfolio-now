@@ -3,7 +3,7 @@
  * Modern, minimal design with cost basis visualization
  */
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   TrendingUp,
   Database,
@@ -17,11 +17,14 @@ import {
   X,
   ChevronRight,
 } from 'lucide-react';
+import { createChart, AreaSeries, LineSeries } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, LineData, AreaData, Time } from 'lightweight-charts';
 import {
   useSettingsStore,
   useUIStore,
   toast,
   type AutoUpdateInterval,
+  type ChartTimeRange,
 } from '../../store';
 import {
   usePortfolioAnalysisStore,
@@ -33,16 +36,6 @@ import { formatNumber } from '../utils';
 import { getBaseCurrency, calculatePerformance, syncAllPrices } from '../../lib/api';
 import { useCachedLogos } from '../../lib/hooks';
 import type { PerformanceResult } from '../../lib/types';
-import {
-  AreaChart,
-  Area,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  ComposedChart,
-  CartesianGrid,
-} from 'recharts';
 import { PortfolioInsightsModal } from '../../components/modals/PortfolioInsightsModal';
 
 // Portfolio Insights Card Component
@@ -112,35 +105,6 @@ interface DashboardViewProps {
   onRefresh?: () => void;
 }
 
-// Sparkline component
-function Sparkline({ data, positive }: { data: number[]; positive: boolean }) {
-  const chartData = data.map((value, i) => ({ value, i }));
-  const color = positive ? '#10b981' : '#ef4444';
-
-  return (
-    <div className="w-14 h-5">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id={`spark-${positive}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-              <stop offset="100%" stopColor={color} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke={color}
-            strokeWidth={1.5}
-            fill={`url(#spark-${positive})`}
-            dot={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
 // Trend Indicator component for AI analysis status
 function TrendIndicator({
   status,
@@ -173,247 +137,175 @@ function TrendIndicator({
   );
 }
 
-// Main Chart with Invested Capital Line
+// Main Chart with Cost Basis Line (TradingView style)
 function PortfolioChart({
   portfolioData,
-  investedData,
   timeRange,
   onTimeRangeChange,
   currency,
-  currentTotalValue,
   currentCostBasis,
 }: {
   portfolioData: Array<{ date: string; value: number }>;
-  investedData: Array<{ date: string; value: number }>;
   timeRange: string;
   onTimeRangeChange: (range: '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX') => void;
   currency: string;
-  currentTotalValue?: number;
   currentCostBasis?: number;
 }) {
-  // Merge portfolio and invested data by date
-  const mergedData = useMemo(() => {
-    const sortedInvested = [...investedData].sort((a, b) => a.date.localeCompare(b.date));
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const valueSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
+  const costBasisSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
-    const findInvestedValue = (portfolioDate: string): number => {
-      let result = 0;
-      for (const inv of sortedInvested) {
-        if (inv.date <= portfolioDate) {
-          result = inv.value;
-        } else {
-          break;
+  // Use actual current cost basis if provided
+  const displayCostBasis = currentCostBasis ?? 0;
+
+  // Initialize lightweight-charts
+  useEffect(() => {
+    if (!chartContainerRef.current || portfolioData.length === 0) {
+      return;
+    }
+
+    // Clean up existing chart
+    if (chartRef.current) {
+      chartRef.current.remove();
+      chartRef.current = null;
+    }
+
+    const container = chartContainerRef.current;
+
+    // Create chart with theme-aware colors
+    const chart = createChart(container, {
+      layout: {
+        background: { color: 'transparent' },
+        textColor: '#888',
+      },
+      grid: {
+        vertLines: { color: 'rgba(128, 128, 128, 0.1)' },
+        horzLines: { color: 'rgba(128, 128, 128, 0.1)' },
+      },
+      width: container.clientWidth,
+      height: container.clientHeight,
+      rightPriceScale: {
+        borderColor: 'rgba(128, 128, 128, 0.2)',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0,
+        },
+      },
+      timeScale: {
+        borderColor: 'rgba(128, 128, 128, 0.2)',
+        timeVisible: true,
+        rightOffset: 12,
+      },
+      crosshair: {
+        mode: 1,
+      },
+    });
+
+    chartRef.current = chart;
+
+    // Portfolio value area series (green gradient)
+    const valueSeries = chart.addSeries(AreaSeries, {
+      lineColor: '#22c55e',
+      topColor: 'rgba(34, 197, 94, 0.4)',
+      bottomColor: 'rgba(34, 197, 94, 0.0)',
+      lineWidth: 2,
+      autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const res = original();
+        if (res !== null) {
+          res.priceRange.minValue = 0;
         }
+        return res;
+      },
+    });
+    valueSeriesRef.current = valueSeries;
+
+    // Cost basis line series (orange dashed line)
+    const costBasisSeries = chart.addSeries(LineSeries, {
+      color: '#f97316',
+      lineWidth: 2,
+      lineStyle: 2, // Dashed
+    });
+    costBasisSeriesRef.current = costBasisSeries;
+
+    // Prepare data
+    const valueData: AreaData<Time>[] = portfolioData.map((point) => ({
+      time: point.date as Time,
+      value: point.value,
+    }));
+
+    // Set value data
+    valueSeries.setData(valueData);
+
+    // Create cost basis line (flat line at current total cost basis)
+    if (portfolioData.length > 0 && displayCostBasis > 0) {
+      const costBasisData: LineData<Time>[] = [
+        { time: portfolioData[0].date as Time, value: displayCostBasis },
+        { time: portfolioData[portfolioData.length - 1].date as Time, value: displayCostBasis },
+      ];
+      costBasisSeries.setData(costBasisData);
+    }
+
+    // Fit content
+    chart.timeScale().fitContent();
+
+    // Handle resize
+    const handleResize = () => {
+      if (chartRef.current && container) {
+        chartRef.current.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
       }
-      return result;
     };
 
-    return portfolioData.map((d) => ({
-      date: d.date,
-      value: d.value,
-      invested: findInvestedValue(d.date),
-    }));
-  }, [portfolioData, investedData]);
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
 
-  // Use actual current values if provided, otherwise fall back to last chart values
-  const displayValue = currentTotalValue ?? mergedData[mergedData.length - 1]?.value ?? 0;
-  const displayCostBasis = currentCostBasis ?? mergedData[mergedData.length - 1]?.invested ?? 0;
-  const isPositive = displayValue >= displayCostBasis;
-  const gainLoss = displayValue - displayCostBasis;
-  const gainLossPercent = displayCostBasis > 0 ? (gainLoss / displayCostBasis) * 100 : 0;
-
-  // Calculate Y axis domain
-  const allValues = mergedData.flatMap((d) => [d.value, d.invested]);
-  const dataMin = Math.min(...allValues);
-  const dataMax = Math.max(...allValues);
-  const padding = (dataMax - dataMin) * 0.1;
-  const yMin = Math.max(0, dataMin - padding);
-  const yMax = dataMax + padding;
-
-  // Check if data spans multiple years
-  const spansMultipleYears = useMemo(() => {
-    if (mergedData.length < 2) return false;
-    const firstYear = new Date(mergedData[0].date).getFullYear();
-    const lastYear = new Date(mergedData[mergedData.length - 1].date).getFullYear();
-    return lastYear - firstYear >= 1;
-  }, [mergedData]);
-
-  // Custom tooltip
-  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; dataKey: string }>; label?: string }) => {
-    if (!active || !payload || !label) return null;
-
-    const portfolioValue = payload.find(p => p.dataKey === 'value')?.value || 0;
-    const investedValue = payload.find(p => p.dataKey === 'invested')?.value || 0;
-    const diff = portfolioValue - investedValue;
-    const diffPercent = investedValue > 0 ? (diff / investedValue) * 100 : 0;
-    const isProfit = diff >= 0;
-
-    return (
-      <div className="bg-popover/95 backdrop-blur-sm border border-border rounded-lg shadow-xl p-3 min-w-[180px]">
-        <div className="text-[10px] text-muted-foreground mb-2">
-          {new Date(label).toLocaleDateString('de-DE', {
-            weekday: 'short',
-            day: 'numeric',
-            month: 'short',
-            year: 'numeric',
-          })}
-        </div>
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-4">
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              Depotwert
-            </span>
-            <span className="text-xs font-medium">
-              {formatNumber(portfolioValue)} {currency}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="w-2 h-2 rounded-full bg-blue-400" />
-              Investiert
-            </span>
-            <span className="text-xs font-medium">
-              {formatNumber(investedValue)} {currency}
-            </span>
-          </div>
-          <div className="border-t border-border pt-1.5 mt-1.5">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-xs text-muted-foreground">Gewinn/Verlust</span>
-              <span className={`text-xs font-semibold ${isProfit ? 'text-emerald-500' : 'text-red-500'}`}>
-                {isProfit ? '+' : ''}{formatNumber(diff)} {currency}
-                <span className="ml-1 text-[10px] opacity-80">
-                  ({isProfit ? '+' : ''}{diffPercent.toFixed(1)}%)
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+    return () => {
+      resizeObserver.disconnect();
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+    };
+  }, [portfolioData, displayCostBasis]);
 
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-4">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-              Portfolio-Entwicklung
-            </span>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-lg font-semibold">{formatNumber(displayValue)} {currency}</span>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                isPositive ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'
-              }`}>
-                {isPositive ? '+' : ''}{formatNumber(gainLoss)} ({isPositive ? '+' : ''}{gainLossPercent.toFixed(1)}%)
-              </span>
-            </div>
-          </div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-[3px] rounded-full bg-green-500" />
+            Marktwert
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-0 border-t-2 border-dashed border-orange-500" />
+            Einstandswert ({formatNumber(displayCostBasis)} {currency})
+          </span>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex gap-1">
-            {(['1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'MAX'] as const).map((range) => (
-              <button
-                key={range}
-                onClick={() => onTimeRangeChange(range)}
-                className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all ${
-                  timeRange === range
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                }`}
-              >
-                {range}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-[3px] rounded-full bg-emerald-500" />
-              Depotwert
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-[3px] rounded-full bg-blue-400 opacity-60" />
-              Investiert
-            </span>
-          </div>
+        <div className="flex gap-1">
+          {(['1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'MAX'] as const).map((range) => (
+            <button
+              key={range}
+              onClick={() => onTimeRangeChange(range)}
+              className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all ${
+                timeRange === range
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+            >
+              {range}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Chart */}
       <div className="flex-1 min-h-0">
-        {mergedData.length > 0 ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={mergedData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="portfolioGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
-                  <stop offset="50%" stopColor="#10b981" stopOpacity={0.08} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="investedGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.15} />
-                  <stop offset="100%" stopColor="#60a5fa" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="hsl(var(--border))"
-                strokeOpacity={0.5}
-                vertical={false}
-              />
-              <XAxis
-                dataKey="date"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
-                tickFormatter={(value) => {
-                  const d = new Date(value);
-                  if (spansMultipleYears) {
-                    return d.toLocaleDateString('de-DE', { month: 'short', year: '2-digit' });
-                  }
-                  return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
-                }}
-                interval="preserveStartEnd"
-                minTickGap={60}
-                dy={8}
-              />
-              <YAxis
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
-                tickFormatter={(value) => {
-                  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-                  if (value >= 1000) return `${(value / 1000).toFixed(0)}k`;
-                  return value.toFixed(0);
-                }}
-                width={48}
-                domain={[yMin, yMax]}
-              />
-              <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'hsl(var(--muted-foreground))', strokeWidth: 1, strokeDasharray: '4 4' }} />
-              {/* Invested Capital Area - subtle blue */}
-              <Area
-                type="monotone"
-                dataKey="invested"
-                stroke="#60a5fa"
-                strokeWidth={2}
-                strokeOpacity={0.6}
-                fill="url(#investedGradient)"
-                dot={false}
-                activeDot={{ r: 4, fill: '#60a5fa', stroke: '#fff', strokeWidth: 2 }}
-              />
-              {/* Portfolio Value Area - prominent green */}
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke="#10b981"
-                strokeWidth={2.5}
-                fill="url(#portfolioGradient)"
-                dot={false}
-                activeDot={{ r: 5, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+        {portfolioData.length > 0 ? (
+          <div ref={chartContainerRef} className="h-full w-full" />
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground/50 text-xs">
             Keine Daten
@@ -451,7 +343,8 @@ export function DashboardView({
 
   const [baseCurrency, setBaseCurrency] = useState<string>('EUR');
   const [performance, setPerformance] = useState<PerformanceResult | null>(null);
-  const [chartTimeRange, setChartTimeRange] = useState<'1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX'>('1Y');
+  const defaultChartTimeRange = useSettingsStore((state) => state.defaultChartTimeRange);
+  const [chartTimeRange, setChartTimeRange] = useState<ChartTimeRange>(defaultChartTimeRange);
   const [isSyncing, setIsSyncing] = useState(false);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const lastSyncTime = useSettingsStore((state) => state.lastSyncTime);
@@ -551,7 +444,7 @@ export function DashboardView({
   const securitiesForLogos = useMemo(
     () =>
       dbHoldings.map((h) => ({
-        id: h.securityId,
+        id: h.securityIds[0],
         ticker: undefined,
         name: h.name || '',
       })),
@@ -600,7 +493,7 @@ export function DashboardView({
     }
   }, [dbHoldings, performanceStartDate]);
 
-  const { filteredChartData, filteredInvestedData } = useMemo(() => {
+  const { filteredChartData, filteredInvestedData: _filteredInvestedData } = useMemo(() => {
     if (dbPortfolioHistory.length === 0) {
       return { filteredChartData: [], filteredInvestedData: [] };
     }
@@ -872,11 +765,11 @@ Berechnung:
                 .sort((a, b) => (b.gainLossPercent || 0) - (a.gainLossPercent || 0))
                 .slice(0, 3)
                 .map((holding, index) => {
-                  const cachedLogo = cachedLogos.get(holding.securityId);
+                  const cachedLogo = cachedLogos.get(holding.securityIds[0]);
                   const logoUrl = holding.customLogo || cachedLogo?.url;
                   const gainPercent = holding.gainLossPercent || 0;
                   return (
-                    <div key={holding.securityId} className="flex items-center gap-2">
+                    <div key={holding.securityIds[0]} className="flex items-center gap-2">
                       <span className="text-[10px] text-muted-foreground w-3">{index + 1}.</span>
                       <div className="w-5 h-5 rounded bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
                         {logoUrl ? (
@@ -970,11 +863,9 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
           <div className="flex-1 glass-card p-4 min-w-0">
             <PortfolioChart
               portfolioData={filteredChartData}
-              investedData={filteredInvestedData}
               timeRange={chartTimeRange}
               onTimeRangeChange={setChartTimeRange}
               currency={baseCurrency}
-              currentTotalValue={totalValue}
               currentCostBasis={totalCostBasis}
             />
           </div>
@@ -1033,7 +924,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
             </div>
             <div className="flex-1 overflow-y-auto -mx-3 px-3 space-y-0.5">
               {holdingsByValue.map((holding) => {
-                const cachedLogo = cachedLogos.get(holding.securityId);
+                const cachedLogo = cachedLogos.get(holding.securityIds[0]);
                 const logoUrl = holding.customLogo || cachedLogo?.url;
                 const percent =
                   totalValue > 0 ? ((holding.currentValue || 0) / totalValue) * 100 : 0;
@@ -1041,17 +932,11 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                 const isPositive = gainPercent >= 0;
 
                 // Get AI analysis for this holding
-                const analysis = analyses[holding.securityId];
-
-                const sparkData = Array.from({ length: 10 }, (_, i) => {
-                  const base = 100;
-                  const trend = isPositive ? 1 : -1;
-                  return base + trend * i * 2 + Math.random() * 8;
-                });
+                const analysis = analyses[holding.securityIds[0]];
 
                 return (
                   <div
-                    key={holding.securityId}
+                    key={holding.securityIds[0]}
                     className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-muted/30 transition-colors cursor-pointer group"
                   >
                     <div className="w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -1069,7 +954,6 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                     </div>
                     {/* AI Trend Indicator */}
                     <TrendIndicator status={analysis?.trend} summary={analysis?.summary} />
-                    <Sparkline data={sparkData} positive={isPositive} />
                     <div className="text-right min-w-[65px]">
                       <div className="text-xs font-medium">
                         {formatNumber(holding.currentValue || 0)}

@@ -174,6 +174,59 @@ export function HoldingsRowSkeleton() {
 }
 
 /**
+ * Portfolio card skeleton matching extended Portfolio view layout.
+ */
+export function PortfolioCardSkeleton() {
+  return (
+    <div className="bg-card rounded-lg border border-border p-4">
+      {/* Header */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex items-center gap-3">
+          <Skeleton className="w-10 h-10 rounded-lg" />
+          <div>
+            <Skeleton className="h-5 w-32 mb-1" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        </div>
+        <div className="flex gap-1">
+          <Skeleton className="w-7 h-7 rounded" />
+          <Skeleton className="w-7 h-7 rounded" />
+        </div>
+      </div>
+      {/* Metrics */}
+      <div className="space-y-2 py-3 border-t border-border">
+        <div className="flex justify-between">
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <div className="flex justify-between">
+          <Skeleton className="h-4 w-14" />
+          <Skeleton className="h-4 w-20" />
+        </div>
+        <div className="flex justify-between">
+          <Skeleton className="h-4 w-8" />
+          <Skeleton className="h-4 w-28" />
+        </div>
+        <div className="flex justify-between">
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      </div>
+      {/* Counts */}
+      <div className="py-3 border-t border-border">
+        <Skeleton className="h-4 w-40" />
+      </div>
+      {/* Quick Actions */}
+      <div className="flex gap-2 pt-3 border-t border-border">
+        <Skeleton className="h-8 flex-1 rounded" />
+        <Skeleton className="h-8 flex-1 rounded" />
+        <Skeleton className="h-8 flex-1 rounded" />
+      </div>
+    </div>
+  );
+}
+
+/**
  * Dashboard skeleton combining summary cards and holdings table.
  */
 export function DashboardSkeleton() {

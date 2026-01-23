@@ -19,6 +19,7 @@ import {
   TrendingUp,
   ChevronDown,
   BarChart3,
+  User,
 } from 'lucide-react';
 import {
   useUIStore,
@@ -70,6 +71,8 @@ export function Header({
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
+    profilePicture,
+    userName,
   } = useSettingsStore();
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
@@ -316,6 +319,24 @@ export function Header({
             <Plus className="w-4 h-4" aria-hidden="true" />
             <span>Neue Buchung</span>
           </button>
+
+          {/* User Avatar */}
+          <div
+            className="flex-shrink-0 ml-2"
+            title={userName || 'Profil'}
+          >
+            {profilePicture ? (
+              <img
+                src={profilePicture}
+                alt={userName || 'Profil'}
+                className="w-8 h-8 rounded-full object-cover border border-border"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center border border-border">
+                <User className="w-4 h-4 text-muted-foreground" />
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

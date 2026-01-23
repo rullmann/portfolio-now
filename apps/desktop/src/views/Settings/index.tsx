@@ -22,18 +22,21 @@ import {
   TrendingUp,
   Link,
   Database,
+  Camera,
+  X,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSettingsStore, useUIStore, toast } from '../../store';
+import { useSettingsStore, useUIStore, toast, type ChartTimeRange } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
-import { clearLogoCache, rebuildFifoLots, validateAllSecurities, getValidationStatus } from '../../lib/api';
+import { clearLogoCache, rebuildFifoLots, validateAllSecurities, getValidationStatus, getUserProfilePicture, setUserProfilePicture } from '../../lib/api';
 import { AIProviderLogo } from '../../components/common/AIProviderLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { ApiKeyType } from '../../lib/secureStorage';
 import { AttributeTypeManager } from '../../components/attributes';
-import { AiFeatureMatrix } from '../../components/settings';
+import { AiFeatureMatrix, UserTemplatesSettings } from '../../components/settings';
 import type { ValidationStatusSummary, ValidationResponse } from '../../lib/types';
 import { cn } from '../../lib/utils';
+import { MessageSquarePlus } from 'lucide-react';
 
 // Settings sections configuration
 const SETTINGS_SECTIONS = [
@@ -41,6 +44,7 @@ const SETTINGS_SECTIONS = [
   { id: 'transactions', name: 'Buchungen', icon: Receipt },
   { id: 'quotes', name: 'Kurse', icon: TrendingUp },
   { id: 'ai', name: 'KI-Analyse', icon: Sparkles },
+  { id: 'queries', name: 'Eigene Abfragen', icon: MessageSquarePlus },
   { id: 'services', name: 'Dienste', icon: Link },
   { id: 'data', name: 'Daten', icon: Database },
   { id: 'danger', name: 'Gefahrenzone', icon: AlertTriangle },
@@ -54,6 +58,8 @@ export function SettingsView() {
   const {
     userName,
     setUserName,
+    profilePicture,
+    setProfilePicture,
     syncOnlyHeldSecurities,
     setSyncOnlyHeldSecurities,
     deliveryMode,
@@ -91,6 +97,8 @@ export function SettingsView() {
     aiFeatureSettings,
     chatContextSize,
     setChatContextSize,
+    defaultChartTimeRange,
+    setDefaultChartTimeRange,
   } = useSettingsStore();
 
   // SECURITY: Use secure storage for API keys
@@ -146,8 +154,68 @@ export function SettingsView() {
   const [validationStatus, setValidationStatus] = useState<ValidationStatusSummary | null>(null);
   const [validationResult, setValidationResult] = useState<ValidationResponse | null>(null);
   const [forceValidation, setForceValidation] = useState(false);
+  const [isUploadingPicture, setIsUploadingPicture] = useState(false);
 
   const { scrollTarget, setScrollTarget } = useUIStore();
+
+  // Load profile picture from database on mount
+  useEffect(() => {
+    const loadProfilePicture = async () => {
+      try {
+        const picture = await getUserProfilePicture();
+        setProfilePicture(picture);
+      } catch (err) {
+        console.error('Failed to load profile picture:', err);
+      }
+    };
+    loadProfilePicture();
+  }, [setProfilePicture]);
+
+  // Handle profile picture upload
+  const handleUploadProfilePicture = async () => {
+    setIsUploadingPicture(true);
+    try {
+      // First open a file dialog to select an image
+      const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
+      const selectedPath = await openDialog({
+        multiple: false,
+        filters: [{ name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+        title: 'Profilbild auswählen',
+      });
+
+      if (!selectedPath) {
+        // User cancelled
+        return;
+      }
+
+      // Read the image as base64
+      const result = await invoke<{ data: string; mimeType: string; filename: string }>('read_image_as_base64', { path: selectedPath });
+      if (result) {
+        const pictureData = `data:${result.mimeType};base64,${result.data}`;
+        await setUserProfilePicture(pictureData);
+        setProfilePicture(pictureData);
+        toast.success('Profilbild erfolgreich hochgeladen');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (!errorMsg.includes('cancelled') && !errorMsg.includes('abgebrochen')) {
+        toast.error(`Fehler beim Hochladen: ${errorMsg}`);
+      }
+    } finally {
+      setIsUploadingPicture(false);
+    }
+  };
+
+  // Handle profile picture removal
+  const handleRemoveProfilePicture = async () => {
+    try {
+      await setUserProfilePicture(null);
+      setProfilePicture(null);
+      toast.success('Profilbild entfernt');
+    } catch (err) {
+      toast.error(`Fehler beim Entfernen: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   // Map scrollTarget to section
   useEffect(() => {
@@ -375,18 +443,56 @@ export function SettingsView() {
                   <User size={20} className="text-primary" />
                   <h3 className="text-lg font-semibold">Profil</h3>
                 </div>
-                <div>
-                  <label className="text-sm font-medium">Dein Name</label>
-                  <p className="text-sm text-muted-foreground mt-0.5 mb-2">
-                    Wird in KI-Konversationen verwendet, um dich persönlich anzusprechen.
-                  </p>
-                  <input
-                    type="text"
-                    value={userName}
-                    onChange={(e) => setUserName(e.target.value)}
-                    placeholder="z.B. Max"
-                    className="w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
-                  />
+
+                <div className="flex items-start gap-6">
+                  {/* Profile Picture */}
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="relative group">
+                      {profilePicture ? (
+                        <div className="relative">
+                          <img
+                            src={profilePicture}
+                            alt="Profilbild"
+                            className="w-20 h-20 rounded-full object-cover border-2 border-border"
+                          />
+                          <button
+                            onClick={handleRemoveProfilePicture}
+                            className="absolute -top-1 -right-1 w-6 h-6 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Profilbild entfernen"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center border-2 border-dashed border-border">
+                          <User size={32} className="text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleUploadProfilePicture}
+                      disabled={isUploadingPicture}
+                      className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
+                    >
+                      <Camera size={14} />
+                      {isUploadingPicture ? 'Hochladen...' : profilePicture ? 'Ändern' : 'Bild hochladen'}
+                    </button>
+                  </div>
+
+                  {/* Name Input */}
+                  <div className="flex-1">
+                    <label className="text-sm font-medium">Dein Name</label>
+                    <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+                      Wird in KI-Konversationen verwendet, um dich persönlich anzusprechen.
+                    </p>
+                    <input
+                      type="text"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                      placeholder="z.B. Max"
+                      className="w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -428,6 +534,24 @@ export function SettingsView() {
                       <option value="USD">USD</option>
                       <option value="CHF">CHF</option>
                       <option value="GBP">GBP</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Chart-Zeitraum</label>
+                    <select
+                      value={defaultChartTimeRange}
+                      onChange={(e) => setDefaultChartTimeRange(e.target.value as ChartTimeRange)}
+                      className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2"
+                    >
+                      <option value="1W">1 Woche</option>
+                      <option value="1M">1 Monat</option>
+                      <option value="3M">3 Monate</option>
+                      <option value="6M">6 Monate</option>
+                      <option value="YTD">Jahr bis heute</option>
+                      <option value="1Y">1 Jahr</option>
+                      <option value="3Y">3 Jahre</option>
+                      <option value="5Y">5 Jahre</option>
+                      <option value="MAX">Maximum</option>
                     </select>
                   </div>
                 </div>
@@ -899,6 +1023,19 @@ export function SettingsView() {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* User Queries Section */}
+          {activeSection === 'queries' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold mb-1">Eigene Abfragen</h2>
+                <p className="text-sm text-muted-foreground">
+                  Definiere benutzerdefinierte SQL-Abfragen für den ChatBot
+                </p>
+              </div>
+              <UserTemplatesSettings />
             </div>
           )}
 

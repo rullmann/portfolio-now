@@ -131,7 +131,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
   // Prepare securities list for logo loading
   const securitiesForLogos = useMemo(() =>
     dbHoldings.map((h) => ({
-      id: h.securityId,
+      id: h.securityIds[0],
       ticker: undefined,
       name: h.name || '',
     })),
@@ -157,7 +157,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
   const holdingsWithLogos = useMemo(() => {
     return dbHoldings.map((h) => ({
       ...h,
-      logoUrl: h.customLogo || cachedLogos.get(h.securityId)?.url,
+      logoUrl: h.customLogo || cachedLogos.get(h.securityIds[0])?.url,
     }));
   }, [dbHoldings, cachedLogos]);
 
@@ -175,7 +175,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
           name: holding.name,
           value: holding.currentValue || 0,
           percentValue: totalValue > 0 ? ((holding.currentValue || 0) / totalValue) * 100 : 0,
-          securityId: holding.securityId,
+          securityId: holding.securityIds[0],
           color: COLORS[index % COLORS.length],
           currency: holding.currency,
           shares: holding.totalShares,
@@ -204,7 +204,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
           name: holding.name,
           value: holding.currentValue || 0,
           percentValue: portfolioTotal > 0 ? ((holding.currentValue || 0) / portfolioTotal) * 100 : 0,
-          securityId: holding.securityId,
+          securityId: holding.securityIds[0],
           color: COLORS[index % COLORS.length],
           currency: holding.currency,
           shares: holding.totalShares,

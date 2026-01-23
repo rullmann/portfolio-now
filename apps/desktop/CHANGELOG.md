@@ -5,7 +5,60 @@ Alle nennenswerten Änderungen an diesem Projekt werden in dieser Datei dokument
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.1.5] - 2026-01-23
+## [0.1.6] - 2026-01-23
+
+### Hinzugefügt
+
+#### Benutzerdefinierte Query-Templates
+Benutzer können jetzt eigene SQL-Templates für den ChatBot erstellen:
+
+**Features:**
+- **Template-Editor**: Modal zum Erstellen/Bearbeiten von SQL-Templates
+- **Parameter-System**: Definierbare Parameter (string, number, date, year) mit Standardwerten
+- **SQL-Validierung**: Test-Funktion zeigt Vorschau der Ergebnisse
+- **Template-Verwaltung**: Aktivieren/Deaktivieren, Löschen in Settings
+
+**Neue Dateien:**
+- `src/components/modals/UserTemplateModal.tsx` - Template-Editor-Modal
+- `src/components/settings/UserTemplatesSettings.tsx` - Verwaltungs-UI
+- `src-tauri/src/ai/user_templates.rs` - Backend-Logik
+
+**Neue Tauri Commands:**
+- `get_user_templates`, `create_user_template`, `update_user_template`
+- `delete_user_template`, `test_user_template`
+
+#### Pattern Statistics Panel
+Neue Komponente zeigt Erfolgsquoten erkannter Candlestick-Patterns:
+- Statistiken pro Pattern-Typ (Bullish/Bearish Engulfing, Doji, etc.)
+- Automatische Evaluierung nach 5 und 10 Tagen
+- Neue Datei: `src/components/charts/PatternStatisticsPanel.tsx`
+
+#### Portfolio-View Erweiterungen
+- Erweiterte Metriken pro Portfolio
+- Verbesserte Holdings-Darstellung
+- Schnellere Ladezeiten durch optimierte Queries
+
+### Behoben
+
+#### TypeScript Type Fixes
+- `AggregatedHolding.securityIds`: Korrigiert von `securityId` (Singular) zu `securityIds: number[]` (Plural) - Backend-kompatibel
+- `useEscapeKey` Hook: Korrigierter Funktionsaufruf mit 2 Parametern
+- Ungenutzte Imports/Variablen in Header, Charts, Portfolio, Dashboard entfernt
+
+### Geändert
+
+#### Dashboard Optimierungen
+- Refactored Chart-Daten-Berechnung
+- Verbesserte Performance bei großen Portfolios
+- Klarere Trennung von Value- und Invested-Capital-Daten
+
+#### CLAUDE.md Aktualisierung
+- Dokumentation erweitert um User Templates
+- Query-Templates-Liste aktualisiert (jetzt 13 + benutzerdefinierte)
+
+---
+
+## [0.1.5] - 2026-01-22
 
 ### Hinzugefügt
 

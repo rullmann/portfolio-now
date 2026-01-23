@@ -1108,7 +1108,7 @@ fn get_portfolio_values(
     Ok(values)
 }
 
-/// Get EXTERNAL cash flows (deposits and withdrawals only) for TTWROR calculation
+/// Get EXTERNAL cash flows (deposits, withdrawals, and deliveries) for TTWROR calculation
 ///
 /// Phase 3 fix: Now converts all cash flows to base currency for consistency.
 ///
@@ -1118,7 +1118,7 @@ fn get_portfolio_values(
 /// - TRANSFER_IN/OUT: Asset movements, not cash
 /// - DELIVERY_INBOUND/OUTBOUND: Asset movements, not cash
 ///
-/// Only DEPOSIT and REMOVAL represent external cash flows.
+/// Only DEPOSIT, REMOVAL, DELIVERY_INBOUND, and DELIVERY_OUTBOUND represent external cash flows.
 ///
 /// IMPORTANT: This function has NO fallback to BUY/SELL. For IRR with fallback,
 /// use `get_cash_flows_with_fallback()` instead.
@@ -1132,6 +1132,7 @@ fn get_cash_flows(
 
     let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
     let mut cash_flows: Vec<CashFlow> = Vec::new();
+    let mut deposit_removal_count = 0usize;
 
     // Get account-level external cash flows (DEPOSIT/REMOVAL) with account currency
     if let Some(pid) = portfolio_id {
@@ -1208,8 +1209,13 @@ fn get_cash_flows(
             }
         }
 
-        log::info!("Found {} DEPOSIT/REMOVAL from {} linked accounts for portfolio {}",
-                   cash_flows.len(), linked_account_ids.len(), pid);
+        deposit_removal_count = cash_flows.len();
+        log::info!(
+            "Found {} DEPOSIT/REMOVAL from {} linked accounts for portfolio {}",
+            deposit_removal_count,
+            linked_account_ids.len(),
+            pid
+        );
     } else {
         // For all portfolios, get all account DEPOSIT/REMOVAL with currency
         let sql = r#"
@@ -1257,15 +1263,27 @@ fn get_cash_flows(
                 }
             }
         }
+        deposit_removal_count = cash_flows.len();
     }
+
+    // Include DELIVERY_INBOUND/OUTBOUND as external cash flows for TTWROR
+    // (security transfers in/out should not count as investment performance)
+    let delivery_flows = get_delivery_cash_flows(conn, portfolio_id, start_date, end_date)?;
+    let delivery_count = delivery_flows.len();
+    cash_flows.extend(delivery_flows);
 
     // Sort by date
     cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
     // NO FALLBACK: TTWROR and Risk Metrics must use only external cash flows
     // For IRR with fallback, use get_cash_flows_with_fallback() instead
-    log::info!("TTWROR/Risk: Found {} external cash flows (DEPOSIT/REMOVAL, converted to {})",
-               cash_flows.len(), base_currency);
+    log::info!(
+        "TTWROR/Risk: Found {} external cash flows ({} DEPOSIT/REMOVAL + {} DELIVERY, converted to {})",
+        cash_flows.len(),
+        deposit_removal_count,
+        delivery_count,
+        base_currency
+    );
 
     Ok(cash_flows)
 }

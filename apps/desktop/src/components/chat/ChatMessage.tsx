@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { User, Bot, X, ImageIcon } from 'lucide-react';
 import { SafeMarkdown } from '../common/SafeMarkdown';
 import { cn } from '../../lib/utils';
+import { useSettingsStore } from '../../store';
 
 export interface StoredChatAttachment {
   data: string;      // Base64 encoded image data
@@ -37,6 +38,7 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const isDuplicate = message.isDuplicate;
   const isError = message.isError;
+  const { profilePicture } = useSettingsStore();
 
   return (
     <div
@@ -62,16 +64,25 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
         </button>
       )}
 
-      <div
-        className={cn(
-          'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center',
-          isUser
-            ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-            : 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-        )}
-      >
-        {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-      </div>
+      {/* Avatar */}
+      {isUser && profilePicture ? (
+        <img
+          src={profilePicture}
+          alt="Du"
+          className="flex-shrink-0 w-8 h-8 rounded-lg object-cover"
+        />
+      ) : (
+        <div
+          className={cn(
+            'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center',
+            isUser
+              ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+              : 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
+          )}
+        >
+          {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+        </div>
+      )}
 
       <div className="flex-1 min-w-0 pr-6">
         <div className="flex items-center gap-2 mb-1">

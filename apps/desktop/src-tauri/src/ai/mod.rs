@@ -27,7 +27,9 @@ pub mod parsing;
 // Portfolio context and command parsing
 pub mod command_parser;
 pub mod context;
+pub mod normalizer;
 pub mod query_templates;
+pub mod user_templates;
 
 // ============================================================================
 // Re-exports from types module
@@ -103,6 +105,12 @@ pub use models::{
 // ============================================================================
 
 pub use context::load_portfolio_context;
+
+// ============================================================================
+// Re-exports from normalizer module
+// ============================================================================
+
+pub use normalizer::normalize_ai_response;
 
 // ============================================================================
 // Re-exports from command_parser module

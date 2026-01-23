@@ -1132,6 +1132,47 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Added attachments_json column to pp_chat_history for image storage");
     }
 
+    // Migration: Create ai_user_template table for user-defined SQL query templates
+    if !table_exists(conn, "ai_user_template") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ai_user_template (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                sql_query TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX idx_ai_user_template_enabled ON ai_user_template(enabled);
+            "#,
+        )?;
+        log::info!("Migration: Created ai_user_template table");
+    }
+
+    // Migration: Create ai_user_template_param table for template parameters
+    if !table_exists(conn, "ai_user_template_param") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ai_user_template_param (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL,
+                param_name TEXT NOT NULL,
+                param_type TEXT NOT NULL,
+                required INTEGER NOT NULL DEFAULT 0,
+                description TEXT NOT NULL,
+                default_value TEXT,
+                FOREIGN KEY (template_id) REFERENCES ai_user_template(id) ON DELETE CASCADE,
+                UNIQUE(template_id, param_name)
+            );
+            CREATE INDEX idx_ai_user_template_param_template ON ai_user_template_param(template_id);
+            "#,
+        )?;
+        log::info!("Migration: Created ai_user_template_param table");
+    }
+
     Ok(())
 }
 

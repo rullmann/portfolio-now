@@ -96,13 +96,26 @@ const PROVIDER_NAMES: Record<AiProvider, string> = {
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration, symbolValidation, setSymbolValidationSettings } = useSettingsStore();
+  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration, symbolValidation, setSymbolValidationSettings, setProfilePicture } = useSettingsStore();
 
   // Load API keys from secure storage on app start
   // This syncs secure storage with the Zustand store for component access
   // NOTE: The hook now stores keys in local state first (not just Zustand) to prevent
   // race conditions. When isLoading becomes false, keys are guaranteed to be available.
   const { keys: apiKeys, isLoading: apiKeysLoading } = useSecureApiKeys();
+
+  // Load profile picture from database on app start
+  useEffect(() => {
+    const loadProfilePicture = async () => {
+      try {
+        const picture = await invoke<string | null>('get_user_profile_picture');
+        setProfilePicture(picture);
+      } catch (err) {
+        console.error('Failed to load profile picture:', err);
+      }
+    };
+    loadProfilePicture();
+  }, [setProfilePicture]);
 
   // Welcome modal state - show only on first launch when no userName is set
   const [showWelcome, setShowWelcome] = useState<boolean | null>(null);

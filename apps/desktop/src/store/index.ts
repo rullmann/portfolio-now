@@ -186,6 +186,9 @@ export const useExpandedGroupsStore = create<ExpandedGroupsState>()((set) => ({
 // Auto-update interval options (in minutes, 0 = disabled)
 export type AutoUpdateInterval = 0 | 15 | 30 | 60;
 
+// Chart time range options
+export type ChartTimeRange = '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX';
+
 // AI Model options per provider (updated January 2026)
 // ONLY models with confirmed vision/image input support
 export type ClaudeModel = 'claude-sonnet-4-5-20250514' | 'claude-haiku-4-5-20251015';
@@ -350,6 +353,8 @@ interface SettingsState {
   // User profile
   userName: string;
   setUserName: (name: string) => void;
+  profilePicture: string | null;
+  setProfilePicture: (picture: string | null) => void;
 
   // Quote sync settings
   syncOnlyHeldSecurities: boolean;
@@ -367,9 +372,11 @@ interface SettingsState {
   language: 'de' | 'en';
   theme: 'light' | 'dark' | 'system';
   baseCurrency: string;
+  defaultChartTimeRange: ChartTimeRange;
   setLanguage: (lang: 'de' | 'en') => void;
   setTheme: (theme: 'light' | 'dark' | 'system') => void;
   setBaseCurrency: (currency: string) => void;
+  setDefaultChartTimeRange: (range: ChartTimeRange) => void;
 
   // API Keys (Quote Providers)
   brandfetchApiKey: string;
@@ -445,6 +452,8 @@ export const useSettingsStore = create<SettingsState>()(
       // User profile
       userName: '',
       setUserName: (name) => set({ userName: name }),
+      profilePicture: null,
+      setProfilePicture: (picture) => set({ profilePicture: picture }),
 
       // Quote sync - default to only held securities
       syncOnlyHeldSecurities: true,
@@ -462,9 +471,11 @@ export const useSettingsStore = create<SettingsState>()(
       language: 'de',
       theme: 'system',
       baseCurrency: 'EUR',
+      defaultChartTimeRange: 'MAX',
       setLanguage: (lang) => set({ language: lang }),
       setTheme: (theme) => set({ theme: theme }),
       setBaseCurrency: (currency) => set({ baseCurrency: currency }),
+      setDefaultChartTimeRange: (range) => set({ defaultChartTimeRange: range }),
 
       // API Keys (Quote Providers)
       brandfetchApiKey: '',
@@ -652,6 +663,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       // Exclude transient state and API keys from persistence
       // API keys are stored securely via tauri-plugin-store (see useSecureApiKeys hook)
+      // Profile picture is stored in the database
       partialize: (state) => {
         const {
           // Transient state
@@ -660,6 +672,9 @@ export const useSettingsStore = create<SettingsState>()(
           pendingFeatureMigration,
           setPendingFeatureMigration,
           clearPendingFeatureMigration,
+          // Profile picture (stored in database, not localStorage)
+          profilePicture,
+          setProfilePicture,
           // API keys (stored in Secure Storage, not localStorage)
           brandfetchApiKey,
           setBrandfetchApiKey,
@@ -685,6 +700,7 @@ export const useSettingsStore = create<SettingsState>()(
           ...persisted
         } = state;
         // Suppress unused variable warnings
+        void profilePicture; void setProfilePicture;
         void brandfetchApiKey; void setBrandfetchApiKey;
         void finnhubApiKey; void setFinnhubApiKey;
         void coingeckoApiKey; void setCoingeckoApiKey;

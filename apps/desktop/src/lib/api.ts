@@ -3135,3 +3135,224 @@ export async function applyValidationResult(request: ApplyValidationRequest): Pr
 export async function getValidationStatus(onlyHeld: boolean): Promise<ValidationStatusSummary> {
   return invoke<ValidationStatusSummary>('get_validation_status_cmd', { onlyHeld });
 }
+
+// ============================================================================
+// Chart Drawings API
+// ============================================================================
+
+/** Point data for chart drawings */
+export interface ChartDrawingPoint {
+  x: number;
+  y: number;
+  time?: string;
+  price?: number;
+}
+
+/** Input for saving a chart drawing */
+export interface ChartDrawingInput {
+  securityId: number;
+  drawingType: string;
+  points: ChartDrawingPoint[];
+  color: string;
+  lineWidth: number;
+  fibLevels?: number[];
+}
+
+/** Response from chart drawing operations */
+export interface ChartDrawingResponse {
+  id: string;
+  uuid: string;
+  securityId: number;
+  drawingType: string;
+  points: ChartDrawingPoint[];
+  color: string;
+  lineWidth: number;
+  fibLevels?: number[];
+  isVisible: boolean;
+  createdAt: string;
+}
+
+/**
+ * Save a chart drawing to the database.
+ * @param drawing The drawing data to save
+ */
+export async function saveChartDrawing(drawing: ChartDrawingInput): Promise<ChartDrawingResponse> {
+  return invoke<ChartDrawingResponse>('save_chart_drawing', { drawing });
+}
+
+/**
+ * Get all drawings for a security.
+ * @param securityId The security ID
+ */
+export async function getChartDrawings(securityId: number): Promise<ChartDrawingResponse[]> {
+  return invoke<ChartDrawingResponse[]>('get_chart_drawings', { securityId });
+}
+
+/**
+ * Delete a specific chart drawing.
+ * @param drawingId The drawing ID to delete
+ */
+export async function deleteChartDrawing(drawingId: number): Promise<void> {
+  return invoke('delete_chart_drawing', { drawingId });
+}
+
+/**
+ * Clear all drawings for a security.
+ * @param securityId The security ID
+ */
+export async function clearChartDrawings(securityId: number): Promise<void> {
+  return invoke('clear_chart_drawings', { securityId });
+}
+
+// ============================================================================
+// Pattern Statistics API
+// ============================================================================
+
+/** Input for saving a detected pattern */
+export interface PatternDetectionInput {
+  securityId: number;
+  patternType: string;
+  detectedAt: string;
+  priceAtDetection: number;
+  predictedDirection: 'bullish' | 'bearish' | 'neutral';
+}
+
+/** Pattern history entry */
+export interface PatternHistory {
+  id: number;
+  securityId: number;
+  patternType: string;
+  detectedAt: string;
+  priceAtDetection: number;
+  predictedDirection: string;
+  actualOutcome?: string;
+  priceAfter5d?: number;
+  priceAfter10d?: number;
+  priceChange5dPercent?: number;
+  priceChange10dPercent?: number;
+  evaluatedAt?: string;
+  createdAt: string;
+}
+
+/** Statistics for a pattern type */
+export interface PatternStatistics {
+  patternType: string;
+  totalCount: number;
+  successCount: number;
+  failureCount: number;
+  pendingCount: number;
+  successRate: number;
+  avgGainOnSuccess?: number;
+  avgLossOnFailure?: number;
+}
+
+/** Result of pattern evaluation */
+export interface PatternEvaluationResult {
+  patternsEvaluated: number;
+  successes: number;
+  failures: number;
+}
+
+/**
+ * Save a detected pattern to the database for tracking.
+ * @param pattern The pattern detection data
+ */
+export async function savePatternDetection(pattern: PatternDetectionInput): Promise<number> {
+  return invoke<number>('save_pattern_detection', { pattern });
+}
+
+/**
+ * Evaluate pending patterns that are old enough (5+ days).
+ * Compares the price at detection with later prices to determine success.
+ */
+export async function evaluatePatternOutcomes(): Promise<PatternEvaluationResult> {
+  return invoke<PatternEvaluationResult>('evaluate_pattern_outcomes');
+}
+
+/**
+ * Get statistics for all pattern types.
+ */
+export async function getPatternStatistics(): Promise<PatternStatistics[]> {
+  return invoke<PatternStatistics[]>('get_pattern_statistics');
+}
+
+/**
+ * Get pattern history for a specific security.
+ * @param securityId The security ID
+ */
+export async function getPatternHistory(securityId: number): Promise<PatternHistory[]> {
+  return invoke<PatternHistory[]>('get_pattern_history', { securityId });
+}
+
+// ============================================================================
+// User Profile API
+// ============================================================================
+
+/**
+ * Set the user's profile picture.
+ * @param pictureBase64 Base64 encoded image data, or null to remove
+ */
+export async function setUserProfilePicture(pictureBase64: string | null): Promise<void> {
+  return invoke('set_user_profile_picture', { pictureBase64 });
+}
+
+/**
+ * Get the user's profile picture.
+ * @returns Base64 encoded image data, or null if not set
+ */
+export async function getUserProfilePicture(): Promise<string | null> {
+  return invoke<string | null>('get_user_profile_picture');
+}
+
+// ============================================================================
+// User-defined Query Templates API
+// ============================================================================
+
+import type {
+  UserTemplate,
+  UserTemplateInput,
+  UserTemplateTestResult,
+} from './types';
+
+/**
+ * Get all user-defined query templates.
+ */
+export async function getUserTemplates(): Promise<UserTemplate[]> {
+  return invoke<UserTemplate[]>('get_user_templates');
+}
+
+/**
+ * Create a new user-defined query template.
+ */
+export async function createUserTemplate(template: UserTemplateInput): Promise<UserTemplate> {
+  return invoke<UserTemplate>('create_user_template', { template });
+}
+
+/**
+ * Update an existing user-defined query template.
+ */
+export async function updateUserTemplate(id: number, template: UserTemplateInput): Promise<UserTemplate> {
+  return invoke<UserTemplate>('update_user_template', { id, template });
+}
+
+/**
+ * Delete a user-defined query template.
+ */
+export async function deleteUserTemplate(id: number): Promise<void> {
+  return invoke('delete_user_template', { id });
+}
+
+/**
+ * Test a user-defined query template without saving it.
+ * Validates SQL and returns preview results.
+ */
+export async function testUserTemplate(template: UserTemplateInput): Promise<UserTemplateTestResult> {
+  return invoke<UserTemplateTestResult>('test_user_template', { template });
+}
+
+/**
+ * Get the system prompt section including user-defined templates.
+ */
+export async function getQueryTemplatesPrompt(): Promise<string> {
+  return invoke<string>('get_query_templates_prompt');
+}

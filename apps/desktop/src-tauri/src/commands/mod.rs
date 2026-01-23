@@ -24,6 +24,7 @@ pub mod pdf_export;
 pub mod pdf_import;
 pub mod performance;
 pub mod portfolio;
+pub mod profile;
 pub mod quotes;
 pub mod rebalancing;
 pub mod reports;

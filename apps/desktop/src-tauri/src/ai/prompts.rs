@@ -894,6 +894,7 @@ Format: [[QUERY_DB:{{"template":"ID","params":{{"key":"value"}}}}]]
 | unrealized_gains_losses | filter: gains/losses | "Welche Positionen sind im Minus?" |
 | realized_gains_by_year | year (optional) | "Realisierte Gewinne 2024?" |
 | portfolio_allocation | by: currency/type | "Gewichtung nach Währung?" |
+| securities_in_multiple_portfolios | min_portfolios (default: 2) | "Welche Aktien in mehreren/verschiedenen Depots?" |
 | holding_period_analysis | asset_type: crypto/gold | "Krypto steuerfrei?" |
 | fifo_lot_details | security (optional) | "FIFO-Lots für Bitcoin?" |
 | account_transactions | account, year, amount | "Kontobewegungen 2024?" |
@@ -906,6 +907,7 @@ BEISPIELE:
 - "Rendite YTD?" → [[QUERY_DB:{{"template":"portfolio_performance_summary","params":{{"period":"ytd"}}}}]]
 - "Positionen im Minus?" → [[QUERY_DB:{{"template":"unrealized_gains_losses","params":{{"filter":"losses"}}}}]]
 - "Gewichtung nach Währung?" → [[QUERY_DB:{{"template":"portfolio_allocation","params":{{"by":"currency"}}}}]]
+- "Aktien in mehreren/verschiedenen Depots?" → [[QUERY_DB:{{"template":"securities_in_multiple_portfolios","params":{{}}}}]] (gruppiert nach ISIN)
 - "Woher kommen die 25 Cent?" → [[QUERY_DB:{{"template":"account_balance_analysis","params":{{"account":"Referenz"}}}}]]
 
 === HALTEFRIST (§ 23 EStG) ===
@@ -916,7 +918,8 @@ BEISPIELE:
 === ANTWORT-STIL ===
 - KURZ + PRÄGNANT, Bullet Points
 - AGGREGIERT: Summen statt Listen (außer explizit gewünscht)
-- DB VOR WEB: Portfolio-Fragen → DB abfragen, Web nur für externe Infos
+- DB VOR WEB: Portfolio-Fragen → IMMER QUERY_DB nutzen, Web nur für externe Infos
+- SYNONYME ERKENNEN: "mehrere"="verschiedene"="verteilt", "Depot"="Portfolio"
 
 === TRANSAKTIONEN ERSTELLEN/LÖSCHEN ===
 SKALIERUNG: Betrag × 100 (100 EUR = 10000), Stückzahl × 100000000 (10 Stk = 1000000000)

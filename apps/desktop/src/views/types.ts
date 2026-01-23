@@ -97,7 +97,8 @@ export interface AggregatedHolding {
   isin: string;
   name: string;
   currency: string;
-  securityId: number;
+  /** Array of security IDs (multiple if same ISIN exists) */
+  securityIds: number[];
   totalShares: number;
   currentPrice: number | null;
   currentValue: number | null;

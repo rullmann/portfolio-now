@@ -104,7 +104,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
   // Prepare securities list for logo loading
   const securitiesForLogos = useMemo(() =>
     dbHoldings.map((h) => ({
-      id: h.securityId,
+      id: h.securityIds[0],
       ticker: undefined,
       name: h.name || '',
     })),
@@ -201,7 +201,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
   const holdingsWithLogos = useMemo(() => {
     return dbHoldings.map((h) => ({
       ...h,
-      logoUrl: h.customLogo || cachedLogos.get(h.securityId)?.url,
+      logoUrl: h.customLogo || cachedLogos.get(h.securityIds[0])?.url,
     }));
   }, [dbHoldings, cachedLogos]);
 
@@ -274,7 +274,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
         groupName = holding.currency || 'Unbekannt';
       } else if (groupBy.startsWith('taxonomy-')) {
         // Find classification for this security
-        const classification = classifications.find(c => c.securityId === holding.securityId);
+        const classification = classifications.find(c => c.securityId === holding.securityIds[0]);
         if (classification) {
           groupName = classification.classificationName;
           groupColor = classification.color || undefined;
@@ -645,7 +645,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                     const gainLossColor = (holding.gainLoss ?? 0) >= 0 ? 'text-green-600' : 'text-red-600';
                     return (
                       <tr
-                        key={holding.securityId}
+                        key={holding.securityIds[0]}
                         className="border-b border-border hover:bg-accent/50 transition-colors cursor-pointer"
                         onClick={() => setSelectedHolding(holding)}
                         title="Klicken für Detailansicht"
@@ -756,7 +756,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                           const gainLossColor = (holding.gainLoss ?? 0) >= 0 ? 'text-green-600' : 'text-red-600';
                           return (
                             <tr
-                              key={holding.securityId}
+                              key={holding.securityIds[0]}
                               className="border-b border-border hover:bg-accent/50 transition-colors cursor-pointer"
                               onClick={() => setSelectedHolding(holding)}
                               title="Klicken für Detailansicht"
@@ -894,7 +894,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
         <SecurityDetailChartModal
           isOpen={!!selectedHolding}
           onClose={() => setSelectedHolding(null)}
-          securityId={selectedHolding.securityId}
+          securityId={selectedHolding.securityIds[0]}
           securityName={selectedHolding.name}
           isin={selectedHolding.isin}
           currency={selectedHolding.currency}

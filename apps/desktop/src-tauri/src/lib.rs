@@ -227,6 +227,13 @@ pub fn run() {
             commands::ai_helpers::ai_query_transactions,
             commands::ai_helpers::ai_query_portfolio_value,
             commands::ai_helpers::ai_save_api_key,
+            // User-defined query templates
+            commands::ai_helpers::get_user_templates,
+            commands::ai_helpers::create_user_template,
+            commands::ai_helpers::update_user_template,
+            commands::ai_helpers::delete_user_template,
+            commands::ai_helpers::test_user_template,
+            commands::ai_helpers::get_query_templates_prompt,
             // PDF Import
             commands::pdf_import::get_supported_banks,
             commands::pdf_import::preview_pdf_import,
@@ -373,6 +380,9 @@ pub fn run() {
             commands::validation::validate_security_cmd,
             commands::validation::apply_validation_result_cmd,
             commands::validation::get_validation_status_cmd,
+            // User Profile
+            commands::profile::set_user_profile_picture,
+            commands::profile::get_user_profile_picture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

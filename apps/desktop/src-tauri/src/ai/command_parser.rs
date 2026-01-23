@@ -7,6 +7,7 @@
 //! explicit user confirmation via separate Tauri commands. This prevents prompt
 //! injection attacks where malicious data could trigger unwanted actions.
 
+use crate::ai::normalizer::normalize_ai_response;
 use crate::commands::ai_helpers;
 use chrono::{NaiveDate, Local};
 use regex::Regex;
@@ -258,6 +259,15 @@ use crate::ai::query_templates::{execute_template, QueryRequest};
 use crate::db::get_connection;
 use std::collections::HashMap;
 
+/// Database query parsed from AI response (internal - accepts any JSON value for params)
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DbQueryRaw {
+    pub template: String,
+    #[serde(default)]
+    pub params: HashMap<String, serde_json::Value>,
+}
+
 /// Database query parsed from AI response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -267,10 +277,33 @@ pub struct DbQuery {
     pub params: HashMap<String, String>,
 }
 
+impl From<DbQueryRaw> for DbQuery {
+    fn from(raw: DbQueryRaw) -> Self {
+        let params = raw.params.into_iter()
+            .map(|(k, v)| {
+                let str_val = match v {
+                    serde_json::Value::String(s) => s,
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    other => other.to_string(),
+                };
+                (k, str_val)
+            })
+            .collect();
+        DbQuery {
+            template: raw.template,
+            params,
+        }
+    }
+}
+
 /// Parse database query commands from AI response
 ///
 /// Extracts `[[QUERY_DB:...]]` commands using brace-counting for robust JSON extraction.
 /// This approach correctly handles nested objects and special characters in values.
+///
+/// NOTE: AI response formatting quirks (like `] ]` or `[[ QUERY_DB :`) are handled
+/// centrally by `normalize_ai_response()` in `parse_response_with_suggestions()`.
 pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
     let mut queries = Vec::new();
     let mut cleaned_response = response.to_string();
@@ -308,10 +341,10 @@ pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
             // Verify it ends with ]]
             let after_json = &cleaned_response[end_idx..];
             if after_json.starts_with(end_marker) {
-                // Try to parse as JSON using serde
-                match serde_json::from_str::<DbQuery>(json_str) {
-                    Ok(query) => {
-                        queries.push(query);
+                // Try to parse as JSON using serde (via DbQueryRaw to handle int/string params)
+                match serde_json::from_str::<DbQueryRaw>(json_str) {
+                    Ok(raw_query) => {
+                        queries.push(raw_query.into());
                     }
                     Err(e) => {
                         log::warn!("Failed to parse QUERY_DB: {} - JSON: {}", e, json_str);
@@ -345,6 +378,12 @@ pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
             search_start = json_start;
         }
     }
+
+    // Final cleanup: Remove any remaining [[QUERY_DB:...]] patterns that might have been missed
+    // This is a safety net for edge cases like malformed JSON or unexpected formatting
+    // NOTE: Whitespace issues like "] ]" are handled by normalize_ai_response() upstream
+    let re_fallback = regex::Regex::new(r"(?s)\[\[QUERY_DB:.*?\]\]").unwrap();
+    cleaned_response = re_fallback.replace_all(&cleaned_response, "").to_string();
 
     cleaned_response = cleaned_response.trim().to_string();
     (queries, cleaned_response)
@@ -1018,7 +1057,9 @@ pub struct ParsedResponseWithSuggestions {
 /// - Executes ONLY read-only queries (transaction queries, portfolio value queries)
 /// - Returns structured result for frontend to handle
 pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
-    let mut current_response = response;
+    // CENTRAL: Normalize once at the start, all parsers benefit
+    let normalized = normalize_ai_response(&response);
+    let mut current_response = normalized;
     let mut suggestions: Vec<SuggestedAction> = Vec::new();
     let mut query_results: Vec<String> = Vec::new();
 
@@ -1504,5 +1545,56 @@ Hier sind die Ergebnisse."#;
         assert_eq!(queries[0].template, "all_dividends");
         assert_eq!(queries[1].template, "security_transactions");
         assert!(!cleaned.contains("QUERY_DB"));
+    }
+
+    #[test]
+    fn test_parse_db_query_integer_param() {
+        // Test with integer parameter (not string) - exact format from AI
+        let response = r#"[[QUERY_DB:{"template":"securities_in_multiple_portfolios","params":{"min_portfolios":2}}]]"#;
+
+        let (queries, cleaned) = parse_db_queries(response);
+
+        assert_eq!(queries.len(), 1, "Should find 1 query");
+        assert_eq!(queries[0].template, "securities_in_multiple_portfolios");
+        assert_eq!(queries[0].params.get("min_portfolios"), Some(&"2".to_string()));
+        assert!(!cleaned.contains("QUERY_DB"), "Command should be removed from response");
+        assert!(cleaned.is_empty(), "Cleaned response should be empty");
+    }
+
+    #[test]
+    fn test_parse_db_query_whitespace_in_brackets() {
+        // Test with space before closing bracket (AI formatting issue)
+        // NOTE: Whitespace issues are now handled by normalize_ai_response() centrally.
+        // This test verifies that normalize + parse_db_queries works correctly.
+        let response = r#"[[QUERY_DB:{"template":"securities_in_multiple_portfolios","params":{"min_portfolios":2}}] ]"#;
+
+        // First normalize (as done in parse_response_with_suggestions)
+        let normalized = normalize_ai_response(response);
+        let (queries, cleaned) = parse_db_queries(&normalized);
+
+        assert_eq!(queries.len(), 1, "Should find 1 query after normalization");
+        assert_eq!(queries[0].template, "securities_in_multiple_portfolios");
+        assert!(!cleaned.contains("QUERY_DB"), "Command should be removed");
+        assert!(!cleaned.contains("] ]"), "Malformed brackets should be removed");
+        assert!(cleaned.is_empty(), "Cleaned response should be empty");
+    }
+
+    #[test]
+    fn test_parse_response_with_suggestions_normalizes_whitespace() {
+        // Integration test: verify that parse_response_with_suggestions handles
+        // AI formatting quirks correctly through central normalization
+        let response = r#"Text before
+
+[[ QUERY_DB :{"template":"all_dividends","params":{}}] ]
+
+Text after"#.to_string();
+
+        let result = parse_response_with_suggestions(response);
+
+        // Query results are executed, so we check the cleaned response
+        assert!(!result.cleaned_response.contains("QUERY_DB"), "Command should be removed");
+        assert!(!result.cleaned_response.contains("] ]"), "Malformed brackets should not remain");
+        assert!(result.cleaned_response.contains("Text before"), "Regular text preserved");
+        assert!(result.cleaned_response.contains("Text after"), "Regular text preserved");
     }
 }

@@ -34,14 +34,23 @@ import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
 import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SignalsPanel } from '../../components/charts/SignalsPanel';
 import { AlertsPanel } from '../../components/charts/AlertsPanel';
-import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing } from '../../components/charts';
+import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
 import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC, convertToHeikinAshi } from '../../lib/indicators';
 import { useSettingsStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
-import { getWatchlists, getWatchlistSecurities, getPriceHistoryWithOutliers, type OutlierSummary } from '../../lib/api';
+import {
+  getWatchlists,
+  getWatchlistSecurities,
+  getPriceHistoryWithOutliers,
+  getChartDrawings,
+  saveChartDrawing,
+  deleteChartDrawing,
+  type OutlierSummary,
+  type ChartDrawingResponse,
+} from '../../lib/api';
 import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
 import type { AggregatedHolding } from '../types';
 
@@ -187,6 +196,8 @@ export function ChartsView() {
   // Drawing mode
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
+  // Track saved drawing IDs to detect deletions
+  const savedDrawingIds = useRef<Set<string>>(new Set());
 
   // Outlier detection state
   const [outlierSummary, setOutlierSummary] = useState<OutlierSummary | null>(null);
@@ -215,7 +226,7 @@ export function ChartsView() {
     const loadHoldings = async () => {
       try {
         const holdings = await invoke<AggregatedHolding[]>('get_all_holdings');
-        const ids = new Set(holdings.map(h => h.securityId));
+        const ids = new Set(holdings.flatMap(h => h.securityIds));
         setHoldingsSecurityIds(ids);
       } catch (err) {
         console.error('Failed to load holdings:', err);
@@ -483,6 +494,83 @@ export function ChartsView() {
     setWatchlistSecurityIds(prev => new Set([...prev, securityId]));
     loadSecurities();
   };
+
+  // Load drawings when security changes
+  useEffect(() => {
+    if (!selectedSecurity) {
+      setDrawings([]);
+      savedDrawingIds.current.clear();
+      return;
+    }
+
+    const loadDrawings = async () => {
+      try {
+        const saved = await getChartDrawings(selectedSecurity.id);
+        // Convert saved drawings to Drawing format
+        const loadedDrawings: Drawing[] = saved.map((d: ChartDrawingResponse) => ({
+          id: d.id,
+          type: d.drawingType as Drawing['type'],
+          points: d.points.map(p => ({ x: p.x, y: p.y, time: p.time, price: p.price })),
+          color: d.color,
+          lineWidth: d.lineWidth,
+          fibLevels: d.fibLevels,
+        }));
+        setDrawings(loadedDrawings);
+        savedDrawingIds.current = new Set(saved.map(d => d.id));
+      } catch (err) {
+        console.error('Failed to load chart drawings:', err);
+        setDrawings([]);
+        savedDrawingIds.current.clear();
+      }
+    };
+
+    loadDrawings();
+  }, [selectedSecurity?.id]);
+
+  // Handle drawings change - save new drawings and delete removed ones
+  const handleDrawingsChange = useCallback(async (newDrawings: Drawing[]) => {
+    setDrawings(newDrawings);
+
+    if (!selectedSecurity) return;
+
+    const newIds = new Set(newDrawings.map(d => d.id));
+    const oldIds = savedDrawingIds.current;
+
+    // Find deleted drawings and remove them from DB
+    for (const oldId of oldIds) {
+      if (!newIds.has(oldId)) {
+        try {
+          await deleteChartDrawing(parseInt(oldId, 10));
+        } catch (err) {
+          console.error('Failed to delete drawing:', err);
+        }
+      }
+    }
+
+    // Find new drawings and save them to DB
+    for (const drawing of newDrawings) {
+      if (!oldIds.has(drawing.id)) {
+        try {
+          const saved = await saveChartDrawing({
+            securityId: selectedSecurity.id,
+            drawingType: drawing.type,
+            points: drawing.points,
+            color: drawing.color,
+            lineWidth: drawing.lineWidth,
+            fibLevels: drawing.fibLevels,
+          });
+          // Update the drawing ID to the DB ID
+          drawing.id = saved.id;
+          savedDrawingIds.current.add(saved.id);
+        } catch (err) {
+          console.error('Failed to save drawing:', err);
+        }
+      }
+    }
+
+    // Update tracked IDs
+    savedDrawingIds.current = new Set(newDrawings.map(d => d.id));
+  }, [selectedSecurity?.id]);
 
   // Handle ESC key for fullscreen
   useEffect(() => {
@@ -942,7 +1030,7 @@ export function ChartsView() {
                       height={500}
                       enabled={isDrawingMode}
                       initialDrawings={drawings}
-                      onDrawingsChange={setDrawings}
+                      onDrawingsChange={handleDrawingsChange}
                     />
                   </div>
                 )
@@ -963,7 +1051,7 @@ export function ChartsView() {
             )}
           </div>
 
-          {/* Right Sidebar - Indicators, Signals & Alerts */}
+          {/* Right Sidebar - Indicators, Signals, Alerts & Pattern Statistics */}
           <div className="w-72 flex-shrink-0 space-y-4 overflow-auto max-h-full">
             <IndicatorsPanel indicators={indicators} onIndicatorsChange={setIndicators} />
             <SignalsPanel data={ohlcData} />
@@ -972,6 +1060,7 @@ export function ChartsView() {
               currentPrice={ohlcData[ohlcData.length - 1]?.close}
               currency={selectedSecurity?.currency}
             />
+            <PatternStatisticsPanel securityId={selectedSecurity?.id} />
 
             {/* Chart Info */}
             {ohlcData.length > 0 && (

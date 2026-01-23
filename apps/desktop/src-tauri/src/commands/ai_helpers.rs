@@ -988,3 +988,122 @@ pub async fn ai_save_api_key(
         provider: store_key.to_string(),
     })
 }
+
+// ============================================================================
+// User Template Commands
+// ============================================================================
+
+use crate::ai::user_templates::{
+    create_user_template as create_template_impl,
+    delete_user_template as delete_template_impl,
+    execute_user_template as execute_template_impl,
+    get_all_user_templates as get_templates_impl,
+    update_user_template as update_template_impl,
+    validate_user_sql, UserTemplate, UserTemplateInput,
+};
+
+/// Get all user-defined query templates
+#[command]
+pub fn get_user_templates() -> Result<Vec<UserTemplate>, String> {
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+    get_templates_impl(conn)
+}
+
+/// Create a new user-defined query template
+#[command]
+pub fn create_user_template(template: UserTemplateInput) -> Result<UserTemplate, String> {
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+    create_template_impl(conn, &template)
+}
+
+/// Update an existing user-defined query template
+#[command]
+pub fn update_user_template(id: i64, template: UserTemplateInput) -> Result<UserTemplate, String> {
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+    update_template_impl(conn, id, &template)
+}
+
+/// Delete a user-defined query template
+#[command]
+pub fn delete_user_template(id: i64) -> Result<(), String> {
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+    delete_template_impl(conn, id)
+}
+
+/// Test result for user template
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserTemplateTestResult {
+    pub success: bool,
+    pub row_count: usize,
+    pub columns: Vec<String>,
+    pub preview_rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
+    pub formatted_markdown: String,
+    pub error: Option<String>,
+}
+
+/// Test a user-defined query template without saving it.
+/// Validates SQL syntax and executes a preview query.
+#[command]
+pub fn test_user_template(template: UserTemplateInput) -> Result<UserTemplateTestResult, String> {
+    // First validate the SQL
+    if let Err(e) = validate_user_sql(&template.sql_query) {
+        return Ok(UserTemplateTestResult {
+            success: false,
+            row_count: 0,
+            columns: Vec::new(),
+            preview_rows: Vec::new(),
+            formatted_markdown: String::new(),
+            error: Some(e),
+        });
+    }
+
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+
+    // Create a temporary UserTemplate for execution
+    let temp_template = UserTemplate {
+        id: 0,
+        template_id: "test".to_string(),
+        name: template.name.clone(),
+        description: template.description.clone(),
+        sql_query: template.sql_query.clone(),
+        enabled: true,
+        created_at: String::new(),
+        updated_at: String::new(),
+        parameters: template.parameters.clone(),
+    };
+
+    // Execute with empty params for preview (will use defaults)
+    let params = std::collections::HashMap::new();
+    match execute_template_impl(conn, &temp_template, &params) {
+        Ok(result) => Ok(UserTemplateTestResult {
+            success: true,
+            row_count: result.row_count,
+            columns: result.columns,
+            preview_rows: result.rows.into_iter().take(10).collect(), // Limit preview to 10 rows
+            formatted_markdown: result.formatted_markdown,
+            error: None,
+        }),
+        Err(e) => Ok(UserTemplateTestResult {
+            success: false,
+            row_count: 0,
+            columns: Vec::new(),
+            preview_rows: Vec::new(),
+            formatted_markdown: String::new(),
+            error: Some(e),
+        }),
+    }
+}
+
+/// Get the system prompt section including user-defined templates
+#[command]
+pub fn get_query_templates_prompt() -> Result<String, String> {
+    let guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Database not initialized")?;
+    Ok(crate::ai::query_templates::get_templates_for_prompt_with_user_templates(conn))
+}
