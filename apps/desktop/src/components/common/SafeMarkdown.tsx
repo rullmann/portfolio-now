@@ -3,10 +3,12 @@
  *
  * Uses rehype-sanitize to prevent XSS attacks from untrusted markdown.
  * Only allows http/https links, removes javascript: and data: URIs.
+ * Supports GFM tables via remark-gfm.
  */
 
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import remarkGfm from 'remark-gfm';
 
 interface SafeMarkdownProps {
   children: string;
@@ -21,6 +23,16 @@ const sanitizeSchema = {
     href: ['http', 'https', 'mailto'],
     src: ['http', 'https'],
   },
+  // Allow table elements for GFM tables
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'th',
+    'td',
+  ],
   // Remove potentially dangerous attributes
   attributes: {
     ...defaultSchema.attributes,
@@ -28,12 +40,18 @@ const sanitizeSchema = {
     a: ['href', 'title', 'target', 'rel'],
     img: ['src', 'alt', 'title', 'width', 'height'],
     code: ['className'],
+    // Table alignment attributes
+    th: ['align', 'scope'],
+    td: ['align'],
   },
 };
 
 export function SafeMarkdown({ children, className }: SafeMarkdownProps) {
   const content = (
-    <ReactMarkdown rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+    >
       {children}
     </ReactMarkdown>
   );

@@ -119,7 +119,7 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
           </div>
         )}
 
-        <div className="prose prose-sm dark:prose-invert max-w-none text-[13px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
+        <div className="prose prose-sm dark:prose-invert max-w-none text-[13px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0.5 [&_table]:text-xs [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_table]:border-border/30 [&_table]:rounded-md [&_table]:overflow-hidden [&_thead]:bg-muted/60 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_th]:border-b [&_th]:border-border/50 [&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-border/20 [&_tr:last-child_td]:border-b-0 [&_tbody_tr:hover]:bg-muted/30 [&_tbody_tr:nth-child(even)]:bg-muted/10 overflow-x-auto">
           {isUser ? (
             <p className="mb-0">{message.content}</p>
           ) : (

@@ -1697,120 +1697,129 @@ fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<St
         return format_account_balance_analysis(rows);
     }
 
-    let mut lines: Vec<String> = Vec::new();
+    // Special handling for portfolio_performance_summary - keep as formatted text
+    if template_id == "portfolio_performance_summary" {
+        return format_performance_summary(rows);
+    }
 
-    for row in rows {
-        let line = match template_id {
-            "security_transactions" => {
+    // Get table headers and format function based on template
+    let (headers, format_row): (&[&str], fn(&HashMap<String, serde_json::Value>) -> Vec<String>) = match template_id {
+        "security_transactions" => (
+            &["Datum", "Typ", "Stück", "Betrag"],
+            |row| {
                 let date = row.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let txn_type = row.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
                 let shares = row.get("shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-                format!("• {} – {} {} Stück für {} {}", date, txn_type, shares, amount, currency)
+                vec![date, txn_type.to_string(), shares, format!("{} {}", amount, currency)]
             }
-            "dividends_by_security" => {
+        ),
+        "dividends_by_security" => (
+            &["Datum", "Brutto", "Steuern"],
+            |row| {
                 let date = row.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let gross = row.get("gross_amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let taxes = row.get("taxes").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or("0,00".to_string());
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-                format!("• {} – {} {} brutto, {} {} Steuern", date, gross, currency, taxes, currency)
+                vec![date, format!("{} {}", gross, currency), format!("{} {}", taxes, currency)]
             }
-            "all_dividends" => {
-                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+        ),
+        "all_dividends" => (
+            &["Wertpapier", "Zahlungen", "Gesamt"],
+            |row| {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let count = row.get("dividend_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 let total = row.get("total_gross").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                format!("• {} – {} Zahlungen, gesamt {} EUR", name, count, total)
+                vec![name, count.to_string(), format!("{} EUR", total)]
             }
-            "transactions_by_date" => {
+        ),
+        "transactions_by_date" => (
+            &["Datum", "Typ", "Wertpapier", "Betrag"],
+            |row| {
                 let date = row.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let txn_type = row.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
-                let security = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let security = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-                format!("• {} – {} {} für {} {}", date, txn_type, security, amount, currency)
+                vec![date, txn_type.to_string(), security, format!("{} {}", amount, currency)]
             }
-            "security_cost_basis" => {
+        ),
+        "security_cost_basis" => (
+            &["Kaufdatum", "Stück", "Kurs/Stück"],
+            |row| {
                 let date = row.get("purchase_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let shares = row.get("remaining_shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let cost_per = row.get("cost_per_share").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-                format!("• {} – {} Stück @ {} {}/Stück", date, shares, cost_per, currency)
+                vec![date, shares, format!("{} {}", cost_per, currency)]
             }
-            "sold_securities" => {
-                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
-                let date = row.get("last_sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+        ),
+        "sold_securities" => (
+            &["Wertpapier", "Verkauft", "Letzter Verkauf"],
+            |row| {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let shares = row.get("total_sold").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                format!("• {} – {} Stück verkauft (letzter: {})", name, shares, date)
+                let date = row.get("last_sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                vec![name, format!("{} Stück", shares), date]
             }
-            "holding_period_analysis" => {
+        ),
+        "holding_period_analysis" => (
+            &["Status", "Wertpapier", "Kaufdatum", "Stück", "Haltetage", "Steuerfrei ab"],
+            |row| {
                 let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
                 let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
                 let purchase_date = row.get("purchase_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
                 let shares = row.get("shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
                 let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
-                let tax_free_date = row.get("tax_free_date").and_then(|v| v.as_str()).map(format_date_german);
-
+                let tax_free_date = row.get("tax_free_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_else(|| "-".to_string());
                 let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⏳" };
-                let date_info = if let Some(date) = tax_free_date {
-                    format!(" → steuerfrei ab {}", date)
-                } else {
-                    String::new()
-                };
-
-                format!("• {}{}{} – Kauf: {}, {} Stück, {} Tage gehalten, {}{}",
-                    status_icon, name, ticker, purchase_date, shares, holding_days, tax_status, date_info)
+                vec![status_icon.to_string(), format!("{}{}", name, ticker), purchase_date, shares, holding_days.to_string(), tax_free_date]
             }
-            "fifo_lot_details" => {
-                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+        ),
+        "fifo_lot_details" => (
+            &["Status", "Wertpapier", "Kaufdatum", "Stück", "Kurs", "Haltetage"],
+            |row| {
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let purchase_date = row.get("purchase_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
                 let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
                 let remaining = row.get("remaining_shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
                 let cost_per = row.get("cost_per_share").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
                 let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
-
                 let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⏳" };
-
-                format!("• {} {} – Kauf: {}, {} Stück @ {} {}, {} Tage ({})",
-                    status_icon, name, purchase_date, remaining, cost_per, currency, holding_days, tax_status)
+                vec![status_icon.to_string(), name, purchase_date, remaining, format!("{} {}", cost_per, currency), holding_days.to_string()]
             }
-            "account_transactions" => {
+        ),
+        "account_transactions" => (
+            &["Datum", "Konto", "Typ", "Betrag", "Details"],
+            |row| {
                 let date = row.get("date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
-                let account = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let account = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let txn_type = row.get("txn_type").and_then(|v| v.as_str()).map(translate_txn_type).unwrap_or("-");
                 let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-                let note = row.get("note").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
                 let security = row.get("security_name").and_then(|v| v.as_str());
-                let ticker = row.get("ticker").and_then(|v| v.as_str());
-
-                let mut details = Vec::new();
-                if let Some(sec) = security {
-                    let ticker_str = ticker.map(|t| format!(" ({})", t)).unwrap_or_default();
-                    details.push(format!("Wertpapier: {}{}", sec, ticker_str));
-                }
-                if let Some(n) = note {
-                    details.push(format!("Notiz: {}", n));
-                }
-
-                let details_str = if details.is_empty() {
-                    String::new()
-                } else {
-                    format!(" | {}", details.join(", "))
+                let note = row.get("note").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+                let details = match (security, note) {
+                    (Some(s), Some(n)) => format!("{}, {}", s, n),
+                    (Some(s), None) => s.to_string(),
+                    (None, Some(n)) => n.to_string(),
+                    (None, None) => "-".to_string(),
                 };
-
-                format!("• {} – {} @ {}: {} {}{}", date, txn_type, account, amount, currency, details_str)
+                vec![date, account, txn_type.to_string(), format!("{} {}", amount, currency), details]
             }
-            "investment_plans" => {
-                let plan_name = row.get("plan_name").and_then(|v| v.as_str()).unwrap_or("-");
+        ),
+        "investment_plans" => (
+            &["Plan", "Wertpapier", "Betrag", "Intervall", "Start"],
+            |row| {
+                let plan_name = row.get("plan_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let security = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
                 let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
                 let amount = row.get("amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let interval = row.get("interval").and_then(|v| v.as_str()).unwrap_or("-");
                 let start_date = row.get("start_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
-
                 let interval_de = match interval {
                     "MONTHLY" => "monatlich",
                     "QUARTERLY" => "quartalsweise",
@@ -1818,118 +1827,172 @@ fn format_as_markdown(template_id: &str, _columns: &[String], rows: &[HashMap<St
                     "WEEKLY" => "wöchentlich",
                     _ => interval,
                 };
-
-                format!("• {} – {}{}: {} EUR {}, Start: {}", plan_name, security, ticker, amount, interval_de, start_date)
+                vec![plan_name, format!("{}{}", security, ticker), format!("{} EUR", amount), interval_de.to_string(), start_date]
             }
-            "portfolio_accounts" => {
-                let name = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-");
+        ),
+        "portfolio_accounts" => (
+            &["Konto", "Saldo", "Buchungen", "Letzte"],
+            |row| {
+                let name = row.get("account_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let balance = row.get("balance").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
                 let txn_count = row.get("transaction_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 let last_txn = row.get("last_transaction").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_else(|| "-".to_string());
-                format!("• {} – Saldo: {} {}, {} Buchungen, letzte: {}", name, balance, currency, txn_count, last_txn)
+                vec![name, format!("{} {}", balance, currency), txn_count.to_string(), last_txn]
             }
-            "tax_relevant_sales" => {
+        ),
+        "tax_relevant_sales" => (
+            &["Status", "Datum", "Wertpapier", "Stück", "Erlös", "Einstand", "Haltetage"],
+            |row| {
                 let sale_date = row.get("sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
-                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
+                let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let shares = row.get("shares_sold").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
                 let sale_amount = row.get("sale_amount").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
                 let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
                 let tax_status = row.get("tax_status").and_then(|v| v.as_str()).unwrap_or("-");
                 let cost_basis = row.get("cost_basis").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-
                 let status_icon = if tax_status == "STEUERFREI" { "✅" } else { "⚠️" };
-
-                format!("• {} {} – {} {} Stück verkauft für {} {}, {} Tage gehalten, Einstand: {} {} ({})",
-                    status_icon, sale_date, name, shares, sale_amount, currency, holding_days, cost_basis, currency, tax_status)
+                vec![status_icon.to_string(), sale_date, name, shares, format!("{} {}", sale_amount, currency), format!("{} {}", cost_basis, currency), holding_days.to_string()]
             }
-            // NEW: Performance & Allocation Templates (Phase 1)
-            "portfolio_performance_summary" => {
-                let period = row.get("period_label").and_then(|v| v.as_str()).unwrap_or("Gesamt");
-                let cost_basis = row.get("total_cost_basis").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                let value = row.get("total_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                let unrealized_pct = row.get("unrealized_return_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let unrealized_gl = row.get("unrealized_gain_loss").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                let dividends = row.get("total_dividends").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-                let realized = row.get("realized_gains").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
-
-                let gain_icon = if unrealized_pct >= 0.0 { "📈" } else { "📉" };
-                format!(
-                    "**{}**\n• Einstandswert: {} EUR\n• Aktueller Wert: {} EUR\n• {} Unrealisiert: {} EUR ({:+.2}%)\n• Dividenden: {} EUR\n• Realisierte G/V: {} EUR",
-                    period, cost_basis, value, gain_icon, unrealized_gl, unrealized_pct, dividends, realized
-                )
-            }
-            "current_holdings" => {
+        ),
+        "current_holdings" => (
+            &["", "Wertpapier", "Stück", "Wert", "G/V %"],
+            |row| {
                 let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
                 let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
                 let shares = row.get("shares").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 4)).unwrap_or_default();
                 let value = row.get("current_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
                 let gain_pct = row.get("gain_loss_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
                 let gain_icon = if gain_pct >= 0.0 { "🟢" } else { "🔴" };
-                format!("• {}{}{} – {} Stück = {} {} ({:+.2}%)", gain_icon, name, ticker, shares, value, currency, gain_pct)
+                vec![gain_icon.to_string(), format!("{}{}", name, ticker), shares, format!("{} {}", value, currency), format!("{:+.2}%", gain_pct)]
             }
-            "unrealized_gains_losses" => {
+        ),
+        "unrealized_gains_losses" => (
+            &["", "Wertpapier", "G/V", "G/V %"],
+            |row| {
                 let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
                 let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
                 let gain = row.get("gain_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let gain_pct = row.get("gain_loss_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let currency = row.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR");
-
                 let gain_icon = if gain >= 0.0 { "🟢" } else { "🔴" };
-                format!("• {}{}{} – {:+.2} {} ({:+.2}%)", gain_icon, name, ticker, gain, currency, gain_pct)
+                vec![gain_icon.to_string(), format!("{}{}", name, ticker), format!("{:+.2} {}", gain, currency), format!("{:+.2}%", gain_pct)]
             }
-            "realized_gains_by_year" => {
-                // Check if it's summary (has year, sale_count) or detail (has sale_date)
-                if row.contains_key("sale_count") {
-                    // Summary view
-                    let year = row.get("year").and_then(|v| v.as_str()).unwrap_or("-");
-                    let count = row.get("sale_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let total_gain = row.get("total_realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                    let gain_icon = if total_gain >= 0.0 { "📈" } else { "📉" };
-                    format!("• {} {} – {} Verkäufe, Gesamt: {:+.2} EUR", gain_icon, year, count, total_gain)
-                } else {
-                    // Detail view
-                    let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
-                    let sale_date = row.get("sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
-                    let gain = row.get("realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
-
-                    let gain_icon = if gain >= 0.0 { "🟢" } else { "🔴" };
-                    format!("• {}{} – {} – {:+.2} EUR ({} Tage gehalten)", gain_icon, sale_date, name, gain, holding_days)
-                }
+        ),
+        "realized_gains_by_year" => {
+            // Check first row to determine view type
+            if rows.first().map(|r| r.contains_key("sale_count")).unwrap_or(false) {
+                (
+                    &["", "Jahr", "Verkäufe", "Gesamt G/V"],
+                    |row| {
+                        let year = row.get("year").and_then(|v| v.as_str()).unwrap_or("-").to_string();
+                        let count = row.get("sale_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let total_gain = row.get("total_realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let gain_icon = if total_gain >= 0.0 { "📈" } else { "📉" };
+                        vec![gain_icon.to_string(), year, count.to_string(), format!("{:+.2} EUR", total_gain)]
+                    }
+                )
+            } else {
+                (
+                    &["", "Datum", "Wertpapier", "G/V", "Haltetage"],
+                    |row| {
+                        let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-").to_string();
+                        let sale_date = row.get("sale_date").and_then(|v| v.as_str()).map(format_date_german).unwrap_or_default();
+                        let gain = row.get("realized_gain").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let holding_days = row.get("holding_days").and_then(|v| v.as_f64()).map(|d| d as i64).unwrap_or(0);
+                        let gain_icon = if gain >= 0.0 { "🟢" } else { "🔴" };
+                        vec![gain_icon.to_string(), sale_date, name, format!("{:+.2} EUR", gain), holding_days.to_string()]
+                    }
+                )
             }
-            "portfolio_allocation" => {
-                let category = row.get("category").or(row.get("currency")).or(row.get("asset_type")).and_then(|v| v.as_str()).unwrap_or("-");
+        },
+        "portfolio_allocation" => (
+            &["Kategorie", "Positionen", "Wert", "Anteil"],
+            |row| {
+                let category = row.get("category").or(row.get("currency")).or(row.get("asset_type")).and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let count = row.get("position_count").and_then(|v| v.as_i64()).unwrap_or(0);
                 let value = row.get("total_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
                 let pct = row.get("allocation_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                if category == "Gesamt" {
-                    format!("**{}**: {} Positionen, {} EUR", category, count, value)
-                } else {
-                    format!("• {} – {} Positionen, {} EUR ({:.1}%)", category, count, value, pct)
-                }
+                vec![category, count.to_string(), format!("{} EUR", value), format!("{:.1}%", pct)]
             }
-            "securities_in_multiple_portfolios" => {
+        ),
+        "securities_in_multiple_portfolios" => (
+            &["Wertpapier", "Depots", "Gesamt Stück", "In Depots"],
+            |row| {
                 let name = row.get("security_name").and_then(|v| v.as_str()).unwrap_or("-");
                 let ticker = row.get("ticker").and_then(|v| v.as_str()).map(|t| format!(" ({})", t)).unwrap_or_default();
                 let depot_count = row.get("depot_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                let in_depots = row.get("in_depots").and_then(|v| v.as_str()).unwrap_or("-");
+                let in_depots = row.get("in_depots").and_then(|v| v.as_str()).unwrap_or("-").to_string();
                 let gesamt = row.get("gesamt").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                format!("• **{}{}** ({} Depots, {:.2} Stk. gesamt): {}", name, ticker, depot_count, gesamt, in_depots)
+                vec![format!("{}{}", name, ticker), depot_count.to_string(), format!("{:.2}", gesamt), in_depots]
             }
-            // Note: account_balance_analysis is handled by format_account_balance_analysis() above
-            _ => format!("{:?}", row),
-        };
-        lines.push(line);
+        ),
+        _ => {
+            // Fallback: show as bullet list
+            let mut lines: Vec<String> = Vec::new();
+            for row in rows {
+                lines.push(format!("• {:?}", row));
+            }
+            return lines.join("\n");
+        }
+    };
+
+    // Build GFM table
+    build_markdown_table(headers, rows, format_row)
+}
+
+/// Build a GFM markdown table from headers and rows
+fn build_markdown_table(
+    headers: &[&str],
+    rows: &[HashMap<String, serde_json::Value>],
+    format_row: fn(&HashMap<String, serde_json::Value>) -> Vec<String>,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    // Header row
+    let header_line = format!("| {} |", headers.join(" | "));
+    lines.push(header_line);
+
+    // Separator row
+    let separator: Vec<&str> = headers.iter().map(|_| "---").collect();
+    let separator_line = format!("| {} |", separator.join(" | "));
+    lines.push(separator_line);
+
+    // Data rows
+    for row in rows {
+        let cells = format_row(row);
+        // Escape pipe characters in cell content
+        let escaped_cells: Vec<String> = cells.iter().map(|c| c.replace('|', "\\|")).collect();
+        let data_line = format!("| {} |", escaped_cells.join(" | "));
+        lines.push(data_line);
     }
 
     lines.join("\n")
+}
+
+/// Format portfolio performance summary (keep as formatted text, not table)
+fn format_performance_summary(rows: &[HashMap<String, serde_json::Value>]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    for row in rows {
+        let period = row.get("period_label").and_then(|v| v.as_str()).unwrap_or("Gesamt");
+        let cost_basis = row.get("total_cost_basis").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+        let value = row.get("total_value").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+        let unrealized_pct = row.get("unrealized_return_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let unrealized_gl = row.get("unrealized_gain_loss").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+        let dividends = row.get("total_dividends").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+        let realized = row.get("realized_gains").and_then(|v| v.as_f64()).map(|f| format_number_german(f, 2)).unwrap_or_default();
+
+        let gain_icon = if unrealized_pct >= 0.0 { "📈" } else { "📉" };
+        lines.push(format!(
+            "**{}**\n• Einstandswert: {} EUR\n• Aktueller Wert: {} EUR\n• {} Unrealisiert: {} EUR ({:+.2}%)\n• Dividenden: {} EUR\n• Realisierte G/V: {} EUR",
+            period, cost_basis, value, gain_icon, unrealized_gl, unrealized_pct, dividends, realized
+        ));
+    }
+
+    lines.join("\n\n")
 }
 
 /// Execute a SQL query and return results as QueryResult
