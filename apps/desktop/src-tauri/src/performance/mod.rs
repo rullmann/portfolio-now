@@ -1132,7 +1132,7 @@ fn get_cash_flows(
 
     let base_currency = currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
     let mut cash_flows: Vec<CashFlow> = Vec::new();
-    let mut deposit_removal_count = 0usize;
+    let deposit_removal_count: usize;
 
     // Get account-level external cash flows (DEPOSIT/REMOVAL) with account currency
     if let Some(pid) = portfolio_id {

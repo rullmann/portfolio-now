@@ -3,10 +3,86 @@
 //! Provides safe, predefined SQL query templates that the AI can use
 //! to answer questions about transactions, dividends, and holdings.
 
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Calculate portfolio value using the SAME logic as get_all_holdings (Dashboard)
+/// This ensures consistency between ChatBot and Dashboard values.
+/// Uses pp_latest_price and converts each security to base currency.
+fn calculate_portfolio_value_like_dashboard(
+    conn: &Connection,
+    base_currency: &str,
+    today: NaiveDate,
+) -> Result<f64, String> {
+    // Same SQL as get_all_holdings: Calculate holdings per security
+    let sql = r#"
+        SELECT
+            s.id as security_id,
+            s.currency,
+            SUM(CASE
+                WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
+                WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
+                ELSE 0
+            END) as net_shares,
+            lp.value as latest_price
+        FROM pp_txn t
+        JOIN pp_portfolio p ON p.id = t.owner_id AND t.owner_type = 'portfolio'
+        JOIN pp_security s ON s.id = t.security_id
+        LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
+        WHERE t.shares IS NOT NULL
+        GROUP BY s.id
+        HAVING net_shares > 0
+    "#;
+
+    let mut total_value = 0.0;
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,      // currency
+                row.get::<_, i64>(2)?,         // net_shares
+                row.get::<_, Option<i64>>(3)?, // latest_price
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows.flatten() {
+        let (security_currency, shares_raw, price_raw) = row;
+
+        if let Some(price_raw) = price_raw {
+            let shares = shares_raw as f64 / 100_000_000.0;
+            let mut price = price_raw as f64 / 100_000_000.0;
+
+            // GBX/GBp correction (same as get_all_holdings)
+            let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                price /= 100.0;
+                "GBP"
+            } else {
+                &security_currency
+            };
+
+            let value_in_security_currency = price * shares;
+
+            // Convert to base currency (same as get_all_holdings)
+            let value_in_base = if convert_currency == base_currency {
+                value_in_security_currency
+            } else {
+                crate::currency::convert(conn, value_in_security_currency, convert_currency, base_currency, today)
+                    .unwrap_or(value_in_security_currency)
+            };
+
+            total_value += value_in_base;
+        }
+    }
+
+    Ok(total_value)
+}
 
 // ============================================================================
 // Types
@@ -347,6 +423,10 @@ pub fn execute_template(
 }
 
 /// Security transactions (buys, sells, transfers)
+/// Parameters:
+/// - security: Security name/isin/ticker (required)
+/// - txn_type: "BUY" or "SELL" (optional)
+/// - limit: Max results (default 50, max 100)
 fn execute_security_transactions(
     conn: &Connection,
     params: &HashMap<String, String>,
@@ -355,11 +435,28 @@ fn execute_security_transactions(
         .ok_or("Parameter 'security' ist erforderlich")?;
     let txn_type = params.get("txn_type");
 
+    // Parse limit parameter (default 50, max 100)
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(50)
+        .min(100);
+
     let search_pattern = format!("%{}%", security);
 
     // Build SQL with optional txn_type filter
+    // Map BUY/SELL to include DELIVERY_INBOUND/DELIVERY_OUTBOUND for robustness
     let result = if let Some(tt) = txn_type {
-        let sql = r#"
+        // Expand txn_type to include related types
+        let types_clause = match tt.to_uppercase().as_str() {
+            "BUY" => "('BUY', 'DELIVERY_INBOUND')",
+            "SELL" => "('SELL', 'DELIVERY_OUTBOUND')",
+            "DELIVERY_INBOUND" => "('BUY', 'DELIVERY_INBOUND')",
+            "DELIVERY_OUTBOUND" => "('SELL', 'DELIVERY_OUTBOUND')",
+            _ => return Err(format!("Unbekannter Transaktionstyp: {}. Erlaubt: BUY, SELL", tt)),
+        };
+
+        let sql = format!(r#"
             SELECT
                 t.date,
                 t.txn_type,
@@ -371,14 +468,14 @@ fn execute_security_transactions(
             FROM pp_txn t
             JOIN pp_security s ON s.id = t.security_id
             WHERE (s.name LIKE ?1 OR s.isin LIKE ?1 OR s.ticker LIKE ?1)
-                AND t.txn_type = ?2
+                AND t.txn_type IN {}
                 AND t.owner_type = 'portfolio'
             ORDER BY t.date DESC
-            LIMIT 50
-        "#;
-        execute_query(conn, sql, &[&search_pattern, tt], "security_transactions")
+            LIMIT {}
+        "#, types_clause, limit);
+        execute_query(conn, &sql, &[&search_pattern], "security_transactions")
     } else {
-        let sql = r#"
+        let sql = format!(r#"
             SELECT
                 t.date,
                 t.txn_type,
@@ -393,9 +490,9 @@ fn execute_security_transactions(
                 AND t.owner_type = 'portfolio'
                 AND t.txn_type IN ('BUY', 'SELL', 'DELIVERY_INBOUND', 'DELIVERY_OUTBOUND', 'TRANSFER_IN', 'TRANSFER_OUT')
             ORDER BY t.date DESC
-            LIMIT 50
-        "#;
-        execute_query(conn, sql, &[&search_pattern], "security_transactions")
+            LIMIT {}
+        "#, limit);
+        execute_query(conn, &sql, &[&search_pattern], "security_transactions")
     };
 
     // If no results, provide helpful error with suggestions
@@ -442,14 +539,24 @@ fn execute_dividends_by_security(
 }
 
 /// All dividends grouped by security
+/// Parameters:
+/// - year: Filter by year (optional)
+/// - limit: Max results (default 30, max 100)
 fn execute_all_dividends(
     conn: &Connection,
     params: &HashMap<String, String>,
 ) -> Result<QueryResult, String> {
     let year = params.get("year");
 
+    // Parse limit parameter (default 30, max 100)
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(30)
+        .min(100);
+
     let sql = if year.is_some() {
-        r#"
+        format!(r#"
             SELECT
                 s.name as security_name,
                 COUNT(*) as dividend_count,
@@ -462,10 +569,10 @@ fn execute_all_dividends(
                 AND strftime('%Y', t.date) = ?1
             GROUP BY s.id
             ORDER BY total_gross DESC
-            LIMIT 30
-        "#
+            LIMIT {}
+        "#, limit)
     } else {
-        r#"
+        format!(r#"
             SELECT
                 s.name as security_name,
                 COUNT(*) as dividend_count,
@@ -477,14 +584,14 @@ fn execute_all_dividends(
             WHERE t.txn_type = 'DIVIDENDS'
             GROUP BY s.id
             ORDER BY total_gross DESC
-            LIMIT 30
-        "#
+            LIMIT {}
+        "#, limit)
     };
 
     if let Some(y) = year {
-        execute_query(conn, sql, &[&y.as_str()], "all_dividends")
+        execute_query(conn, &sql, &[&y.as_str()], "all_dividends")
     } else {
-        execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "all_dividends")
+        execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "all_dividends")
     }
 }
 
@@ -975,6 +1082,7 @@ fn execute_account_balance_analysis(
 // ============================================================================
 
 /// Portfolio performance summary (TTWROR, gains/losses)
+/// USES SSOT: fifo::get_total_cost_basis_converted, performance::get_portfolio_value_at_date_with_currency
 fn execute_portfolio_performance_summary(
     conn: &Connection,
     params: &HashMap<String, String>,
@@ -1016,28 +1124,32 @@ fn execute_portfolio_performance_summary(
         }
     };
 
-    // Query aggregated portfolio data
+    // Get base currency
+    let base_currency = crate::currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+
+    // SSOT: Use fifo::get_total_cost_basis_converted for cost basis with currency conversion
+    let total_cost_basis = crate::fifo::get_total_cost_basis_converted(conn, None, &base_currency)
+        .unwrap_or(0.0);
+
+    // SSOT: Calculate portfolio value using SAME logic as get_all_holdings (Dashboard)
+    // This uses pp_latest_price and converts each security to base currency
+    let total_value = calculate_portfolio_value_like_dashboard(conn, &base_currency, today)
+        .unwrap_or(0.0);
+
+    // Calculate unrealized gain/loss
+    let unrealized_gain_loss = total_value - total_cost_basis;
+    let unrealized_return_pct = if total_cost_basis > 0.0 {
+        (unrealized_gain_loss / total_cost_basis) * 100.0
+    } else {
+        0.0
+    };
+
+    let start_str = start_date.to_string();
+    let end_str = today.to_string();
+
+    // Query period-specific data (transactions, dividends, realized gains) - these are OK as SQL
     let sql = r#"
-        WITH portfolio_stats AS (
-            -- Total cost basis from FIFO lots
-            SELECT
-                COALESCE(SUM(l.gross_amount), 0) / 100.0 as total_cost_basis,
-                COALESCE(SUM(l.remaining_shares), 0) / 100000000.0 as total_shares
-            FROM pp_fifo_lot l
-            WHERE l.remaining_shares > 0
-        ),
-        current_values AS (
-            -- Current portfolio value based on holdings × latest price
-            SELECT
-                COALESCE(SUM(
-                    (l.remaining_shares / 100000000.0) * (lp.value / 100000000.0)
-                ), 0) as total_value
-            FROM pp_fifo_lot l
-            JOIN pp_latest_price lp ON lp.security_id = l.security_id
-            WHERE l.remaining_shares > 0
-        ),
-        period_transactions AS (
-            -- Count transactions in period
+        WITH period_transactions AS (
             SELECT
                 COUNT(*) as txn_count,
                 SUM(CASE WHEN txn_type IN ('BUY', 'DELIVERY_INBOUND') THEN 1 ELSE 0 END) as buy_count,
@@ -1046,14 +1158,12 @@ fn execute_portfolio_performance_summary(
             WHERE date >= ?1 AND date <= ?2
         ),
         dividends AS (
-            -- Total dividends in period
             SELECT COALESCE(SUM(amount), 0) / 100.0 as total_dividends
             FROM pp_txn
             WHERE txn_type = 'DIVIDENDS'
               AND date >= ?1 AND date <= ?2
         ),
         realized AS (
-            -- Realized gains from FIFO consumptions
             SELECT
                 COALESCE(SUM(
                     (t.amount / 100.0) - (c.gross_amount / 100.0)
@@ -1063,42 +1173,104 @@ fn execute_portfolio_performance_summary(
             WHERE t.date >= ?1 AND t.date <= ?2
         )
         SELECT
-            ps.total_cost_basis,
-            cv.total_value,
-            CASE
-                WHEN ps.total_cost_basis > 0
-                THEN ((cv.total_value - ps.total_cost_basis) / ps.total_cost_basis) * 100
-                ELSE 0
-            END as unrealized_return_pct,
-            cv.total_value - ps.total_cost_basis as unrealized_gain_loss,
             pt.txn_count,
             pt.buy_count,
             pt.sell_count,
             d.total_dividends,
-            r.realized_gains,
-            ?3 as period_label,
-            ?1 as start_date,
-            ?2 as end_date
-        FROM portfolio_stats ps, current_values cv, period_transactions pt, dividends d, realized r
+            r.realized_gains
+        FROM period_transactions pt, dividends d, realized r
     "#;
 
-    let start_str = start_date.to_string();
-    let end_str = today.to_string();
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut rows = stmt.query([&start_str, &end_str]).map_err(|e| e.to_string())?;
 
-    execute_query(conn, sql, &[&start_str, &end_str, &period_label], "portfolio_performance_summary")
+    let (txn_count, buy_count, sell_count, total_dividends, realized_gains) =
+        if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            (
+                row.get::<_, i64>(0).unwrap_or(0),
+                row.get::<_, i64>(1).unwrap_or(0),
+                row.get::<_, i64>(2).unwrap_or(0),
+                row.get::<_, f64>(3).unwrap_or(0.0),
+                row.get::<_, f64>(4).unwrap_or(0.0),
+            )
+        } else {
+            (0, 0, 0, 0.0, 0.0)
+        };
+
+    // Build result row
+    let mut row = HashMap::new();
+    row.insert("total_cost_basis".to_string(), serde_json::json!(total_cost_basis));
+    row.insert("total_value".to_string(), serde_json::json!(total_value));
+    row.insert("unrealized_return_pct".to_string(), serde_json::json!(unrealized_return_pct));
+    row.insert("unrealized_gain_loss".to_string(), serde_json::json!(unrealized_gain_loss));
+    row.insert("txn_count".to_string(), serde_json::json!(txn_count));
+    row.insert("buy_count".to_string(), serde_json::json!(buy_count));
+    row.insert("sell_count".to_string(), serde_json::json!(sell_count));
+    row.insert("total_dividends".to_string(), serde_json::json!(total_dividends));
+    row.insert("realized_gains".to_string(), serde_json::json!(realized_gains));
+    row.insert("period_label".to_string(), serde_json::json!(period_label));
+    row.insert("start_date".to_string(), serde_json::json!(start_str));
+    row.insert("end_date".to_string(), serde_json::json!(end_str));
+    row.insert("currency".to_string(), serde_json::json!(base_currency));
+
+    let rows = vec![row];
+    let columns: Vec<String> = vec![
+        "period_label", "total_cost_basis", "total_value", "unrealized_gain_loss",
+        "unrealized_return_pct", "total_dividends", "realized_gains", "currency"
+    ].into_iter().map(String::from).collect();
+
+    let formatted_markdown = format_as_markdown("portfolio_performance_summary", &columns, &rows);
+
+    Ok(QueryResult {
+        template_id: "portfolio_performance_summary".to_string(),
+        columns,
+        rows,
+        row_count: 1,
+        formatted_markdown,
+    })
 }
 
 /// Current holdings with shares, value, and gain/loss
+/// Parameters:
+/// - security: Filter by security name/isin/ticker (optional)
+/// - limit: Max results (default 50, max 100)
+/// - order_by: "value" (default), "gain_pct", "name"
+/// - order_dir: "DESC" (default), "ASC"
 fn execute_current_holdings(
     conn: &Connection,
     params: &HashMap<String, String>,
 ) -> Result<QueryResult, String> {
     let security = params.get("security");
 
+    // Parse limit parameter (default 50, max 100)
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(50)
+        .min(100);
+
+    // Parse order_by parameter
+    let order_by = match params.get("order_by").map(|s| s.as_str()) {
+        Some("gain_pct") => "gain_loss_pct",
+        Some("name") => "security_name",
+        _ => "current_value", // default
+    };
+
+    // Parse order_dir parameter
+    let order_dir = match params.get("order_dir").map(|s| s.as_str()) {
+        Some("ASC") => "ASC",
+        _ => "DESC", // default
+    };
+
+    // Build ORDER BY and LIMIT clauses
+    let order_clause = format!("ORDER BY {} {}", order_by, order_dir);
+    let limit_clause = format!("LIMIT {}", limit);
+
     // Use SSOT HOLDINGS_SUM_SQL pattern from pp/common.rs
     if let Some(sec) = security {
         let search_pattern = format!("%{}%", sec);
-        let sql = r#"
+        let sql = format!(
+            r#"
             SELECT
                 s.name as security_name,
                 s.ticker,
@@ -1139,9 +1311,12 @@ fn execute_current_holdings(
               AND (s.name LIKE ?1 OR s.isin LIKE ?1 OR s.ticker LIKE ?1)
             GROUP BY s.id
             HAVING shares > 0.0001
-            ORDER BY current_value DESC
-        "#;
-        let result = execute_query(conn, sql, &[&search_pattern], "current_holdings");
+            {}
+            {}
+        "#,
+            order_clause, limit_clause
+        );
+        let result = execute_query(conn, &sql, &[&search_pattern], "current_holdings");
 
         // If no results for specific security search, provide helpful error
         match result {
@@ -1153,7 +1328,8 @@ fn execute_current_holdings(
             other => other,
         }
     } else {
-        let sql = r#"
+        let sql = format!(
+            r#"
             SELECT
                 s.name as security_name,
                 s.ticker,
@@ -1193,19 +1369,31 @@ fn execute_current_holdings(
               AND t.shares IS NOT NULL
             GROUP BY s.id
             HAVING shares > 0.0001
-            ORDER BY current_value DESC
-            LIMIT 50
-        "#;
-        execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "current_holdings")
+            {}
+            {}
+        "#,
+            order_clause, limit_clause
+        );
+        execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "current_holdings")
     }
 }
 
 /// Unrealized gains/losses for all open positions
+/// Parameters:
+/// - filter: "gains" or "losses" (optional)
+/// - limit: Max results (default 50, max 100)
 fn execute_unrealized_gains_losses(
     conn: &Connection,
     params: &HashMap<String, String>,
 ) -> Result<QueryResult, String> {
     let filter = params.get("filter").map(|s| s.to_lowercase());
+
+    // Parse limit parameter (default 50, max 100)
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(50)
+        .min(100);
 
     let having_clause = match filter.as_deref() {
         Some("gains") | Some("gewinne") => "HAVING gain_loss > 0",
@@ -1235,7 +1423,8 @@ fn execute_unrealized_gains_losses(
         GROUP BY s.id
         {}
         ORDER BY gain_loss DESC
-    "#, having_clause);
+        LIMIT {}
+    "#, having_clause, limit);
 
     execute_query(conn, &sql, &[] as &[&dyn rusqlite::ToSql], "unrealized_gains_losses")
 }
@@ -1618,10 +1807,45 @@ fn format_date_german(date: &str) -> String {
     date.to_string()
 }
 
-/// Format a number with German locale (comma as decimal separator)
+/// Format a number with German locale (comma as decimal, dot as thousand separator)
+/// Examples: 1234.56 -> "1.234,56", 105989.89 -> "105.989,89"
 fn format_number_german(value: f64, decimals: usize) -> String {
     let formatted = format!("{:.1$}", value, decimals);
-    formatted.replace('.', ",")
+    let parts: Vec<&str> = formatted.split('.').collect();
+
+    // Add thousand separators to integer part
+    let int_part = parts[0];
+    let is_negative = int_part.starts_with('-');
+    let digits: String = if is_negative { int_part[1..].to_string() } else { int_part.to_string() };
+
+    let with_thousands: String = digits
+        .chars()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 {
+                vec!['.', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+
+    let int_with_sign = if is_negative {
+        format!("-{}", with_thousands)
+    } else {
+        with_thousands
+    };
+
+    // Combine with decimal part using comma
+    if parts.len() > 1 {
+        format!("{},{}", int_with_sign, parts[1])
+    } else {
+        int_with_sign
+    }
 }
 
 /// Special formatting for account balance analysis - provides a SHORT, DIRECT explanation
