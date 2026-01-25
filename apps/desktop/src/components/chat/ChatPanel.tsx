@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon } from 'lucide-react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon, Mic, Square } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -301,6 +301,16 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [imageConsentGiven, setImageConsentGiven] = useState(false);
   const [pendingImageUpload, setPendingImageUpload] = useState<File[] | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Speech-to-text state
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // PDF import modal access
   const { openPdfImportModal } = useUIStore();
@@ -644,6 +654,201 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const handleImageConsentCancel = () => {
     setShowImageConsent(false);
     setPendingImageUpload(null);
+  };
+
+  // ============================================================================
+  // Speech-to-Text (Whisper) - Only available when ChatBot uses OpenAI
+  // ============================================================================
+
+  const isOpenAiProvider = aiProvider === 'openai';
+  const hasSpeechToText = isOpenAiProvider && !!keys.openaiApiKey;
+
+  // Classic oscilloscope waveform visualization
+  const drawWaveform = useCallback(() => {
+    const canvas = canvasRef.current;
+    const analyser = analyserRef.current;
+    if (!canvas || !analyser) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Ensure canvas is properly sized for HiDPI
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+      }
+    }
+
+    const bufferLength = analyser.fftSize;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteTimeDomainData(dataArray);
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Get CSS variable for primary color (fallback to green for oldschool look)
+    const computedStyle = getComputedStyle(document.documentElement);
+    const primaryHsl = computedStyle.getPropertyValue('--primary').trim();
+    const strokeColor = primaryHsl ? `hsl(${primaryHsl})` : '#22c55e';
+
+    // Draw waveform line
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = strokeColor;
+    ctx.beginPath();
+
+    const sliceWidth = width / bufferLength;
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      // Normalize to -1 to 1 (128 is center/silence)
+      const v = (dataArray[i] - 128) / 128.0;
+      // Amplify the signal for more visible waveform
+      const gain = 3.0;
+      const amplified = Math.max(-1, Math.min(1, v * gain)); // Clamp to prevent overflow
+      const y = height / 2 - amplified * (height / 2) * 0.9; // 0.9 = margin from edges
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+
+      x += sliceWidth;
+    }
+
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+
+    // Draw center line (subtle)
+    ctx.strokeStyle = strokeColor;
+    ctx.globalAlpha = 0.2;
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    animationFrameRef.current = requestAnimationFrame(drawWaveform);
+  }, []);
+
+  // Start waveform animation when recording begins and canvas is ready
+  useEffect(() => {
+    if (isRecording && analyserRef.current) {
+      // Use requestAnimationFrame to ensure canvas is rendered
+      const frameId = requestAnimationFrame(() => {
+        if (canvasRef.current) {
+          drawWaveform();
+        }
+      });
+      return () => cancelAnimationFrame(frameId);
+    }
+  }, [isRecording, drawWaveform]);
+
+  const startRecording = async () => {
+    if (!hasSpeechToText) {
+      toast.error('OpenAI API-Key erforderlich für Spracheingabe. Bitte in den Einstellungen konfigurieren.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+      // Set up audio visualization
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop visualization
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+        }
+        analyserRef.current = null;
+
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach(track => track.stop());
+
+        if (audioChunksRef.current.length === 0) {
+          return;
+        }
+
+        setIsTranscribing(true);
+
+        try {
+          // Convert audio chunks to base64
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          const base64 = btoa(
+            new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+          );
+
+          // Call Whisper API via Tauri
+          const transcribedText = await invoke<string>('transcribe_audio', {
+            audioBase64: base64,
+            apiKey: keys.openaiApiKey,
+            language: 'de', // German as default, could be made configurable
+          });
+
+          // Send transcribed text directly as message
+          if (transcribedText.trim()) {
+            sendMessage(transcribedText.trim());
+          }
+        } catch (err) {
+          console.error('Transcription error:', err);
+          toast.error(`Transkription fehlgeschlagen: ${err}`);
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start();
+      setIsRecording(true);
+      // Animation is started by useEffect when isRecording becomes true
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      toast.error('Mikrofon-Zugriff fehlgeschlagen. Bitte Berechtigungen prüfen.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
   };
 
   const handleImageUploadClick = async () => {
@@ -1900,24 +2105,84 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                 <ImageIcon className="h-5 w-5" />
               </button>
 
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={attachments.length > 0 ? 'Beschreibung hinzufügen (optional)...' : 'Nachricht eingeben...'}
-                rows={3}
-                className="flex-1 resize-y min-h-[76px] max-h-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                disabled={isLoading}
-              />
-              <button
-                onClick={() => sendMessage(input)}
-                disabled={(!input.trim() && attachments.length === 0) || isLoading}
-                className="p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-              >
-                <Send className="h-5 w-5" />
-              </button>
+              {/* Microphone button for speech-to-text - only shown for OpenAI provider */}
+              {isOpenAiProvider && !isRecording && (
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  disabled={isLoading || isTranscribing || !hasSpeechToText}
+                  className={cn(
+                    'p-2 rounded-lg transition-colors shrink-0',
+                    isTranscribing
+                      ? 'bg-primary/20 text-primary'
+                      : hasSpeechToText
+                      ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      : 'text-muted-foreground/50 cursor-not-allowed'
+                  )}
+                  title={
+                    isTranscribing
+                      ? 'Transkribiere...'
+                      : 'Spracheingabe (Whisper)'
+                  }
+                >
+                  {isTranscribing ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Mic className="h-5 w-5" />
+                  )}
+                </button>
+              )}
+
+              {/* Classic oscilloscope waveform during recording */}
+              {isRecording && (
+                <div className="flex-1 flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/30 border border-border">
+                  {/* Canvas waveform */}
+                  <canvas
+                    ref={canvasRef}
+                    className="flex-1 h-10"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+
+                  {/* Recording indicator */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-xs text-muted-foreground">Aufnahme...</span>
+                  </div>
+
+                  {/* Stop button */}
+                  <button
+                    type="button"
+                    onClick={stopRecording}
+                    className="p-2 rounded-lg hover:bg-muted transition-colors shrink-0"
+                    title="Aufnahme stoppen"
+                  >
+                    <Square className="h-4 w-4 text-destructive" />
+                  </button>
+                </div>
+              )}
+
+              {!isRecording && (
+                <>
+                  <textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    placeholder={attachments.length > 0 ? 'Beschreibung hinzufügen (optional)...' : 'Nachricht eingeben...'}
+                    rows={3}
+                    className="flex-1 resize-y min-h-[76px] max-h-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    disabled={isLoading}
+                  />
+                  <button
+                    onClick={() => sendMessage(input)}
+                    disabled={(!input.trim() && attachments.length === 0) || isLoading}
+                    className="p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                  >
+                    <Send className="h-5 w-5" />
+                  </button>
+                </>
+              )}
             </div>
           )}
 

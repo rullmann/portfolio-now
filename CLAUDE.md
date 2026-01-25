@@ -404,6 +404,17 @@ Alle Aktionen mit Bestätigung (Watchlist, Transaktionen, Transfers) nutzen:
 - `[[WATCHLIST:{"action":"add","name":"...","security":"..."}]]`
 - `[[QUERY_DB:{"query":"template_id","params":{...}}]]`
 
+### Speech-to-Text (Whisper)
+
+**Nur verfügbar wenn ChatBot-Provider auf OpenAI eingestellt ist.**
+
+- Mikrofon-Button erscheint neben dem Bild-Button
+- Nutzt OpenAI Whisper API für Transkription
+- Sprache: Deutsch (hardcoded)
+- Audio-Format: WebM
+
+Tauri Command: `transcribe_audio(audio_base64, api_key, language?)`
+
 ### Query Templates (13)
 
 `security_transactions`, `dividends_by_security`, `all_dividends`, `transactions_by_date`, `security_cost_basis`, `sold_securities`, `holding_period_analysis`, `fifo_lot_details`, `account_transactions`, `investment_plans`, `portfolio_accounts`, `tax_relevant_sales`, `account_balance_analysis`

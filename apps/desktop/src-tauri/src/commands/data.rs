@@ -1480,6 +1480,70 @@ pub fn get_portfolio_history() -> Result<Vec<PortfolioValuePoint>, String> {
         }
     }
 
+    // STEP 5: Add today's value using pp_latest_price (to match Dashboard totalValue)
+    // This ensures the chart endpoint matches the displayed portfolio value
+    let today_str = today.format("%Y-%m-%d").to_string();
+
+    // Load latest prices for all securities
+    let latest_prices_sql = format!(
+        r#"SELECT security_id, value FROM pp_latest_price WHERE security_id IN ({})"#,
+        security_ids_str
+    );
+    let mut latest_prices: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare(&latest_prices_sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            latest_prices.insert(row.0, row.1);
+        }
+    }
+
+    // Calculate today's value using latest prices and current holdings
+    let today_value: f64 = all_security_ids
+        .iter()
+        .map(|&security_id| {
+            let shares = get_shares_on_date(security_id, &today_str);
+            let price = latest_prices.get(&security_id).copied().unwrap_or(0);
+            let price_decimal = prices::to_decimal(price);
+
+            // GBX/GBp correction
+            let security_currency = security_currencies
+                .get(&security_id)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let adjusted_price = if security_currency == "GBX" || security_currency == "GBp" {
+                price_decimal / 100.0
+            } else {
+                price_decimal
+            };
+
+            let value_in_security_currency = shares::to_decimal(shares) * adjusted_price;
+
+            // Currency conversion
+            let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                "GBP"
+            } else {
+                security_currency
+            };
+
+            if !convert_currency.is_empty() && convert_currency != base_currency.as_str() {
+                currency::convert(conn, value_in_security_currency, convert_currency, &base_currency, today)
+                    .unwrap_or(value_in_security_currency)
+            } else {
+                value_in_security_currency
+            }
+        })
+        .sum();
+
+    // Add today's value if we have holdings
+    if today_value > 0.0 {
+        value_by_date.insert(today_str, today_value);
+    }
+
     // Convert to vector
     let result: Vec<PortfolioValuePoint> = value_by_date
         .into_iter()

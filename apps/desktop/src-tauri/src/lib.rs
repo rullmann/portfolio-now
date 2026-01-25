@@ -303,6 +303,8 @@ pub fn run() {
             commands::ai::import_extracted_transactions,
             commands::ai::enrich_extracted_transactions,
             commands::ai::check_extracted_transactions_for_duplicates,
+            // Speech-to-Text
+            commands::ai::transcribe_audio,
             // Chat History Persistence
             commands::chat::save_chat_message,
             commands::chat::get_chat_history,

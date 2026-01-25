@@ -1611,3 +1611,69 @@ fn find_security_id(conn: &rusqlite::Connection, isin: &Option<String>, name: &O
     log::debug!("find_security_id: No security found for isin={:?}, name={:?}", isin, name);
     None
 }
+
+// ============================================================================
+// Speech-to-Text (Whisper API)
+// ============================================================================
+
+/// Response from Whisper API
+#[derive(Debug, Deserialize)]
+struct WhisperResponse {
+    text: String,
+}
+
+/// Transcribe audio using OpenAI Whisper API
+///
+/// Takes base64-encoded audio data (webm, mp3, wav, etc.) and returns transcribed text.
+#[command]
+pub async fn transcribe_audio(
+    audio_base64: String,
+    api_key: String,
+    language: Option<String>,
+) -> Result<String, String> {
+    use base64::Engine;
+    use reqwest::multipart;
+
+    // Decode base64 audio
+    let audio_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&audio_base64)
+        .map_err(|e| format!("Failed to decode audio: {}", e))?;
+
+    // Create multipart form with audio file
+    let audio_part = multipart::Part::bytes(audio_bytes)
+        .file_name("audio.webm")
+        .mime_str("audio/webm")
+        .map_err(|e| format!("Failed to create audio part: {}", e))?;
+
+    let mut form = multipart::Form::new()
+        .text("model", "whisper-1")
+        .part("file", audio_part);
+
+    // Add language hint if provided (improves accuracy)
+    if let Some(lang) = language {
+        form = form.text("language", lang);
+    }
+
+    // Call OpenAI Whisper API
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.openai.com/v1/audio/transcriptions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Whisper API request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(format!("Whisper API error ({}): {}", status, error_text));
+    }
+
+    let whisper_response: WhisperResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Whisper response: {}", e))?;
+
+    Ok(whisper_response.text)
+}

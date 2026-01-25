@@ -15,11 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Quote Assistant**: AI-powered quote assistant with symbol validation
 - **Settings Redesign**: New sidebar navigation with free input for chat context
 - **Transaction Creation**: Create transactions directly via ChatBot
+- **Speech-to-Text**: Voice input for ChatBot using OpenAI Whisper API (only when OpenAI provider selected)
+- **Cost Basis History Chart**: Dashboard chart now supports toggling between current cost basis line and historical cost basis over time
 
 ### Fixed
 - Unified confirmation UI across ChatBot
 - Fees bug for DEPOSIT/REMOVAL transactions
 - Repository name in README.md
+- Waveform animation not showing during speech-to-text recording (race condition fix)
+- Portfolio history chart now shows today's value using latest prices (matches Dashboard total)
 
 ## [0.1.5] - 2025-01-20
 

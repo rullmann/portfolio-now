@@ -43,7 +43,7 @@ tokio = { version = "1.48", features = ["full"] }
 futures = "0.3"
 
 # HTTP client for quote fetching
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }

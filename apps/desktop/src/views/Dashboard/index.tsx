@@ -137,15 +137,20 @@ function TrendIndicator({
   );
 }
 
+// Chart mode toggle type
+type ChartMode = 'current' | 'history';
+
 // Main Chart with Cost Basis Line (TradingView style)
 function PortfolioChart({
   portfolioData,
+  investedCapitalData,
   timeRange,
   onTimeRangeChange,
   currency,
   currentCostBasis,
 }: {
   portfolioData: Array<{ date: string; value: number }>;
+  investedCapitalData: Array<{ date: string; value: number }>;
   timeRange: string;
   onTimeRangeChange: (range: '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '3Y' | '5Y' | 'MAX') => void;
   currency: string;
@@ -154,7 +159,10 @@ function PortfolioChart({
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const valueSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
-  const costBasisSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const costBasisSeriesRef = useRef<ISeriesApi<'Line'> | ISeriesApi<'Area'> | null>(null);
+
+  // Chart mode: 'current' = current cost basis line, 'history' = cost basis over time
+  const [chartMode, setChartMode] = useState<ChartMode>('current');
 
   // Use actual current cost basis if provided
   const displayCostBasis = currentCostBasis ?? 0;
@@ -220,30 +228,56 @@ function PortfolioChart({
     });
     valueSeriesRef.current = valueSeries;
 
-    // Cost basis line series (orange dashed line)
-    const costBasisSeries = chart.addSeries(LineSeries, {
-      color: '#f97316',
-      lineWidth: 2,
-      lineStyle: 2, // Dashed
-    });
-    costBasisSeriesRef.current = costBasisSeries;
-
-    // Prepare data
+    // Prepare portfolio value data
     const valueData: AreaData<Time>[] = portfolioData.map((point) => ({
       time: point.date as Time,
       value: point.value,
     }));
-
-    // Set value data
     valueSeries.setData(valueData);
 
-    // Create cost basis line (flat line at current total cost basis)
-    if (portfolioData.length > 0 && displayCostBasis > 0) {
-      const costBasisData: LineData<Time>[] = [
-        { time: portfolioData[0].date as Time, value: displayCostBasis },
-        { time: portfolioData[portfolioData.length - 1].date as Time, value: displayCostBasis },
-      ];
-      costBasisSeries.setData(costBasisData);
+    if (chartMode === 'current') {
+      // Mode 1: Current cost basis as horizontal dashed line
+      const costBasisSeries = chart.addSeries(LineSeries, {
+        color: '#f97316',
+        lineWidth: 2,
+        lineStyle: 2, // Dashed
+      });
+      costBasisSeriesRef.current = costBasisSeries;
+
+      if (portfolioData.length > 0 && displayCostBasis > 0) {
+        const costBasisData: LineData<Time>[] = [
+          { time: portfolioData[0].date as Time, value: displayCostBasis },
+          { time: portfolioData[portfolioData.length - 1].date as Time, value: displayCostBasis },
+        ];
+        costBasisSeries.setData(costBasisData);
+      }
+    } else {
+      // Mode 2: Cost basis over time as area chart
+      const costBasisSeries = chart.addSeries(AreaSeries, {
+        lineColor: '#f97316',
+        topColor: 'rgba(249, 115, 22, 0.3)',
+        bottomColor: 'rgba(249, 115, 22, 0.0)',
+        lineWidth: 2,
+      });
+      costBasisSeriesRef.current = costBasisSeries;
+
+      // Merge invested capital data with portfolio dates
+      // Create a map of invested capital by date
+      const investedMap = new Map(investedCapitalData.map(d => [d.date, d.value]));
+
+      // For each portfolio date, find the corresponding or last known invested capital
+      let lastInvestedValue = 0;
+      const costBasisHistoryData: AreaData<Time>[] = portfolioData.map((point) => {
+        if (investedMap.has(point.date)) {
+          lastInvestedValue = investedMap.get(point.date)!;
+        }
+        return {
+          time: point.date as Time,
+          value: lastInvestedValue,
+        };
+      });
+
+      costBasisSeries.setData(costBasisHistoryData);
     }
 
     // Fit content
@@ -269,7 +303,7 @@ function PortfolioChart({
         chartRef.current = null;
       }
     };
-  }, [portfolioData, displayCostBasis]);
+  }, [portfolioData, investedCapitalData, displayCostBasis, chartMode]);
 
   return (
     <div className="h-full flex flex-col">
@@ -280,10 +314,25 @@ function PortfolioChart({
             <span className="w-3 h-[3px] rounded-full bg-green-500" />
             Marktwert
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0 border-t-2 border-dashed border-orange-500" />
-            Einstandswert ({formatNumber(displayCostBasis)} {currency})
-          </span>
+          {chartMode === 'current' ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-0 border-t-2 border-dashed border-orange-500" />
+              Einstandswert ({formatNumber(displayCostBasis)} {currency})
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-[3px] rounded-full bg-orange-500" />
+              Einstandswert (Verlauf)
+            </span>
+          )}
+          {/* Toggle Button */}
+          <button
+            onClick={() => setChartMode(chartMode === 'current' ? 'history' : 'current')}
+            className="ml-2 px-2 py-0.5 text-[9px] font-medium rounded border border-muted-foreground/30 hover:bg-muted transition-colors"
+            title={chartMode === 'current' ? 'Einstandsverlauf anzeigen' : 'Aktuellen Einstand anzeigen'}
+          >
+            {chartMode === 'current' ? 'Verlauf' : 'Aktuell'}
+          </button>
         </div>
         <div className="flex gap-1">
           {(['1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'MAX'] as const).map((range) => (
@@ -493,7 +542,7 @@ export function DashboardView({
     }
   }, [dbHoldings, performanceStartDate]);
 
-  const { filteredChartData, filteredInvestedData: _filteredInvestedData } = useMemo(() => {
+  const { filteredChartData, filteredInvestedData } = useMemo(() => {
     if (dbPortfolioHistory.length === 0) {
       return { filteredChartData: [], filteredInvestedData: [] };
     }
@@ -863,6 +912,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
           <div className="flex-1 glass-card p-4 min-w-0">
             <PortfolioChart
               portfolioData={filteredChartData}
+              investedCapitalData={filteredInvestedData}
               timeRange={chartTimeRange}
               onTimeRangeChange={setChartTimeRange}
               currency={baseCurrency}

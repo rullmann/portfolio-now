@@ -43,7 +43,9 @@
     "shortDescription": "Investment Portfolio Tracking",
     "longDescription": "A comprehensive application for tracking and analyzing investment portfolios",
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "entitlements": null,
+      "infoPlist": "Info.plist"
     }
   }
 }
