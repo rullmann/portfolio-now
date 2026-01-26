@@ -1437,6 +1437,8 @@ pub fn delete_import(import_id: i64) -> Result<(), String> {
 }
 
 /// Save exchange rates to the database
+/// NOTE: Only EUR/X rates should be stored! The currency module auto-inverts when needed.
+/// See CLAUDE.md "Bekannte Fallen" #18 - storing X/EUR rates causes calculation errors!
 fn save_exchange_rates(rates: &[ExchangeRate]) -> Result<()> {
     let mut conn_guard = db::get_connection()?;
     let conn = conn_guard
@@ -1446,6 +1448,15 @@ fn save_exchange_rates(rates: &[ExchangeRate]) -> Result<()> {
     let tx = conn.transaction()?;
 
     for rate in rates {
+        // Warn if storing suspicious inverse rates (X/EUR where X != EUR)
+        if rate.target == "EUR" && rate.base != "EUR" {
+            log::warn!(
+                "Skipping suspicious inverse rate {}/EUR = {}. Only EUR/X rates should be stored.",
+                rate.base, rate.rate
+            );
+            continue;
+        }
+
         // Store rate as decimal string for precision
         tx.execute(
             "INSERT OR REPLACE INTO pp_exchange_rate (base_currency, term_currency, date, rate)

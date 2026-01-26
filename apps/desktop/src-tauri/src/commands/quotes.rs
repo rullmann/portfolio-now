@@ -746,6 +746,9 @@ fn save_historical_quotes_to_db(security_id: i64, quotes: &[Quote]) -> anyhow::R
     Ok(())
 }
 
+/// Save exchange rates to database
+/// NOTE: Only EUR/X rates should be stored! The currency module auto-inverts when needed.
+/// See CLAUDE.md "Bekannte Fallen" #18 - storing X/EUR rates causes calculation errors!
 fn save_exchange_rates_to_db(rates: &[ExchangeRate]) -> anyhow::Result<()> {
     let mut conn_guard = db::get_connection()?;
     let conn = conn_guard.as_mut().ok_or(anyhow::anyhow!("DB not initialized"))?;
@@ -753,6 +756,15 @@ fn save_exchange_rates_to_db(rates: &[ExchangeRate]) -> anyhow::Result<()> {
     let tx = conn.transaction()?;
 
     for rate in rates {
+        // Skip suspicious inverse rates (X/EUR where X != EUR)
+        if rate.target == "EUR" && rate.base != "EUR" {
+            log::warn!(
+                "Skipping suspicious inverse rate {}/EUR = {}. Only EUR/X rates should be stored.",
+                rate.base, rate.rate
+            );
+            continue;
+        }
+
         // Store rate as decimal string for precision (matches lookup_rate expectation)
         tx.execute(
             "INSERT OR REPLACE INTO pp_exchange_rate (base_currency, term_currency, date, rate)

@@ -351,6 +351,7 @@ await setApiKey('anthropic', 'sk-ant-...');
 15. **D&D** - Kein `stopPropagation()` - blockiert Tauri's `onDragDropEvent`
 16. **AI-Markdown** - `<SafeMarkdown>` statt `<ReactMarkdown>` (XSS-Schutz)
 17. **PDF Parser** - `strict_mode: true` Default, `parse_date_strict()` verwenden
+18. **Wechselkurse X/EUR** - NIEMALS direkte X/EUR Kurse (z.B. USD/EUR) in `pp_exchange_rate` speichern! EZB liefert nur EUR/X Kurse. Der Code invertiert automatisch: `get_exchange_rate()` sucht erst direkt, dann invers (1/rate). Falsche direkte Einträge (z.B. USD/EUR=1.16 statt 0.85) führen zu massiv falschen Portfoliowerten!
 
 ---
 

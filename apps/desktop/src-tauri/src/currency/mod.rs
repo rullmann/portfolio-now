@@ -133,6 +133,10 @@ pub fn get_all_rates_for_date(
 }
 
 /// Store exchange rate in database
+///
+/// WICHTIG: EZB liefert nur EUR/X Kurse. Der Code invertiert automatisch bei Bedarf.
+/// X/EUR Kurse sollten NICHT direkt gespeichert werden - das führt zu Berechnungsfehlern!
+/// Siehe CLAUDE.md "Bekannte Fallen" #18
 pub fn store_rate(
     conn: &Connection,
     base: &str,
@@ -140,6 +144,17 @@ pub fn store_rate(
     date: NaiveDate,
     rate: f64,
 ) -> Result<()> {
+    // Warnung bei verdächtigen inversen Kursen (X/EUR wo X != EUR)
+    // Diese sollten nicht direkt gespeichert werden - der Code invertiert EUR/X automatisch
+    if target == "EUR" && base != "EUR" {
+        log::warn!(
+            "Storing suspicious inverse rate {}/EUR = {}. \
+             EZB only provides EUR/X rates. The code auto-inverts EUR/{} when needed. \
+             Direct {}/EUR entries may cause calculation errors!",
+            base, rate, base, base
+        );
+    }
+
     conn.execute(
         r#"
         INSERT OR REPLACE INTO pp_exchange_rate (base_currency, term_currency, date, rate)
