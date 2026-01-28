@@ -66,3 +66,4 @@ Cargo.lock
 *.md
 !README.md
 !CHANGELOG.md
+test-results/
