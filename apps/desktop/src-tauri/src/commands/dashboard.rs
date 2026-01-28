@@ -2,10 +2,8 @@
 //!
 //! Manages customizable dashboard layouts with drag-and-drop widgets.
 
-use rusqlite::Connection;
+use crate::db;
 use serde::{Deserialize, Serialize};
-use tauri::State;
-use std::sync::Mutex;
 
 /// Widget types available in the dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,26 +72,6 @@ pub struct WidgetDefinition {
     pub max_width: u32,
     pub max_height: u32,
     pub configurable: bool,
-}
-
-/// Initialize the widget_layout table
-pub fn init_widget_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS pp_widget_layout (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            columns INTEGER NOT NULL DEFAULT 6,
-            widgets_json TEXT NOT NULL,
-            is_default INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_widget_layout_default ON pp_widget_layout(is_default);
-        "#,
-    )?;
-    Ok(())
 }
 
 /// Get available widget definitions
@@ -251,14 +229,11 @@ pub fn get_available_widgets() -> Result<Vec<WidgetDefinition>, String> {
 
 /// Get dashboard layout
 #[tauri::command]
-pub fn get_dashboard_layout(
-    state: State<'_, Mutex<Connection>>,
-    layout_id: Option<i64>,
-) -> Result<Option<DashboardLayout>, String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
-
-    // Ensure table exists
-    init_widget_tables(&conn).map_err(|e| e.to_string())?;
+pub fn get_dashboard_layout(layout_id: Option<i64>) -> Result<Option<DashboardLayout>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
 
     let query = if let Some(id) = layout_id {
         format!(
@@ -293,17 +268,11 @@ pub fn get_dashboard_layout(
     Ok(result)
 }
 
-/// Save dashboard layout
-#[tauri::command]
-pub fn save_dashboard_layout(
-    state: State<'_, Mutex<Connection>>,
-    layout: DashboardLayout,
+/// Save dashboard layout (internal function)
+fn save_dashboard_layout_internal(
+    conn: &rusqlite::Connection,
+    layout: &DashboardLayout,
 ) -> Result<i64, String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
-
-    // Ensure table exists
-    init_widget_tables(&conn).map_err(|e| e.to_string())?;
-
     let widgets_json =
         serde_json::to_string(&layout.widgets).map_err(|e| format!("JSON error: {}", e))?;
 
@@ -339,13 +308,24 @@ pub fn save_dashboard_layout(
     }
 }
 
+/// Save dashboard layout
+#[tauri::command]
+pub fn save_dashboard_layout(layout: DashboardLayout) -> Result<i64, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    save_dashboard_layout_internal(conn, &layout)
+}
+
 /// Delete dashboard layout
 #[tauri::command]
-pub fn delete_dashboard_layout(
-    state: State<'_, Mutex<Connection>>,
-    layout_id: i64,
-) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
+pub fn delete_dashboard_layout(layout_id: i64) -> Result<(), String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
 
     conn.execute("DELETE FROM pp_widget_layout WHERE id = ?1", [layout_id])
         .map_err(|e| format!("Delete error: {}", e))?;
@@ -355,13 +335,11 @@ pub fn delete_dashboard_layout(
 
 /// Get all dashboard layouts
 #[tauri::command]
-pub fn get_all_dashboard_layouts(
-    state: State<'_, Mutex<Connection>>,
-) -> Result<Vec<DashboardLayout>, String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
-
-    // Ensure table exists
-    init_widget_tables(&conn).map_err(|e| e.to_string())?;
+pub fn get_all_dashboard_layouts() -> Result<Vec<DashboardLayout>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
 
     let mut stmt = conn
         .prepare("SELECT id, name, columns, widgets_json, is_default FROM pp_widget_layout ORDER BY is_default DESC, name")
@@ -395,9 +373,12 @@ pub fn get_all_dashboard_layouts(
 
 /// Create default dashboard layout
 #[tauri::command]
-pub fn create_default_dashboard_layout(
-    state: State<'_, Mutex<Connection>>,
-) -> Result<DashboardLayout, String> {
+pub fn create_default_dashboard_layout() -> Result<DashboardLayout, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
     let default_widgets = vec![
         WidgetConfig {
             id: "portfolio-value".to_string(),
@@ -449,7 +430,7 @@ pub fn create_default_dashboard_layout(
         is_default: true,
     };
 
-    let id = save_dashboard_layout(state, layout.clone())?;
+    let id = save_dashboard_layout_internal(conn, &layout)?;
 
     Ok(DashboardLayout { id, ..layout })
 }

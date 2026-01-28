@@ -407,6 +407,19 @@ pub fn init_database(path: &Path) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_pp_exchange_rate_currencies ON pp_exchange_rate(base_currency, term_currency, date);
 
+        -- Widget Dashboard Layouts
+        CREATE TABLE IF NOT EXISTS pp_widget_layout (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            columns INTEGER NOT NULL DEFAULT 6,
+            widgets_json TEXT NOT NULL,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_widget_layout_default ON pp_widget_layout(is_default);
+
         -- Client settings
         CREATE TABLE IF NOT EXISTS pp_settings (
             key TEXT PRIMARY KEY,

@@ -53,13 +53,35 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
 
         if (!currentLayout) {
           // Create default layout if none exists
-          currentLayout = await createDefaultDashboardLayout();
+          try {
+            currentLayout = await createDefaultDashboardLayout();
+          } catch (e) {
+            // Fallback: Use local default layout (not persisted)
+            console.warn('Using local fallback layout:', e);
+            currentLayout = {
+              id: 0,
+              name: 'Standard',
+              columns: 6,
+              widgets: [],
+              is_default: true,
+            };
+          }
         }
 
         setLayout(currentLayout);
       } catch (error) {
         console.error('Failed to load dashboard layout:', error);
-        toast.error('Dashboard-Layout konnte nicht geladen werden');
+        // Show detailed error message
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(`Dashboard-Layout konnte nicht geladen werden: ${message}`);
+        // Set empty fallback layout so dashboard is still usable
+        setLayout({
+          id: 0,
+          name: 'Standard',
+          columns: 6,
+          widgets: [],
+          is_default: true,
+        });
       } finally {
         setIsLoading(false);
       }

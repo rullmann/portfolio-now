@@ -1,5 +1,6 @@
 // Export all views
 export { DashboardView } from './Dashboard';
+export { WidgetDashboardView } from './WidgetDashboard';
 export { PortfolioView } from './Portfolio';
 export { SecuritiesView, SecuritiesViewWithErrorBoundary } from './Securities';
 export { AccountsView } from './Accounts';

@@ -14,6 +14,11 @@ import { ChartWidget } from './widgets/ChartWidget';
 import { AlertsWidget } from './widgets/AlertsWidget';
 import { HeatmapWidget } from './widgets/HeatmapWidget';
 import { YearReturnsWidget } from './widgets/YearReturnsWidget';
+import { HoldingsPieWidget } from './widgets/HoldingsPieWidget';
+import { RecentTransactionsWidget } from './widgets/RecentTransactionsWidget';
+import { DividendsWidget } from './widgets/DividendsWidget';
+import { WatchlistWidget } from './widgets/WatchlistWidget';
+import { BenchmarkWidget } from './widgets/BenchmarkWidget';
 
 interface WidgetContainerProps {
   widgets: WidgetConfig[];
@@ -31,6 +36,7 @@ interface WidgetContainerProps {
   irr?: number;
   holdings?: Array<{ name: string; value: number; weight: number; gainLossPercent: number }>;
   portfolioHistory?: Array<{ date: string; value: number }>;
+  currency?: string;
 }
 
 // Map widget type to component
@@ -38,10 +44,15 @@ const widgetComponents: Record<string, React.ComponentType<WidgetProps & Record<
   portfolio_value: PortfolioValueWidget,
   performance: PerformanceWidget,
   holdings_table: HoldingsTableWidget,
+  holdings_pie: HoldingsPieWidget,
   chart: ChartWidget,
   alerts: AlertsWidget,
   heatmap: HeatmapWidget,
   year_returns: YearReturnsWidget,
+  recent_transactions: RecentTransactionsWidget,
+  dividends: DividendsWidget,
+  watchlist: WatchlistWidget,
+  benchmark: BenchmarkWidget,
 };
 
 export function WidgetContainer({

@@ -597,13 +597,14 @@ export function DashboardView({
     };
   }, [dbPortfolioHistory, dbInvestedCapitalHistory, chartTimeRange]);
 
+  // Calculate derived values for widgets
+  const totalValue = dbHoldings.reduce((sum, h) => sum + (h.currentValue || 0), 0);
+  const totalCostBasis = dbHoldings.reduce((sum, h) => sum + h.costBasis, 0);
+  const totalGainLoss = totalValue - totalCostBasis;
+  const totalGainLossPercent = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
+
   // Main dashboard with holdings
   if (dbHoldings.length > 0) {
-    const totalValue = dbHoldings.reduce((sum, h) => sum + (h.currentValue || 0), 0);
-    const totalCostBasis = dbHoldings.reduce((sum, h) => sum + h.costBasis, 0);
-    const totalGainLoss = totalValue - totalCostBasis;
-    const totalGainLossPercent = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
-
     const dailyChange =
       filteredChartData.length >= 2
         ? filteredChartData[filteredChartData.length - 1].value -
@@ -639,23 +640,25 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
                 Portfolio
               </span>
-              <button
-                onClick={() => handleSyncQuotes()}
-                disabled={isSyncing}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/50 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                title="Kurse aktualisieren"
-              >
-                <RefreshCw
-                  size={12}
-                  className={isSyncing ? 'animate-spin text-primary' : ''}
-                />
-                <span className="text-[10px] font-medium">
-                  {isSyncing ? 'Sync...' : lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('de-DE', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  }) : 'Sync'}
-                </span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleSyncQuotes()}
+                  disabled={isSyncing}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/50 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                  title="Kurse aktualisieren"
+                >
+                  <RefreshCw
+                    size={12}
+                    className={isSyncing ? 'animate-spin text-primary' : ''}
+                  />
+                  <span className="text-[10px] font-medium">
+                    {isSyncing ? 'Sync...' : lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('de-DE', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    }) : 'Sync'}
+                  </span>
+                </button>
+              </div>
             </div>
             <div className="text-3xl font-light tracking-tight">
               {formatNumber(totalValue)}

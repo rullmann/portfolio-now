@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 export type View =
   | 'dashboard'
+  | 'widget-dashboard'
   | 'portfolio'
   | 'securities'
   | 'accounts'
@@ -41,6 +42,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   // Main section
   { id: 'dashboard', label: 'Dashboard', icon: 'LayoutDashboard', section: 'main' },
+  { id: 'widget-dashboard', label: 'Mein Dashboard', icon: 'LayoutGrid', section: 'main' },
   { id: 'portfolio', label: 'Portfolios', icon: 'Briefcase', section: 'main' },
   { id: 'securities', label: 'Wertpapiere', icon: 'TrendingUp', section: 'main' },
   { id: 'accounts', label: 'Konten', icon: 'Wallet', section: 'main' },

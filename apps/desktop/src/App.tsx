@@ -58,6 +58,7 @@ import { useSecureApiKeys } from './hooks/useSecureApiKeys';
 // Views
 import {
   DashboardView,
+  WidgetDashboardView,
   PortfolioView,
   SecuritiesViewWithErrorBoundary as SecuritiesView,
   AccountsView,
@@ -503,6 +504,13 @@ function App() {
             dbInvestedCapitalHistory={dbInvestedCapitalHistory}
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
+          />
+        );
+      case 'widget-dashboard':
+        return (
+          <WidgetDashboardView
+            dbHoldings={dbHoldings}
+            dbPortfolioHistory={dbPortfolioHistory}
           />
         );
       case 'portfolio':

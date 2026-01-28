@@ -5,3 +5,8 @@ export { ChartWidget } from './ChartWidget';
 export { AlertsWidget } from './AlertsWidget';
 export { HeatmapWidget } from './HeatmapWidget';
 export { YearReturnsWidget } from './YearReturnsWidget';
+export { HoldingsPieWidget } from './HoldingsPieWidget';
+export { RecentTransactionsWidget } from './RecentTransactionsWidget';
+export { DividendsWidget } from './DividendsWidget';
+export { WatchlistWidget } from './WatchlistWidget';
+export { BenchmarkWidget } from './BenchmarkWidget';

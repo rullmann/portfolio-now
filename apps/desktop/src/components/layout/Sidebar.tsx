@@ -6,6 +6,7 @@
 import { useCallback, useRef } from 'react';
 import {
   LayoutDashboard,
+  LayoutGrid,
   Briefcase,
   TrendingUp,
   Wallet,
@@ -33,6 +34,7 @@ import { useUIStore, navItems, type NavItem } from '../../store';
 // Icon mapping for navItems
 const iconComponents = {
   LayoutDashboard,
+  LayoutGrid,
   Briefcase,
   TrendingUp,
   Wallet,
