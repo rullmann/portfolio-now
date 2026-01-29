@@ -7,13 +7,18 @@
 //! - sync_all_prices: Alle Securities aktualisieren
 //! - fetch_exchange_rates: EZB Wechselkurse abrufen
 
+use crate::commands::data;
 use crate::db;
 use crate::quotes::{self, alphavantage, ecb, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
 use futures::stream::{self, StreamExt};
 use chrono::NaiveDate;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{command, AppHandle, Emitter};
+
+/// Flag to cancel historical batch fetch
+static HISTORICAL_BATCH_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Legacy-Format für Rückwärtskompatibilität
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +117,17 @@ pub async fn sync_security_prices(
                 if let Err(e) = save_quote_to_db(result.security_id, latest) {
                     log::error!(
                         "Failed to save quote for security {}: {}",
+                        result.security_id,
+                        e
+                    );
+                }
+            }
+        } else {
+            // Save error to database
+            if let Some(ref err) = result.error {
+                if let Err(e) = save_quote_error(result.security_id, err, &result.provider) {
+                    log::error!(
+                        "Failed to save quote error for security {}: {}",
                         result.security_id,
                         e
                     );
@@ -244,6 +260,14 @@ pub async fn sync_all_prices(
             if let Some(ref err) = result.error {
                 log::error!("Quote fetch error for {}: {}", result.symbol, err);
                 errors.push(format!("{}: {}", result.symbol, err));
+                // Save error to database
+                if let Err(e) = save_quote_error(result.security_id, err, &result.provider) {
+                    log::error!(
+                        "Failed to save quote error for {}: {}",
+                        result.symbol,
+                        e
+                    );
+                }
             }
         }
     }
@@ -302,8 +326,8 @@ pub async fn fetch_historical_prices(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Optional: Historische Kurse in DB speichern
-    if let Err(e) = save_historical_quotes_to_db(security_id, &quotes) {
+    // Optional: Historische Kurse in DB speichern (mit Spike-Erkennung)
+    if let Err(e) = save_historical_quotes_smart(security_id, &quotes, false) {
         log::warn!(
             "Failed to save historical quotes for security {}: {}",
             security_id,
@@ -312,6 +336,478 @@ pub async fn fetch_historical_prices(
     }
 
     Ok(quotes)
+}
+
+// ============== Batch Historical Prices ==============
+
+/// Request for batch historical price fetching
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalBatchRequest {
+    /// Security IDs to fetch (empty = all with quote source)
+    pub security_ids: Vec<i64>,
+    /// Start year for historical data
+    pub from_year: i32,
+    /// Only fetch for securities currently held
+    pub only_held: bool,
+    /// Force reload: delete existing quotes and always run outlier detection
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Progress update for a single security
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalBatchProgress {
+    pub security_id: i64,
+    pub security_name: String,
+    pub ticker: String,
+    pub provider: String,
+    /// Status: "pending", "loading", "success", "error"
+    pub status: String,
+    /// Number of quotes fetched from provider
+    pub quotes_fetched: usize,
+    /// Spikes deleted before saving
+    pub spikes_deleted: usize,
+    /// New quotes inserted
+    pub quotes_inserted: usize,
+    /// Existing quotes updated (different value)
+    pub quotes_updated: usize,
+    /// Existing quotes skipped (identical value)
+    pub quotes_skipped: usize,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub error: Option<String>,
+    /// Current progress index (1-based)
+    pub current_index: usize,
+    /// Total number of securities to process
+    pub total_count: usize,
+}
+
+/// Final result of batch historical price fetch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalBatchResult {
+    pub total_securities: usize,
+    pub successful: usize,
+    pub failed: usize,
+    /// Total spikes deleted
+    pub total_spikes_deleted: usize,
+    /// Total new quotes inserted
+    pub total_inserted: usize,
+    /// Total quotes updated
+    pub total_updated: usize,
+    /// Total quotes skipped (identical)
+    pub total_skipped: usize,
+    pub progress: Vec<HistoricalBatchProgress>,
+}
+
+/// Event name for historical batch progress
+const HISTORICAL_BATCH_PROGRESS_EVENT: &str = "historical_quotes_progress";
+
+/// Cancel the historical batch fetch
+#[command]
+pub fn cancel_historical_batch() -> Result<(), String> {
+    log::info!("Historical batch fetch cancelled by user");
+    HISTORICAL_BATCH_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Delete all historical prices for a security
+fn delete_historical_prices(security_id: i64) -> anyhow::Result<usize> {
+    let conn_guard = db::get_connection()?;
+    let conn = conn_guard.as_ref().ok_or(anyhow::anyhow!("DB not initialized"))?;
+
+    let deleted = conn.execute(
+        "DELETE FROM pp_price WHERE security_id = ?",
+        params![security_id],
+    )?;
+
+    log::info!("Deleted {} historical prices for security {}", deleted, security_id);
+    Ok(deleted)
+}
+
+/// Force reload historical prices for a single security (delete + reload)
+#[command]
+pub async fn force_reload_historical_prices(
+    security_id: i64,
+    from_year: i32,
+    api_keys: Option<ApiKeys>,
+) -> Result<ForceReloadResult, String> {
+    let security = get_security_by_id(security_id).map_err(|e| e.to_string())?;
+    let keys = api_keys.unwrap_or_default();
+
+    let symbol = security.ticker.clone()
+        .or(security.isin.clone())
+        .ok_or("Security has no ticker or ISIN")?;
+
+    let provider_type = ProviderType::from_str(&security.feed)
+        .ok_or_else(|| format!("Unknown provider: {}", security.feed))?;
+
+    // Delete existing historical prices
+    let deleted_count = delete_historical_prices(security_id).map_err(|e| e.to_string())?;
+
+    // Fetch new historical prices
+    let from_date = NaiveDate::from_ymd_opt(from_year, 1, 1)
+        .ok_or_else(|| format!("Invalid year: {}", from_year))?;
+    let to_date = chrono::Utc::now().date_naive();
+
+    // Get API key for provider
+    let api_key = match provider_type {
+        ProviderType::Finnhub => keys.finnhub.as_deref(),
+        ProviderType::AlphaVantage => keys.alpha_vantage.as_deref(),
+        ProviderType::CoinGecko => keys.coingecko.as_deref(),
+        ProviderType::TwelveData => keys.twelve_data.as_deref(),
+        _ => None,
+    };
+
+    // Get exchange suffix for Yahoo
+    let exchange_suffix = if matches!(provider_type, ProviderType::Yahoo | ProviderType::YahooAdjustedClose) {
+        security.feed_url.as_deref()
+    } else {
+        None
+    };
+
+    match quotes::fetch_historical_quotes_with_options(
+        &symbol,
+        provider_type,
+        from_date,
+        to_date,
+        api_key,
+        exchange_suffix,
+    ).await {
+        Ok(quotes) => {
+            let fetched_count = quotes.len();
+            let date_from = quotes.first().map(|q| q.date.to_string());
+            let date_to = quotes.last().map(|q| q.date.to_string());
+
+            // Save to database (force=true since this is force_reload_historical_prices)
+            let save_stats = save_historical_quotes_smart(security_id, &quotes, true).map_err(|e| e.to_string())?;
+
+            Ok(ForceReloadResult {
+                security_id,
+                security_name: security.name,
+                deleted_count,
+                fetched_count,
+                inserted_count: save_stats.inserted,
+                date_from,
+                date_to,
+                error: None,
+            })
+        }
+        Err(e) => {
+            Ok(ForceReloadResult {
+                security_id,
+                security_name: security.name,
+                deleted_count,
+                fetched_count: 0,
+                inserted_count: 0,
+                date_from: None,
+                date_to: None,
+                error: Some(e.to_string()),
+            })
+        }
+    }
+}
+
+/// Result of force reload operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForceReloadResult {
+    pub security_id: i64,
+    pub security_name: String,
+    /// Number of old prices deleted before reload
+    pub deleted_count: usize,
+    /// Number of quotes fetched from provider
+    pub fetched_count: usize,
+    /// Number of quotes actually inserted into DB
+    pub inserted_count: usize,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Fetch historical prices for multiple securities with progress events
+#[command]
+pub async fn fetch_historical_prices_batch(
+    app: AppHandle,
+    request: HistoricalBatchRequest,
+    api_keys: Option<ApiKeys>,
+) -> Result<HistoricalBatchResult, String> {
+    // Reset cancel flag
+    HISTORICAL_BATCH_CANCEL.store(false, Ordering::SeqCst);
+
+    let keys = api_keys.unwrap_or_default();
+
+    // Get securities to process
+    let securities = if request.security_ids.is_empty() {
+        get_all_securities_for_sync(request.only_held).map_err(|e| e.to_string())?
+    } else {
+        get_securities_for_sync(request.security_ids).map_err(|e| e.to_string())?
+    };
+
+    // Filter to only securities with valid feed configuration
+    let securities: Vec<_> = securities
+        .into_iter()
+        .filter(|s| {
+            let has_feed = !s.feed.is_empty() && s.feed.to_uppercase() != "MANUAL";
+            let has_symbol = s.ticker.is_some() || s.isin.is_some();
+            has_feed && has_symbol
+        })
+        .collect();
+
+    let total_count = securities.len();
+    log::info!("Batch historical fetch: {} securities, from year {}, force={}", total_count, request.from_year, request.force);
+
+    if total_count == 0 {
+        return Ok(HistoricalBatchResult {
+            total_securities: 0,
+            successful: 0,
+            failed: 0,
+            total_spikes_deleted: 0,
+            total_inserted: 0,
+            total_updated: 0,
+            total_skipped: 0,
+            progress: vec![],
+        });
+    }
+
+    let from_date = NaiveDate::from_ymd_opt(request.from_year, 1, 1)
+        .ok_or_else(|| format!("Invalid year: {}", request.from_year))?;
+    let to_date = chrono::Utc::now().date_naive();
+
+    let mut all_progress: Vec<HistoricalBatchProgress> = Vec::new();
+    let mut successful = 0;
+    let mut failed = 0;
+    let mut total_spikes_deleted = 0;
+    let mut total_inserted = 0;
+    let mut total_updated = 0;
+    let mut total_skipped = 0;
+
+    for (index, security) in securities.into_iter().enumerate() {
+        // Check for cancellation
+        if HISTORICAL_BATCH_CANCEL.load(Ordering::SeqCst) {
+            log::info!("Historical batch cancelled after {} securities", index);
+            break;
+        }
+
+        let current_index = index + 1;
+        let symbol = security.ticker.clone()
+            .or(security.isin.clone())
+            .unwrap_or_else(|| security.name.clone());
+
+        // Parse provider type FIRST (before emitting any status)
+        let provider_type = match ProviderType::from_str(&security.feed) {
+            Some(p) => p,
+            None => {
+                let provider = security.feed.clone();
+                let error_progress = HistoricalBatchProgress {
+                    security_id: security.id,
+                    security_name: security.name.clone(),
+                    ticker: symbol.clone(),
+                    provider: provider.clone(),
+                    status: "error".to_string(),
+                    quotes_fetched: 0,
+                    spikes_deleted: 0,
+                    quotes_inserted: 0,
+                    quotes_updated: 0,
+                    quotes_skipped: 0,
+                    date_from: None,
+                    date_to: None,
+                    error: Some(format!("Unbekannter Provider: {}", security.feed)),
+                    current_index,
+                    total_count,
+                };
+                let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, error_progress.clone());
+                all_progress.push(error_progress);
+                failed += 1;
+                continue;
+            }
+        };
+
+        let provider = format!("{:?}", provider_type);
+
+        // Skip MANUAL provider silently (no progress event)
+        if provider_type == ProviderType::Manual {
+            continue;
+        }
+
+        // Skip providers requiring API key if not provided (emit error before continuing)
+        let skip_reason = match provider_type {
+            ProviderType::Finnhub if keys.finnhub.is_none() => Some("Finnhub benötigt API-Key"),
+            ProviderType::AlphaVantage if keys.alpha_vantage.is_none() => Some("Alpha Vantage benötigt API-Key"),
+            ProviderType::TwelveData if keys.twelve_data.is_none() => Some("TwelveData benötigt API-Key"),
+            _ => None,
+        };
+
+        if let Some(reason) = skip_reason {
+            let error_progress = HistoricalBatchProgress {
+                security_id: security.id,
+                security_name: security.name.clone(),
+                ticker: symbol.clone(),
+                provider: provider.clone(),
+                status: "error".to_string(),
+                quotes_fetched: 0,
+                spikes_deleted: 0,
+                quotes_inserted: 0,
+                quotes_updated: 0,
+                quotes_skipped: 0,
+                date_from: None,
+                date_to: None,
+                error: Some(reason.to_string()),
+                current_index,
+                total_count,
+            };
+            let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, error_progress.clone());
+            all_progress.push(error_progress);
+            failed += 1;
+            continue;
+        }
+
+        // NOW emit "loading" status (after all skip checks passed)
+        let loading_progress = HistoricalBatchProgress {
+            security_id: security.id,
+            security_name: security.name.clone(),
+            ticker: symbol.clone(),
+            provider: provider.clone(),
+            status: "loading".to_string(),
+            quotes_fetched: 0,
+            spikes_deleted: 0,
+            quotes_inserted: 0,
+            quotes_updated: 0,
+            quotes_skipped: 0,
+            date_from: None,
+            date_to: None,
+            error: None,
+            current_index,
+            total_count,
+        };
+        let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, loading_progress);
+
+        // Get API key for provider
+        let api_key = match provider_type {
+            ProviderType::Finnhub => keys.finnhub.as_deref(),
+            ProviderType::AlphaVantage => keys.alpha_vantage.as_deref(),
+            ProviderType::CoinGecko => keys.coingecko.as_deref(),
+            ProviderType::TwelveData => keys.twelve_data.as_deref(),
+            _ => None,
+        };
+
+        // Get exchange suffix for Yahoo
+        let exchange_suffix = if matches!(provider_type, ProviderType::Yahoo | ProviderType::YahooAdjustedClose) {
+            security.feed_url.as_deref()
+        } else {
+            None
+        };
+
+        // Fetch historical quotes
+        match quotes::fetch_historical_quotes_with_options(
+            &symbol,
+            provider_type,
+            from_date,
+            to_date,
+            api_key,
+            exchange_suffix,
+        ).await {
+            Ok(quotes) => {
+                let fetched_count = quotes.len();
+                let date_from = quotes.first().map(|q| q.date.to_string());
+                let date_to = quotes.last().map(|q| q.date.to_string());
+
+                // Save to database with smart comparison (includes spike deletion)
+                match save_historical_quotes_smart(security.id, &quotes, request.force) {
+                    Ok(save_stats) => {
+                        let success_progress = HistoricalBatchProgress {
+                            security_id: security.id,
+                            security_name: security.name.clone(),
+                            ticker: symbol.clone(),
+                            provider: provider.clone(),
+                            status: "success".to_string(),
+                            quotes_fetched: fetched_count,
+                            spikes_deleted: save_stats.spikes_deleted,
+                            quotes_inserted: save_stats.inserted,
+                            quotes_updated: save_stats.updated,
+                            quotes_skipped: save_stats.skipped,
+                            date_from: date_from.clone(),
+                            date_to: date_to.clone(),
+                            error: None,
+                            current_index,
+                            total_count,
+                        };
+                        let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, success_progress.clone());
+                        all_progress.push(success_progress);
+                        successful += 1;
+                        total_spikes_deleted += save_stats.spikes_deleted;
+                        total_inserted += save_stats.inserted;
+                        total_updated += save_stats.updated;
+                        total_skipped += save_stats.skipped;
+                    }
+                    Err(e) => {
+                        log::error!("Failed to save historical quotes for {}: {}", security.name, e);
+                        let error_progress = HistoricalBatchProgress {
+                            security_id: security.id,
+                            security_name: security.name.clone(),
+                            ticker: symbol.clone(),
+                            provider: provider.clone(),
+                            status: "error".to_string(),
+                            quotes_fetched: fetched_count,
+                            spikes_deleted: 0,
+                            quotes_inserted: 0,
+                            quotes_updated: 0,
+                            quotes_skipped: 0,
+                            date_from,
+                            date_to,
+                            error: Some(format!("Speichern fehlgeschlagen: {}", e)),
+                            current_index,
+                            total_count,
+                        };
+                        let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, error_progress.clone());
+                        all_progress.push(error_progress);
+                        failed += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to fetch historical quotes for {}: {}", security.name, e);
+                let error_progress = HistoricalBatchProgress {
+                    security_id: security.id,
+                    security_name: security.name.clone(),
+                    ticker: symbol.clone(),
+                    provider: provider.clone(),
+                    status: "error".to_string(),
+                    quotes_fetched: 0,
+                    spikes_deleted: 0,
+                    quotes_inserted: 0,
+                    quotes_updated: 0,
+                    quotes_skipped: 0,
+                    date_from: None,
+                    date_to: None,
+                    error: Some(e.to_string()),
+                    current_index,
+                    total_count,
+                };
+                let _ = app.emit(HISTORICAL_BATCH_PROGRESS_EVENT, error_progress.clone());
+                all_progress.push(error_progress);
+                failed += 1;
+            }
+        }
+    }
+
+    log::info!(
+        "Batch historical fetch complete: {} successful, {} failed, {} spikes deleted, {} inserted, {} updated, {} skipped",
+        successful, failed, total_spikes_deleted, total_inserted, total_updated, total_skipped
+    );
+
+    Ok(HistoricalBatchResult {
+        total_securities: total_count,
+        successful,
+        failed,
+        total_spikes_deleted,
+        total_inserted,
+        total_updated,
+        total_skipped,
+        progress: all_progress,
+    })
 }
 
 /// EZB Wechselkurse abrufen
@@ -629,6 +1125,59 @@ pub async fn search_external_securities(
     })
 }
 
+// ============== Quote Error Query ==============
+
+/// Quote error record from database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteError {
+    pub security_id: i64,
+    pub security_name: String,
+    pub ticker: Option<String>,
+    pub error_date: String,
+    pub error_message: String,
+    pub provider: Option<String>,
+}
+
+/// Get all current quote fetch errors
+#[command]
+pub fn get_quote_errors() -> Result<Vec<QuoteError>, String> {
+    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+    let sql = r#"
+        SELECT
+            e.security_id,
+            s.name,
+            s.ticker,
+            e.error_date,
+            e.error_message,
+            e.provider
+        FROM pp_quote_error e
+        JOIN pp_security s ON s.id = e.security_id
+        ORDER BY e.error_date DESC
+    "#;
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+
+    let errors = stmt
+        .query_map([], |row| {
+            Ok(QuoteError {
+                security_id: row.get(0)?,
+                security_name: row.get(1)?,
+                ticker: row.get(2)?,
+                error_date: row.get(3)?,
+                error_message: row.get(4)?,
+                provider: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(errors)
+}
+
 // ============== Hilfsstrukturen ==============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -803,26 +1352,167 @@ fn save_quote_to_db(security_id: i64, quote: &LatestQuote) -> anyhow::Result<()>
         params![security_id, quote.quote.date.to_string(), price_value],
     )?;
 
+    // Clear any previous error on success (using same connection to avoid deadlock)
+    conn.execute(
+        "DELETE FROM pp_quote_error WHERE security_id = ?",
+        params![security_id],
+    )?;
+
     Ok(())
 }
 
-fn save_historical_quotes_to_db(security_id: i64, quotes: &[Quote]) -> anyhow::Result<()> {
-    let mut conn_guard = db::get_connection()?;
-    let conn = conn_guard.as_mut().ok_or(anyhow::anyhow!("DB not initialized"))?;
+/// Save a quote fetch error to the database
+fn save_quote_error(security_id: i64, error_message: &str, provider: &str) -> anyhow::Result<()> {
+    let conn_guard = db::get_connection()?;
+    let conn = conn_guard.as_ref().ok_or(anyhow::anyhow!("DB not initialized"))?;
 
-    let tx = conn.transaction()?;
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    conn.execute(
+        "INSERT OR REPLACE INTO pp_quote_error (security_id, error_date, error_message, provider)
+         VALUES (?, ?, ?, ?)",
+        params![security_id, now, error_message, provider],
+    )?;
 
-    for quote in quotes {
-        let price_value = quotes::price_to_db(quote.close);
-        tx.execute(
-            "INSERT OR REPLACE INTO pp_price (security_id, date, value)
-             VALUES (?, ?, ?)",
-            params![security_id, quote.date.to_string(), price_value],
-        )?;
+    Ok(())
+}
+
+/// Result of saving historical quotes with detailed statistics
+#[derive(Debug, Clone, Default)]
+struct SaveQuotesStats {
+    /// New quotes inserted
+    inserted: usize,
+    /// Existing quotes updated (different value)
+    updated: usize,
+    /// Existing quotes skipped (identical value)
+    skipped: usize,
+    /// Outliers/spikes deleted before saving (using SSOT from data.rs)
+    spikes_deleted: usize,
+}
+
+/// Save historical quotes with smart comparison - OPTIMIZED with batch operations.
+/// - Uses INSERT OR REPLACE for efficient upsert
+/// - Prepared statements are reused
+/// - Single transaction for all quotes
+/// - If force=true: deletes existing quotes first and always runs outlier detection
+fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool) -> anyhow::Result<SaveQuotesStats> {
+    if quotes.is_empty() {
+        return Ok(SaveQuotesStats::default());
     }
 
-    tx.commit()?;
-    Ok(())
+    let mut stats = SaveQuotesStats::default();
+    let quotes_count = quotes.len();
+
+    // Determine if we need outlier detection AFTER releasing the connection
+    let needs_outlier_detection;
+
+    // Use a block to ensure conn_guard is dropped before calling delete_outliers_for_security
+    // This prevents a deadlock since delete_outliers_for_security also needs get_connection()
+    {
+        let mut conn_guard = db::get_connection()?;
+        let conn = conn_guard.as_mut().ok_or(anyhow::anyhow!("DB not initialized"))?;
+
+        // Optimize SQLite for bulk operations
+        conn.execute_batch(
+            "PRAGMA synchronous = OFF;
+             PRAGMA cache_size = 10000;
+             PRAGMA temp_store = MEMORY;"
+        )?;
+
+        if force {
+            // Force mode: Delete all existing quotes and insert new ones in SAME transaction
+            // This prevents data loss if the operation is interrupted
+            let tx = conn.transaction()?;
+            {
+                tx.execute(
+                    "DELETE FROM pp_price WHERE security_id = ?",
+                    params![security_id],
+                )?;
+
+                let mut stmt_insert = tx.prepare_cached(
+                    "INSERT INTO pp_price (security_id, date, value) VALUES (?, ?, ?)"
+                )?;
+
+                for quote in quotes {
+                    let date_str = quote.date.to_string();
+                    let new_value = quotes::price_to_db(quote.close);
+                    stmt_insert.execute(params![security_id, date_str, new_value])?;
+                    stats.inserted += 1;
+                }
+            }
+            tx.commit()?;
+        } else {
+            // Normal mode: Compare with existing and insert/update as needed
+            // Step 1: Get existing prices for comparison (using index)
+            let existing_prices: std::collections::HashMap<String, i64> = {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT date, value FROM pp_price WHERE security_id = ?"
+                )?;
+                let rows = stmt.query_map(params![security_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?;
+                rows.filter_map(|r| r.ok()).collect()
+            };
+
+            // Step 2: Batch save with prepared statements
+            let tx = conn.transaction()?;
+
+            {
+                // Prepare statements once, reuse many times
+                let mut stmt_insert = tx.prepare_cached(
+                    "INSERT INTO pp_price (security_id, date, value) VALUES (?, ?, ?)"
+                )?;
+                let mut stmt_update = tx.prepare_cached(
+                    "UPDATE pp_price SET value = ? WHERE security_id = ? AND date = ?"
+                )?;
+
+                for quote in quotes {
+                    let date_str = quote.date.to_string();
+                    let new_value = quotes::price_to_db(quote.close);
+
+                    match existing_prices.get(&date_str) {
+                        Some(&existing_value) => {
+                            if existing_value == new_value {
+                                stats.skipped += 1;
+                            } else {
+                                stmt_update.execute(params![new_value, security_id, date_str])?;
+                                stats.updated += 1;
+                            }
+                        }
+                        None => {
+                            stmt_insert.execute(params![security_id, date_str, new_value])?;
+                            stats.inserted += 1;
+                        }
+                    }
+                }
+            }
+
+            tx.commit()?;
+        }
+
+        // Restore normal SQLite settings
+        conn.execute_batch("PRAGMA synchronous = NORMAL;")?;
+
+        // Determine if outlier detection is needed (before dropping connection)
+        needs_outlier_detection = force || stats.inserted > 100 || stats.updated > 100;
+    } // conn_guard is dropped here, releasing the Mutex
+
+    // Step 3: Delete outliers (AFTER releasing the connection to avoid deadlock)
+    // Force mode: always run outlier detection
+    // Normal mode: only if we inserted significant data
+    let spikes_deleted = if needs_outlier_detection {
+        data::delete_outliers_for_security(security_id).unwrap_or(0)
+    } else {
+        0
+    };
+    stats.spikes_deleted = spikes_deleted;
+
+    log::info!(
+        "Security {}: {} new, {} updated, {} skipped, {} outliers (of {} quotes){}",
+        security_id, stats.inserted, stats.updated, stats.skipped, stats.spikes_deleted, quotes_count,
+        if force { " [FORCE]" } else { "" }
+    );
+
+    Ok(stats)
 }
 
 /// Save exchange rates to database

@@ -53,7 +53,9 @@ export function AIModelSelector({
 }: AIModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
+  const [openDirection, setOpenDirection] = useState<'up' | 'down'>('down');
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const { keys } = useSecureApiKeys();
   const { setAiFeatureSetting } = useSettingsStore();
@@ -139,11 +141,36 @@ export function AIModelSelector({
   // Check if current provider still has API key
   const currentProviderHasKey = providerHasKey[value.provider];
 
+  // Calculate dropdown direction based on available space
+  const calculateDirection = () => {
+    if (!buttonRef.current) return 'down';
+
+    const buttonRect = buttonRef.current.getBoundingClientRect();
+    const dropdownHeight = 360; // Approximate max height (320px content + padding)
+    const spaceBelow = window.innerHeight - buttonRect.bottom;
+    const spaceAbove = buttonRect.top;
+
+    // Open upward if not enough space below but enough above
+    if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
+      return 'up';
+    }
+    return 'down';
+  };
+
+  const handleToggle = () => {
+    if (disabled) return;
+    if (!isOpen) {
+      setOpenDirection(calculateDirection());
+    }
+    setIsOpen(!isOpen);
+  };
+
   return (
     <div ref={dropdownRef} className="relative inline-block">
       {/* Trigger Button */}
       <button
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        ref={buttonRef}
+        onClick={handleToggle}
         disabled={disabled}
         className={cn(
           'flex items-center gap-1.5 rounded border border-border bg-background transition-colors',
@@ -167,9 +194,12 @@ export function AIModelSelector({
         <ChevronDown size={compact ? 12 : 14} className={cn('text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
       </button>
 
-      {/* Dropdown - opens downward */}
+      {/* Dropdown - auto-positions based on available space */}
       {isOpen && (
-        <div className="absolute z-50 top-full mt-1 min-w-[260px] rounded-lg border border-border bg-popover shadow-lg">
+        <div className={cn(
+          "absolute z-50 min-w-[260px] rounded-lg border border-border bg-popover shadow-lg",
+          openDirection === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
+        )}>
           <div className="max-h-[320px] overflow-y-auto py-1">
             {PROVIDER_ORDER.map(provider => {
               const hasKey = providerHasKey[provider];

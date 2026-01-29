@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ChangeEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, Sparkles, GitMerge, Split, ChevronDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, GitMerge, Split, ChevronDown, History } from 'lucide-react';
 import type { SecurityData, TransactionData } from '../../lib/types';
 import {
   getSecurities,
@@ -17,9 +17,10 @@ import {
   deleteSecurityLogo,
   getTransactions,
   deleteTransaction,
+  getQuoteErrors,
+  type QuoteError,
 } from '../../lib/api';
-import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, StockSplitModal, MergerModal } from '../../components/modals';
-import { QuoteManagerModal } from '../../components/modals/QuoteManagerModal';
+import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, StockSplitModal, MergerModal, HistoricalQuotesModal } from '../../components/modals';
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
@@ -92,8 +93,11 @@ export function SecuritiesView() {
   const [logoMenuOpen, setLogoMenuOpen] = useState<number | null>(null);
   const [recentlyUploadedLogos, setRecentlyUploadedLogos] = useState<Set<number>>(new Set());
 
-  // Quote manager modal state
-  const [isQuoteManagerModalOpen, setIsQuoteManagerModalOpen] = useState(false);
+  // Historical quotes modal state
+  const [isHistoricalQuotesModalOpen, setIsHistoricalQuotesModalOpen] = useState(false);
+
+  // Quote errors state
+  const [quoteErrors, setQuoteErrors] = useState<Map<number, QuoteError>>(new Map());
 
   // Corporate actions modal state
   const [isStockSplitModalOpen, setIsStockSplitModalOpen] = useState(false);
@@ -122,18 +126,33 @@ export function SecuritiesView() {
   const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
   const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
 
+  const loadQuoteErrors = useCallback(async () => {
+    try {
+      const errors = await getQuoteErrors();
+      const errorMap = new Map<number, QuoteError>();
+      for (const err of errors) {
+        errorMap.set(err.securityId, err);
+      }
+      setQuoteErrors(errorMap);
+    } catch (err) {
+      console.error('Failed to load quote errors:', err);
+    }
+  }, []);
+
   const loadSecurities = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const data = await getSecurities();
       setDbSecurities(data);
+      // Also load quote errors
+      await loadQuoteErrors();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadQuoteErrors]);
 
   useEffect(() => {
     loadSecurities();
@@ -459,6 +478,7 @@ export function SecuritiesView() {
       const modeText = syncOnlyHeldSecurities ? ' (nur im Bestand)' : '';
       setSuccess(`${result.success} von ${result.total} Kurse aktualisiert${modeText}`);
       await loadSecurities(); // Reload to show updated prices
+      await loadQuoteErrors(); // Reload quote errors
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -485,6 +505,7 @@ export function SecuritiesView() {
         setSuccess('Kurs aktualisiert');
         await loadSecurities();
       }
+      await loadQuoteErrors(); // Reload quote errors
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -535,13 +556,13 @@ export function SecuritiesView() {
         </h2>
         <div className="flex gap-2">
           <button
-            onClick={() => setIsQuoteManagerModalOpen(true)}
+            onClick={() => setIsHistoricalQuotesModalOpen(true)}
             disabled={isLoading}
             className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
-            title="Kursquellen prüfen und konfigurieren"
+            title="Historische Kurse von Kursquellen laden"
           >
-            <Sparkles size={16} />
-            Kursquellen-Manager
+            <History size={16} />
+            Historie laden
           </button>
           <button
             onClick={handleSyncPrices}
@@ -704,13 +725,14 @@ export function SecuritiesView() {
                   <th className="text-right py-3 px-4 font-medium">Letzter Kurs</th>
                   <th className="text-left py-3 px-4 font-medium">Kursdatum</th>
                   <th className="text-left py-3 px-4 font-medium">Abgerufen</th>
+                  <th className="text-center py-3 px-4 font-medium">Status</th>
                   <th className="text-right py-3 px-4 font-medium">Aktionen</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSecurities.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-muted-foreground">
+                    <td colSpan={10} className="py-8 text-center text-muted-foreground">
                       Keine Wertpapiere gefunden
                     </td>
                   </tr>
@@ -880,6 +902,39 @@ export function SecuritiesView() {
                     </td>
                     <td className="py-3 px-4 text-muted-foreground text-xs">
                       {formatDateTime(security.updatedAt)}
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      {(() => {
+                        const quoteError = quoteErrors.get(security.id);
+                        if (quoteError) {
+                          return (
+                            <div className="relative inline-block group">
+                              <AlertCircle
+                                size={18}
+                                className="text-amber-500 cursor-help"
+                              />
+                              {/* Tooltip on hover */}
+                              <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border border-border rounded-md shadow-lg text-left min-w-[280px] max-w-[400px] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
+                                <div className="text-xs font-medium text-amber-600 mb-1">
+                                  Kursabruf fehlgeschlagen
+                                </div>
+                                <div className="text-xs text-foreground mb-1">
+                                  {quoteError.errorMessage}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {quoteError.provider && (
+                                    <span className="mr-2">Provider: {quoteError.provider}</span>
+                                  )}
+                                  <span>{formatDateTime(quoteError.errorDate)}</span>
+                                </div>
+                                {/* Arrow pointing down */}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+                              </div>
+                            </div>
+                          );
+                        }
+                        return <span className="text-muted-foreground/30">-</span>;
+                      })()}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex justify-end gap-1">
@@ -1114,10 +1169,10 @@ export function SecuritiesView() {
         transaction={editingTransaction || undefined}
       />
 
-      {/* Quote Manager Modal */}
-      <QuoteManagerModal
-        isOpen={isQuoteManagerModalOpen}
-        onClose={() => setIsQuoteManagerModalOpen(false)}
+      {/* Historical Quotes Modal */}
+      <HistoricalQuotesModal
+        isOpen={isHistoricalQuotesModalOpen}
+        onClose={() => setIsHistoricalQuotesModalOpen(false)}
         onComplete={loadSecurities}
       />
 

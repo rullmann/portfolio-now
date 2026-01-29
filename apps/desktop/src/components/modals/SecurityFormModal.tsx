@@ -3,11 +3,12 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, HelpCircle, ChevronDown, ChevronUp, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { X, HelpCircle, ChevronDown, ChevronUp, ChevronRight, Plus, Trash2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import type { SecurityData, CreateSecurityRequest, UpdateSecurityRequest } from '../../lib/types';
-import { createSecurity, updateSecurity } from '../../lib/api';
+import { createSecurity, updateSecurity, suggestQuoteConfig, type QuoteConfigSuggestion } from '../../lib/api';
 import { useSettingsStore } from '../../store';
 import { useEscapeKey } from '../../lib/hooks';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { SecurityAttributesEditor } from '../attributes';
 
 // Key-Value Entry Component for attributes/properties editing
@@ -186,6 +187,15 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
   const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
   const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
+  const aiFeatureSettings = useSettingsStore((state) => state.aiFeatureSettings);
+  const aiEnabled = useSettingsStore((state) => state.aiEnabled);
+  const { keys: secureKeys } = useSecureApiKeys();
+
+  // AI Quote Assistant state
+  const [aiSuggestions, setAiSuggestions] = useState<QuoteConfigSuggestion[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [showAiPopover, setShowAiPopover] = useState(false);
 
   // Build provider list based on available API keys
   const feedProviders = useMemo(() => {
@@ -308,6 +318,132 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  // Get API key for the configured AI provider
+  const getAiApiKey = () => {
+    const provider = aiFeatureSettings.quoteAssistant?.provider || 'perplexity';
+    switch (provider) {
+      case 'claude': return secureKeys.anthropicApiKey || '';
+      case 'openai': return secureKeys.openaiApiKey || '';
+      case 'gemini': return secureKeys.geminiApiKey || '';
+      case 'perplexity': return secureKeys.perplexityApiKey || '';
+      default: return '';
+    }
+  };
+
+  // Check if AI assistant is available
+  const isAiAvailable = aiEnabled && isEditMode && security?.id && getAiApiKey();
+
+  // Fetch AI suggestions for quote configuration
+  const handleFetchAiSuggestions = async () => {
+    if (!security?.id) return;
+
+    const apiKey = getAiApiKey();
+    if (!apiKey) {
+      setAiError('Kein API-Key für den Kursquellen-Assistenten konfiguriert. Bitte in den Einstellungen hinterlegen.');
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuggestions([]);
+    setShowAiPopover(true);
+
+    try {
+      const config = aiFeatureSettings.quoteAssistant;
+      const response = await suggestQuoteConfig({
+        securityId: security.id,
+        provider: config?.provider || 'perplexity',
+        model: config?.model || 'sonar-pro',
+        apiKey,
+      });
+
+      if (response.success && response.suggestions.length > 0) {
+        setAiSuggestions(response.suggestions);
+      } else if (response.error) {
+        setAiError(response.error);
+      } else {
+        setAiError('Keine Vorschläge gefunden.');
+      }
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Apply an AI suggestion to the form
+  const handleApplySuggestion = (suggestion: QuoteConfigSuggestion) => {
+    // Parse provider and update form
+    const provider = suggestion.provider.toUpperCase();
+
+    // Determine if it's a Yahoo exchange suffix or TradingView prefix
+    if (provider === 'YAHOO') {
+      // Check if symbol has exchange suffix like .SW, .DE
+      const match = suggestion.symbol.match(/\.([A-Z]+)$/);
+      if (match) {
+        const suffix = '.' + match[1];
+        const baseSymbol = suggestion.symbol.replace(suffix, '');
+        setFormData(prev => ({
+          ...prev,
+          feed: 'YAHOO',
+          yahooExchange: suffix,
+          ticker: prev.ticker || baseSymbol,
+          // Apply ISIN, WKN, and name if provided and not already set
+          isin: suggestion.isin && !prev.isin ? suggestion.isin : prev.isin,
+          wkn: suggestion.wkn && !prev.wkn ? suggestion.wkn : prev.wkn,
+          name: suggestion.name && !prev.name ? suggestion.name : prev.name,
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          feed: 'YAHOO',
+          yahooExchange: '',
+          ticker: prev.ticker || suggestion.symbol,
+          isin: suggestion.isin && !prev.isin ? suggestion.isin : prev.isin,
+          wkn: suggestion.wkn && !prev.wkn ? suggestion.wkn : prev.wkn,
+          name: suggestion.name && !prev.name ? suggestion.name : prev.name,
+        }));
+      }
+    } else if (provider === 'TRADINGVIEW') {
+      // Check if symbol has exchange prefix like FX:, SIX:
+      const match = suggestion.symbol.match(/^([A-Z]+):(.+)$/);
+      if (match) {
+        const exchange = match[1];
+        setFormData(prev => ({
+          ...prev,
+          feed: 'TRADINGVIEW',
+          tradingViewExchange: exchange,
+          feedUrl: '',
+          isin: suggestion.isin && !prev.isin ? suggestion.isin : prev.isin,
+          wkn: suggestion.wkn && !prev.wkn ? suggestion.wkn : prev.wkn,
+          name: suggestion.name && !prev.name ? suggestion.name : prev.name,
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          feed: 'TRADINGVIEW',
+          tradingViewExchange: '',
+          feedUrl: suggestion.symbol,
+          isin: suggestion.isin && !prev.isin ? suggestion.isin : prev.isin,
+          wkn: suggestion.wkn && !prev.wkn ? suggestion.wkn : prev.wkn,
+          name: suggestion.name && !prev.name ? suggestion.name : prev.name,
+        }));
+      }
+    } else {
+      // Other providers
+      setFormData(prev => ({
+        ...prev,
+        feed: provider,
+        feedUrl: suggestion.symbol,
+        isin: suggestion.isin && !prev.isin ? suggestion.isin : prev.isin,
+        wkn: suggestion.wkn && !prev.wkn ? suggestion.wkn : prev.wkn,
+        name: suggestion.name && !prev.name ? suggestion.name : prev.name,
+      }));
+    }
+
+    setShowAiPopover(false);
   };
 
   // Helper to convert KeyValueEntry array back to Record
@@ -589,23 +725,110 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
           </div>
 
           {/* Feed Provider (Historical) */}
-          <div>
+          <div className="relative">
             <label className="block text-sm font-medium mb-1">Kursquelle (Historisch)</label>
-            <select
-              name="feed"
-              value={formData.feed}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {feedProviders.map((provider) => (
-                <option key={provider.value} value={provider.value}>
-                  {provider.label}
-                </option>
-              ))}
-            </select>
+            <div className="flex gap-2">
+              <select
+                name="feed"
+                value={formData.feed}
+                onChange={handleChange}
+                className="flex-1 px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {feedProviders.map((provider) => (
+                  <option key={provider.value} value={provider.value}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+              {isAiAvailable && (
+                <button
+                  type="button"
+                  onClick={handleFetchAiSuggestions}
+                  disabled={aiLoading}
+                  className="px-3 py-2 border border-border rounded-md bg-background hover:bg-muted transition-colors disabled:opacity-50"
+                  title="KI-Assistent für Kursquellen"
+                >
+                  {aiLoading ? (
+                    <Loader2 size={18} className="animate-spin text-primary" />
+                  ) : (
+                    <Sparkles size={18} className="text-amber-500" />
+                  )}
+                </button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">
               Für historische Kurse und Charts
+              {isAiAvailable && ' • KI-Assistent verfügbar'}
             </p>
+
+            {/* AI Suggestions Popover */}
+            {showAiPopover && (
+              <div className="absolute z-50 top-full left-0 right-0 mt-2 p-4 bg-popover border border-border rounded-lg shadow-lg">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-medium flex items-center gap-2">
+                    <Sparkles size={16} className="text-amber-500" />
+                    Kursquellen-Assistent
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowAiPopover(false)}
+                    className="p-1 hover:bg-muted rounded"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {aiLoading && (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 size={24} className="animate-spin text-primary" />
+                    <span className="ml-2 text-sm text-muted-foreground">Analysiere...</span>
+                  </div>
+                )}
+
+                {aiError && (
+                  <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-md text-sm">
+                    <AlertCircle size={16} className="text-destructive shrink-0 mt-0.5" />
+                    <span className="text-destructive">{aiError}</span>
+                  </div>
+                )}
+
+                {!aiLoading && aiSuggestions.length > 0 && (
+                  <div className="space-y-2">
+                    {aiSuggestions.map((suggestion, index) => (
+                      <div
+                        key={index}
+                        className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer"
+                        onClick={() => handleApplySuggestion(suggestion)}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium">{suggestion.provider}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded ${
+                            suggestion.confidence === 'high' ? 'bg-green-500/20 text-green-600' :
+                            suggestion.confidence === 'medium' ? 'bg-amber-500/20 text-amber-600' :
+                            'bg-muted text-muted-foreground'
+                          }`}>
+                            {suggestion.confidence === 'high' ? 'Empfohlen' :
+                             suggestion.confidence === 'medium' ? 'Alternative' : 'Möglich'}
+                          </span>
+                        </div>
+                        <div className="text-sm font-mono text-primary mb-1">{suggestion.symbol}</div>
+                        {(suggestion.isin || suggestion.wkn || suggestion.name) && (
+                          <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-2">
+                            {suggestion.name && <span>{suggestion.name}</span>}
+                            {suggestion.isin && <span className="font-mono bg-muted px-1 rounded">ISIN: {suggestion.isin}</span>}
+                            {suggestion.wkn && <span className="font-mono bg-muted px-1 rounded">WKN: {suggestion.wkn}</span>}
+                          </div>
+                        )}
+                        <div className="text-xs text-muted-foreground">{suggestion.reason}</div>
+                      </div>
+                    ))}
+                    <p className="text-xs text-muted-foreground text-center pt-2">
+                      Klicke auf einen Vorschlag um ihn zu übernehmen
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Yahoo Exchange Selection */}

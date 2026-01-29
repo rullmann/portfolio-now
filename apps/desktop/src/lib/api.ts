@@ -235,6 +235,26 @@ export async function syncAllPrices(
 }
 
 /**
+ * Quote error data for securities where quote fetch failed.
+ */
+export interface QuoteError {
+  securityId: number;
+  securityName: string;
+  ticker: string | null;
+  errorDate: string;
+  errorMessage: string;
+  provider: string | null;
+}
+
+/**
+ * Get all current quote fetch errors.
+ * Returns errors for securities where the last quote fetch attempt failed.
+ */
+export async function getQuoteErrors(): Promise<QuoteError[]> {
+  return invoke<QuoteError[]>('get_quote_errors');
+}
+
+/**
  * Get available quote providers.
  * Providers that require API keys are only included if the key is provided.
  * @param apiKeys Optional API keys to check availability
@@ -567,6 +587,123 @@ export async function fetchHistoricalPrices(
   apiKeys?: ApiKeys
 ): Promise<HistoricalQuote[]> {
   return invoke<HistoricalQuote[]>('fetch_historical_prices', { securityId, from, to, apiKeys });
+}
+
+// =============================================================================
+// BATCH HISTORICAL PRICES
+// =============================================================================
+
+/**
+ * Request for batch historical price fetching
+ */
+export interface HistoricalBatchRequest {
+  /** Security IDs to fetch (empty = all with quote source) */
+  securityIds: number[];
+  /** Start year for historical data */
+  fromYear: number;
+  /** Only fetch for securities currently held */
+  onlyHeld: boolean;
+  /** Force reload: delete existing quotes and always run outlier detection */
+  force?: boolean;
+}
+
+/**
+ * Progress update for a single security during batch fetch
+ */
+export interface HistoricalBatchProgress {
+  securityId: number;
+  securityName: string;
+  ticker: string;
+  provider: string;
+  /** Status: "pending", "loading", "success", "error" */
+  status: 'pending' | 'loading' | 'success' | 'error';
+  /** Number of quotes fetched from provider */
+  quotesFetched: number;
+  /** Number of spikes deleted before saving */
+  spikesDeleted: number;
+  /** Number of new quotes inserted */
+  quotesInserted: number;
+  /** Number of existing quotes updated (different value) */
+  quotesUpdated: number;
+  /** Number of existing quotes skipped (identical value) */
+  quotesSkipped: number;
+  dateFrom?: string;
+  dateTo?: string;
+  error?: string;
+  /** Current progress index (1-based) */
+  currentIndex: number;
+  /** Total number of securities to process */
+  totalCount: number;
+}
+
+/**
+ * Final result of batch historical price fetch
+ */
+export interface HistoricalBatchResult {
+  totalSecurities: number;
+  successful: number;
+  failed: number;
+  /** Total spikes deleted across all securities */
+  totalSpikesDeleted: number;
+  /** Total new quotes inserted */
+  totalInserted: number;
+  /** Total quotes updated */
+  totalUpdated: number;
+  /** Total quotes skipped (identical) */
+  totalSkipped: number;
+  progress: HistoricalBatchProgress[];
+}
+
+/**
+ * Fetch historical prices for multiple securities with progress events.
+ * Listen to 'historical_quotes_progress' event for real-time updates.
+ * @param request Batch request parameters
+ * @param apiKeys Optional API keys for providers that require authentication
+ */
+export async function fetchHistoricalPricesBatch(
+  request: HistoricalBatchRequest,
+  apiKeys?: ApiKeys
+): Promise<HistoricalBatchResult> {
+  return invoke<HistoricalBatchResult>('fetch_historical_prices_batch', { request, apiKeys });
+}
+
+/**
+ * Cancel an ongoing historical batch fetch
+ */
+export async function cancelHistoricalBatch(): Promise<void> {
+  return invoke<void>('cancel_historical_batch');
+}
+
+/**
+ * Result of force reload operation for a single security
+ */
+export interface ForceReloadResult {
+  securityId: number;
+  securityName: string;
+  /** Number of old prices deleted before reload */
+  deletedCount: number;
+  /** Number of quotes fetched from provider */
+  fetchedCount: number;
+  /** Number of quotes actually inserted into DB */
+  insertedCount: number;
+  dateFrom?: string;
+  dateTo?: string;
+  error?: string;
+}
+
+/**
+ * Force reload historical prices for a single security.
+ * Deletes all existing historical prices first, then reloads from provider.
+ * @param securityId ID of the security
+ * @param fromYear Start year for historical data
+ * @param apiKeys Optional API keys for providers that require authentication
+ */
+export async function forceReloadHistoricalPrices(
+  securityId: number,
+  fromYear: number,
+  apiKeys?: ApiKeys
+): Promise<ForceReloadResult> {
+  return invoke<ForceReloadResult>('force_reload_historical_prices', { securityId, fromYear, apiKeys });
 }
 
 // ============================================================================
@@ -2794,6 +2931,51 @@ export async function toggleAnnotationVisibility(annotationId: number): Promise<
  */
 export async function clearAiAnnotations(securityId: number): Promise<number> {
   return invoke<number>('clear_ai_annotations', { securityId });
+}
+
+// ============================================================================
+// Quote Configuration AI Assistant
+// ============================================================================
+
+/**
+ * Request for AI-powered quote configuration suggestion.
+ */
+export interface QuoteConfigRequest {
+  securityId: number;
+  provider: string;  // AI provider: claude, openai, gemini, perplexity
+  model: string;
+  apiKey: string;
+}
+
+/**
+ * A suggested quote configuration from AI.
+ */
+export interface QuoteConfigSuggestion {
+  provider: string;   // e.g., "YAHOO", "TRADINGVIEW"
+  symbol: string;     // e.g., "NESN.SW", "FX:XAUEUR"
+  confidence: string; // "high", "medium", "low"
+  reason: string;     // Explanation
+  isin?: string;      // Optional ISIN from search
+  wkn?: string;       // Optional WKN from search
+  name?: string;      // Optional official name from search
+}
+
+/**
+ * Response from quote configuration suggestion.
+ */
+export interface QuoteConfigResponse {
+  success: boolean;
+  currentError: string | null;
+  suggestions: QuoteConfigSuggestion[];
+  error: string | null;
+}
+
+/**
+ * Get AI-powered suggestions for quote provider and symbol configuration.
+ * Uses web search (Perplexity) or other AI providers to find the correct configuration.
+ */
+export async function suggestQuoteConfig(request: QuoteConfigRequest): Promise<QuoteConfigResponse> {
+  return invoke<QuoteConfigResponse>('suggest_quote_config', { request });
 }
 
 // ============================================================================

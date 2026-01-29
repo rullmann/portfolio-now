@@ -14,6 +14,7 @@ import {
   ColorType,
   CrosshairMode,
   LineStyle,
+  PriceScaleMode,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
@@ -64,6 +65,8 @@ export interface TradingViewChartProps {
   theme?: 'light' | 'dark';
   showVolume?: boolean;
   symbol?: string;
+  /** Use logarithmic price scale */
+  logScale?: boolean;
   /** AI-generated chart annotations */
   annotations?: ChartAnnotationWithId[];
   /** Callback when an annotation is clicked */
@@ -104,6 +107,7 @@ export function TradingViewChart({
   theme = 'dark',
   showVolume = true,
   symbol,
+  logScale = false,
   annotations = [],
   onAnnotationClick,
 }: TradingViewChartProps) {
@@ -255,6 +259,7 @@ export function TradingViewChart({
       },
       rightPriceScale: {
         borderColor: isDark ? '#2B2B43' : '#e1e1e1',
+        mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
       },
       timeScale: {
         borderColor: isDark ? '#2B2B43' : '#e1e1e1',
@@ -729,7 +734,7 @@ export function TradingViewChart({
         chartRef.current = null;
       }
     };
-  }, [chartData, indicatorData, indicators, height, theme, showVolume, annotations]);
+  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations]);
 
   // Early return for no data
   if (!data || data.length < 2) {

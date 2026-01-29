@@ -458,14 +458,17 @@ pub struct PriceHistoryWithOutliers {
 }
 
 /// Threshold for outlier detection: 30% daily change
-const OUTLIER_THRESHOLD_PERCENT: f64 = 30.0;
+pub const OUTLIER_THRESHOLD_PERCENT: f64 = 30.0;
 
 /// Detect outliers in a list of prices (sorted by date)
 /// An outlier is detected when:
 /// 1. Price changes more than OUTLIER_THRESHOLD_PERCENT from previous day, OR
 /// 2. Price is a "spike" - deviates significantly from BOTH previous AND next day
 ///    (typical for Yahoo data errors that appear as single-day spikes)
-fn detect_outliers(prices: &[PriceData]) -> PriceHistoryWithOutliers {
+///
+/// This is the SINGLE SOURCE OF TRUTH (SSOT) for outlier detection.
+/// All other code should use this function or delete_outliers_for_security().
+pub fn detect_outliers(prices: &[PriceData]) -> PriceHistoryWithOutliers {
     let mut result_prices = Vec::with_capacity(prices.len());
     let mut outliers = Vec::new();
 
@@ -547,6 +550,88 @@ fn filter_outliers(prices: &[PriceDataWithOutliers]) -> Vec<PriceData> {
             value: p.value,
         })
         .collect()
+}
+
+/// Delete detected outliers for a security from the database.
+/// Uses detect_outliers() (SSOT) to identify outliers.
+///
+/// This is the SINGLE SOURCE OF TRUTH for outlier deletion.
+/// Use this instead of duplicating spike detection logic elsewhere.
+pub fn delete_outliers_for_security(security_id: i64) -> anyhow::Result<usize> {
+    // 1. Get all prices for security (need internal function that returns Result)
+    let prices = get_prices_for_security_internal(security_id)?;
+
+    if prices.is_empty() {
+        return Ok(0);
+    }
+
+    // 2. Detect outliers using SSOT
+    let result = detect_outliers(&prices);
+
+    // 3. Delete outlier dates from DB
+    if result.summary.outliers.is_empty() {
+        return Ok(0);
+    }
+
+    let mut conn_guard = db::get_connection()?;
+    let conn = conn_guard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+
+    let tx = conn.transaction()?;
+    let mut deleted = 0;
+
+    for outlier in &result.summary.outliers {
+        log::info!(
+            "Deleting outlier for security {} on {}: {:.2} ({:+.1}% from {:.2})",
+            security_id,
+            outlier.date,
+            outlier.value,
+            outlier.change_percent,
+            outlier.previous_value
+        );
+        deleted += tx.execute(
+            "DELETE FROM pp_price WHERE security_id = ? AND date = ?",
+            params![security_id, outlier.date],
+        )?;
+    }
+
+    tx.commit()?;
+
+    if deleted > 0 {
+        log::info!(
+            "Deleted {} outlier(s) for security {} using SSOT detection",
+            deleted,
+            security_id
+        );
+    }
+
+    Ok(deleted)
+}
+
+/// Internal helper to get prices for a security (returns anyhow::Result)
+fn get_prices_for_security_internal(security_id: i64) -> anyhow::Result<Vec<PriceData>> {
+    let conn_guard = db::get_connection()?;
+    let conn = conn_guard
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+
+    let mut stmt = conn.prepare(
+        "SELECT date, value FROM pp_price WHERE security_id = ? ORDER BY date ASC",
+    )?;
+
+    let mut prices = Vec::new();
+    let mut rows = stmt.query(params![security_id])?;
+
+    while let Some(row) = rows.next()? {
+        let value_raw: i64 = row.get(1)?;
+        prices.push(PriceData {
+            date: row.get(0)?,
+            value: prices::to_decimal(value_raw),
+        });
+    }
+
+    Ok(prices)
 }
 
 /// Get price history for a security

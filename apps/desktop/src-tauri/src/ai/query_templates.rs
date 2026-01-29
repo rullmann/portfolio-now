@@ -369,6 +369,11 @@ pub fn get_all_templates() -> Vec<QueryTemplate> {
                 },
             ],
         },
+        QueryTemplate {
+            id: "quote_fetch_errors".to_string(),
+            description: "Alle aktuellen Kursabruf-Fehler anzeigen".to_string(),
+            parameters: vec![],
+        },
     ]
 }
 
@@ -402,6 +407,7 @@ pub fn execute_template(
         "realized_gains_by_year" => execute_realized_gains_by_year(conn, &request.parameters),
         "portfolio_allocation" => execute_portfolio_allocation(conn, &request.parameters),
         "securities_in_multiple_portfolios" => execute_securities_in_multiple_portfolios(conn, &request.parameters),
+        "quote_fetch_errors" => execute_quote_fetch_errors(conn, &request.parameters),
         // Check for user-defined templates
         _ => {
             // Try to find a user template with this ID
@@ -2217,6 +2223,28 @@ fn format_performance_summary(rows: &[HashMap<String, serde_json::Value>]) -> St
     }
 
     lines.join("\n\n")
+}
+
+/// Quote fetch errors
+/// Shows all securities where the last quote fetch attempt failed
+fn execute_quote_fetch_errors(
+    conn: &Connection,
+    _params: &HashMap<String, String>,
+) -> Result<QueryResult, String> {
+    let sql = r#"
+        SELECT
+            s.name as wertpapier,
+            s.ticker,
+            s.isin,
+            e.provider as kursquelle,
+            e.error_message as fehlermeldung,
+            e.error_date as fehler_datum
+        FROM pp_quote_error e
+        JOIN pp_security s ON s.id = e.security_id
+        ORDER BY e.error_date DESC
+    "#;
+
+    execute_query(conn, sql, &[] as &[&dyn rusqlite::ToSql], "quote_fetch_errors")
 }
 
 /// Execute a SQL query and return results as QueryResult

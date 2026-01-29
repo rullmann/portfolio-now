@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   Eye,
   AlertCircle,
+  Bot,
 } from 'lucide-react';
 import {
   useSettingsStore,
@@ -32,6 +33,7 @@ const FEATURE_ICONS: Record<string, React.ComponentType<{ className?: string }>>
   MessageSquare,
   FileText,
   FileSpreadsheet,
+  Bot,
 };
 
 // Provider display names

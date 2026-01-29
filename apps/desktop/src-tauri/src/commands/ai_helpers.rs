@@ -1107,3 +1107,337 @@ pub fn get_query_templates_prompt() -> Result<String, String> {
     let conn = guard.as_ref().ok_or("Database not initialized")?;
     Ok(crate::ai::query_templates::get_templates_for_prompt_with_user_templates(conn))
 }
+
+// ============================================================================
+// Quote Configuration AI Assistant
+// ============================================================================
+
+/// Request for quote configuration suggestion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteConfigRequest {
+    pub security_id: i64,
+    pub provider: String,  // AI provider: claude, openai, gemini, perplexity
+    pub model: String,
+    pub api_key: String,
+}
+
+/// Suggested quote configuration from AI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteConfigSuggestion {
+    pub provider: String,        // e.g., "YAHOO", "TRADINGVIEW"
+    pub symbol: String,          // e.g., "NESN.SW", "FX:XAUEUR"
+    pub confidence: String,      // "high", "medium", "low"
+    pub reason: String,          // Explanation
+    pub isin: Option<String>,    // Optional ISIN from search
+    pub wkn: Option<String>,     // Optional WKN from search
+    pub name: Option<String>,    // Optional official name from search
+}
+
+/// Response from quote configuration suggestion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteConfigResponse {
+    pub success: bool,
+    pub current_error: Option<String>,
+    pub suggestions: Vec<QuoteConfigSuggestion>,
+    pub error: Option<String>,
+}
+
+/// Get AI-powered suggestions for quote provider and symbol configuration.
+/// Uses web search (Perplexity) or other AI providers to find the correct configuration.
+#[command]
+pub async fn suggest_quote_config(
+    request: QuoteConfigRequest,
+) -> Result<QuoteConfigResponse, String> {
+    // 1. Get security info from database
+    let (security_name, ticker, isin, current_feed, current_error) = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+        let security: (String, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT name, ticker, isin, feed FROM pp_security WHERE id = ?1",
+                params![request.security_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|_| format!("Security mit ID {} nicht gefunden", request.security_id))?;
+
+        // Get any existing quote error
+        let error: Option<String> = conn
+            .query_row(
+                "SELECT error_message FROM pp_quote_error WHERE security_id = ?1",
+                params![request.security_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        (security.0, security.1, security.2, security.3, error)
+    };
+
+    // 2. Build prompt for AI
+    let prompt = build_quote_suggestion_prompt(
+        &security_name,
+        ticker.as_deref(),
+        isin.as_deref(),
+        current_feed.as_deref(),
+        current_error.as_deref(),
+    );
+
+    // 3. Call AI provider
+    let ai_response = call_ai_for_quote_suggestion(
+        &request.provider,
+        &request.model,
+        &request.api_key,
+        &prompt,
+    ).await?;
+
+    // 4. Parse response
+    let suggestions = parse_quote_suggestions(&ai_response)?;
+
+    Ok(QuoteConfigResponse {
+        success: true,
+        current_error,
+        suggestions,
+        error: None,
+    })
+}
+
+fn build_quote_suggestion_prompt(
+    name: &str,
+    ticker: Option<&str>,
+    isin: Option<&str>,
+    current_feed: Option<&str>,
+    current_error: Option<&str>,
+) -> String {
+    let mut prompt = format!(
+        r#"Du bist ein Experte für Finanzdaten-Provider. Finde die beste Kursquelle für dieses Wertpapier.
+
+**Wertpapier:**
+- Name: {}
+- Ticker: {}
+- ISIN: {}
+- Aktuelle Kursquelle: {}
+"#,
+        name,
+        ticker.unwrap_or("-"),
+        isin.unwrap_or("-"),
+        current_feed.unwrap_or("-"),
+    );
+
+    if let Some(error) = current_error {
+        prompt.push_str(&format!("- **Aktueller Fehler:** {}\n", error));
+    }
+
+    prompt.push_str(r#"
+**Verfügbare Kursquellen:**
+1. **YAHOO** - Yahoo Finance. Symbol-Format: NESN.SW (Schweiz), BMW.DE (Deutschland), AAPL (USA). Kostenlos.
+2. **TRADINGVIEW** - TradingView. Symbol-Format: SIX:NESN, XETR:BMW, FX:XAUEUR (Gold). Kostenlos.
+3. **COINGECKO** - Für Kryptowährungen. Symbol = CoinGecko ID (z.B. "bitcoin", "ethereum").
+4. **ALPHAVANTAGE** - Weltweite Aktien. Benötigt API-Key. Symbol: NESN.SW, BMW.DE
+5. **TWELVEDATA** - Schweizer/EU Aktien. Benötigt API-Key + Pro-Plan für SIX. Symbol: NESN:SIX
+
+**Wichtige Hinweise:**
+- Für Schweizer Aktien: Yahoo (NESN.SW) ist meist die beste kostenlose Option
+- Für Gold/Rohstoffe: Yahoo (XAUEUR=X) oder TradingView (FX:XAUEUR)
+- Für Krypto: CoinGecko mit der CoinGecko-ID
+
+Antworte NUR mit JSON in diesem Format:
+```json
+{
+  "suggestions": [
+    {
+      "provider": "YAHOO",
+      "symbol": "NESN.SW",
+      "confidence": "high",
+      "reason": "Yahoo Finance unterstützt Schweizer Aktien kostenlos",
+      "isin": "CH0038863350",
+      "wkn": "A0Q4DC",
+      "name": "Nestlé S.A."
+    },
+    {
+      "provider": "TRADINGVIEW",
+      "symbol": "SIX:NESN",
+      "confidence": "medium",
+      "reason": "Alternative mit TradingView-Format"
+    }
+  ]
+}
+```
+
+**Wichtig:** Falls bekannt, gib bei Aktien/ETFs auch ISIN, WKN und offiziellen Namen an. Diese Felder sind optional.
+"#);
+
+    prompt
+}
+
+async fn call_ai_for_quote_suggestion(
+    provider: &str,
+    model: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+    use std::time::Duration;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP Client Fehler: {}", e))?;
+
+    let (url, body) = match provider {
+        "perplexity" => {
+            let url = "https://api.perplexity.ai/chat/completions";
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1000,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            });
+            (url, body)
+        }
+        "openai" => {
+            let url = "https://api.openai.com/v1/chat/completions";
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1000,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            });
+            (url, body)
+        }
+        "claude" => {
+            let url = "https://api.anthropic.com/v1/messages";
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1000,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            });
+            // Claude needs different headers
+            let mut headers = HeaderMap::new();
+            headers.insert("x-api-key", HeaderValue::from_str(api_key).map_err(|_| "Invalid API key")?);
+            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+            let response = client
+                .post(url)
+                .headers(headers)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Netzwerkfehler: {}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(format!("Claude API Fehler ({}): {}", status, body));
+            }
+
+            let data: serde_json::Value = response.json().await.map_err(|e| format!("JSON Fehler: {}", e))?;
+            return Ok(data["content"][0]["text"].as_str().unwrap_or("").to_string());
+        }
+        "gemini" => {
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                model, api_key
+            );
+            let body = serde_json::json!({
+                "contents": [{"parts": [{"text": prompt}]}]
+            });
+
+            let response = client
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Netzwerkfehler: {}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(format!("Gemini API Fehler ({}): {}", status, body));
+            }
+
+            let data: serde_json::Value = response.json().await.map_err(|e| format!("JSON Fehler: {}", e))?;
+            return Ok(data["candidates"][0]["content"]["parts"][0]["text"].as_str().unwrap_or("").to_string());
+        }
+        _ => return Err(format!("Unbekannter AI Provider: {}", provider)),
+    };
+
+    // For OpenAI/Perplexity (OpenAI-compatible API)
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key)).map_err(|_| "Invalid API key")?,
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let response = client
+        .post(url)
+        .headers(headers)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Netzwerkfehler: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API Fehler ({}): {}", status, body));
+    }
+
+    let data: serde_json::Value = response.json().await.map_err(|e| format!("JSON Fehler: {}", e))?;
+    Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
+}
+
+fn parse_quote_suggestions(response: &str) -> Result<Vec<QuoteConfigSuggestion>, String> {
+    // Extract JSON from response (might be wrapped in markdown code blocks)
+    let json_str = if let Some(start) = response.find("```json") {
+        let start = start + 7;
+        if let Some(end) = response[start..].find("```") {
+            &response[start..start + end]
+        } else {
+            response
+        }
+    } else if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            &response[start..=end]
+        } else {
+            response
+        }
+    } else {
+        response
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(json_str.trim())
+        .map_err(|e| format!("JSON Parse-Fehler: {}. Response: {}", e, &response[..response.len().min(200)]))?;
+
+    let suggestions_array = parsed["suggestions"]
+        .as_array()
+        .ok_or("Keine 'suggestions' im Response gefunden")?;
+
+    let mut suggestions = Vec::new();
+    for item in suggestions_array {
+        suggestions.push(QuoteConfigSuggestion {
+            provider: item["provider"].as_str().unwrap_or("YAHOO").to_string(),
+            symbol: item["symbol"].as_str().unwrap_or("").to_string(),
+            confidence: item["confidence"].as_str().unwrap_or("medium").to_string(),
+            reason: item["reason"].as_str().unwrap_or("").to_string(),
+            isin: item["isin"].as_str().map(|s| s.to_string()),
+            wkn: item["wkn"].as_str().map(|s| s.to_string()),
+            name: item["name"].as_str().map(|s| s.to_string()),
+        });
+    }
+
+    if suggestions.is_empty() {
+        return Err("Keine Vorschläge im AI-Response gefunden".to_string());
+    }
+
+    Ok(suggestions)
+}

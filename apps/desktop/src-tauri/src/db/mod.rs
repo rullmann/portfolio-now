@@ -426,6 +426,15 @@ pub fn init_database(path: &Path) -> Result<()> {
             value TEXT NOT NULL
         );
 
+        -- Quote fetch errors (one row per security, replaced on new error, deleted on success)
+        CREATE TABLE IF NOT EXISTS pp_quote_error (
+            security_id INTEGER PRIMARY KEY,
+            error_date TEXT NOT NULL,
+            error_message TEXT NOT NULL,
+            provider TEXT,
+            FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+        );
+
         -- Corporate Actions (stock splits, mergers, ISIN changes)
         -- Used for automatic detection and tracking of corporate events
         CREATE TABLE IF NOT EXISTS pp_corporate_action (
@@ -1184,6 +1193,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "#,
         )?;
         log::info!("Migration: Created ai_user_template_param table");
+    }
+
+    // Migration: Create pp_quote_error table for quote fetch errors
+    if !table_exists(conn, "pp_quote_error") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_quote_error (
+                security_id INTEGER PRIMARY KEY,
+                error_date TEXT NOT NULL,
+                error_message TEXT NOT NULL,
+                provider TEXT,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_quote_error table");
     }
 
     Ok(())

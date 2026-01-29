@@ -119,6 +119,7 @@ export function SettingsView() {
   const effectiveOpenaiApiKey = secureStorageAvailable ? secureKeys.openaiApiKey : openaiApiKey;
   const effectiveGeminiApiKey = secureStorageAvailable ? secureKeys.geminiApiKey : geminiApiKey;
   const effectivePerplexityApiKey = secureStorageAvailable ? secureKeys.perplexityApiKey : perplexityApiKey;
+  const effectiveDivvyDiaryApiKey = secureStorageAvailable ? secureKeys.divvyDiaryApiKey : divvyDiaryApiKey;
 
   // Secure key setters that store in both secure storage and Zustand
   const handleSetApiKey = useCallback(async (keyType: ApiKeyType, value: string) => {
@@ -134,8 +135,9 @@ export function SettingsView() {
       case 'openai': setOpenaiApiKey(value); break;
       case 'gemini': setGeminiApiKey(value); break;
       case 'perplexity': setPerplexityApiKey(value); break;
+      case 'divvyDiary': setDivvyDiaryApiKey(value); break;
     }
-  }, [setApiKey, setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey, setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey, setPerplexityApiKey]);
+  }, [setApiKey, setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey, setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey, setPerplexityApiKey, setDivvyDiaryApiKey]);
 
   const [showBrandfetchKey, setShowBrandfetchKey] = useState(false);
   const [showFinnhubKey, setShowFinnhubKey] = useState(false);
@@ -1066,16 +1068,16 @@ export function SettingsView() {
                 <div className="relative max-w-md">
                   <input
                     type="password"
-                    value={divvyDiaryApiKey}
-                    onChange={(e) => setDivvyDiaryApiKey(e.target.value)}
+                    value={effectiveDivvyDiaryApiKey}
+                    onChange={(e) => handleSetApiKey('divvyDiary', e.target.value)}
                     placeholder="Ihr DivvyDiary API-Key"
                     className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                   />
                 </div>
-                {divvyDiaryApiKey && (
+                {effectiveDivvyDiaryApiKey && (
                   <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                    <Shield size={12} />
-                    API-Key gespeichert. Sie können jetzt Portfolios zu DivvyDiary exportieren.
+                    {secureStorageAvailable && <Shield size={12} />}
+                    API-Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Sie können jetzt Portfolios zu DivvyDiary exportieren.
                   </p>
                 )}
               </div>

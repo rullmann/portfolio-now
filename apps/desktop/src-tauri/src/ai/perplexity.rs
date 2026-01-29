@@ -715,8 +715,66 @@ pub async fn analyze_opportunities(
     Err(last_error)
 }
 
+/// Merge consecutive messages with the same role to ensure proper alternation
+/// Perplexity API requires: system -> user -> assistant -> user -> assistant -> ...
+fn merge_consecutive_messages(messages: &[AiChatMessage]) -> Vec<AiChatMessage> {
+    let mut merged: Vec<AiChatMessage> = Vec::new();
+
+    for msg in messages {
+        // Skip system messages (we add our own)
+        if msg.role == "system" {
+            continue;
+        }
+
+        if let Some(last) = merged.last_mut() {
+            if last.role == msg.role {
+                // Same role - merge content with newline separator
+                if !last.content.is_empty() && !msg.content.is_empty() {
+                    last.content.push_str("\n\n");
+                }
+                last.content.push_str(&msg.content);
+                // Merge attachments
+                last.attachments.extend(msg.attachments.clone());
+            } else {
+                // Different role - add as new message
+                merged.push(msg.clone());
+            }
+        } else {
+            // First message
+            merged.push(msg.clone());
+        }
+    }
+
+    // Ensure first message is from user (Perplexity requirement)
+    if let Some(first) = merged.first() {
+        if first.role != "user" {
+            // Prepend a dummy user message
+            merged.insert(0, AiChatMessage {
+                role: "user".to_string(),
+                content: "Hallo".to_string(),
+                attachments: Vec::new(),
+            });
+        }
+    }
+
+    // Ensure last message is from user (we're expecting a response)
+    if let Some(last) = merged.last() {
+        if last.role != "user" {
+            // This shouldn't happen in normal flow, but handle it
+            merged.push(AiChatMessage {
+                role: "user".to_string(),
+                content: "Bitte antworte auf meine letzte Nachricht.".to_string(),
+                attachments: Vec::new(),
+            });
+        }
+    }
+
+    merged
+}
+
 /// Chat with portfolio assistant using Perplexity
 /// Supports both text-only and multimodal (with images) messages
+/// NOTE: Perplexity requires strict alternation of user/assistant messages after system message
 pub async fn chat(
     model: &str,
     api_key: &str,
@@ -741,6 +799,10 @@ pub async fn chat(
     // Check if any message has image attachments
     let has_images = messages.iter().any(|m| !m.attachments.is_empty());
 
+    // Perplexity requires strict alternation: system -> user -> assistant -> user -> ...
+    // Merge consecutive messages of the same role to ensure alternation
+    let merged_messages = merge_consecutive_messages(messages);
+
     let mut last_error = AiError::other("Perplexity", model, "No attempts made");
 
     for attempt in 0..=MAX_RETRIES {
@@ -758,7 +820,7 @@ pub async fn chat(
                 }
             ];
 
-            for m in messages {
+            for m in &merged_messages {
                 let mut content: Vec<ContentPart> = Vec::new();
 
                 // Add images first
@@ -795,7 +857,7 @@ pub async fn chat(
                 content: build_chat_system_prompt(context),
             }];
 
-            for m in messages {
+            for m in &merged_messages {
                 perplexity_messages.push(TextChatMessage {
                     role: m.role.clone(),
                     content: m.content.clone(),

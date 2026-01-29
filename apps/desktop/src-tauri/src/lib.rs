@@ -63,6 +63,9 @@ pub fn run() {
             commands::quotes::sync_security_prices,
             commands::quotes::sync_all_prices,
             commands::quotes::fetch_historical_prices,
+            commands::quotes::fetch_historical_prices_batch,
+            commands::quotes::cancel_historical_batch,
+            commands::quotes::force_reload_historical_prices,
             commands::quotes::fetch_exchange_rates,
             commands::quotes::fetch_exchange_rate,
             commands::quotes::fetch_historical_exchange_rates,
@@ -70,6 +73,7 @@ pub fn run() {
             commands::quotes::get_available_quote_providers,
             commands::quotes::search_external_securities,
             commands::quotes::get_provider_status,
+            commands::quotes::get_quote_errors,
             // Corporate Actions (Stock Splits, etc.)
             commands::quotes::detect_security_splits,
             commands::quotes::detect_all_splits,
@@ -235,6 +239,7 @@ pub fn run() {
             commands::ai_helpers::delete_user_template,
             commands::ai_helpers::test_user_template,
             commands::ai_helpers::get_query_templates_prompt,
+            commands::ai_helpers::suggest_quote_config,
             // PDF Import
             commands::pdf_import::get_supported_banks,
             commands::pdf_import::preview_pdf_import,

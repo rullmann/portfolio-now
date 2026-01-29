@@ -243,6 +243,7 @@ Jedes Feature kann eigenen Provider/Model haben in `aiFeatureSettings`:
 | Chat-Assistent | `chatAssistant` | Nein |
 | PDF OCR | `pdfOcr` | Ja |
 | CSV-Import | `csvImport` | Nein |
+| Kursquellen-Assistent | `quoteAssistant` | Nein |
 
 **Logos:** `AIProviderLogo` in `src/components/common/AIProviderLogo.tsx`
 
@@ -285,7 +286,7 @@ useSettingsStore: {
   language: 'de' | 'en', theme: 'light' | 'dark' | 'system', baseCurrency,
   // Quote Provider Keys: brandfetch, finnhub, coingecko, alphaVantage, twelveData
   // AI: aiProvider, aiModel, anthropic/openai/gemini/perplexityApiKey
-  aiFeatureSettings: { chartAnalysis, portfolioInsights, chatAssistant, pdfOcr, csvImport }
+  aiFeatureSettings: { chartAnalysis, portfolioInsights, chatAssistant, pdfOcr, csvImport, quoteAssistant }
 }
 // toast.success/error/info/warning(msg)
 ```

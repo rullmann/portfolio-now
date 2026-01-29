@@ -4,12 +4,12 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
 import { SafeMarkdown } from '../common/SafeMarkdown';
 import { formatDate, type SecurityData, type PriceData } from '../../lib/types';
-import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices } from '../../lib/api';
+import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices, forceReloadHistoricalPrices } from '../../lib/api';
 import { useSettingsStore } from '../../store';
 import { useEscapeKey } from '../../lib/hooks';
 
@@ -100,6 +100,8 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
   const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
+  const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
+  const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
   const aiProvider = useSettingsStore((state) => state.aiProvider);
   const aiModel = useSettingsStore((state) => state.aiModel);
   const anthropicApiKey = useSettingsStore((state) => state.anthropicApiKey);
@@ -112,6 +114,10 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number } | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isAiCollapsed, setIsAiCollapsed] = useState(true);
+
+  // Force reload state
+  const [isForceReloading, setIsForceReloading] = useState(false);
+  const [forceReloadMessage, setForceReloadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Get API key for selected provider
   const aiApiKey = useMemo(() => {
@@ -202,6 +208,55 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       setAnalysisError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  // Force reload historical prices (delete + reload)
+  const handleForceReload = async () => {
+    if (!security) return;
+
+    // Ask for confirmation
+    if (!confirm(`Alle historischen Kurse für "${security.name}" löschen und komplett neu laden?\n\nDies kann nicht rückgängig gemacht werden.`)) {
+      return;
+    }
+
+    setIsForceReloading(true);
+    setForceReloadMessage(null);
+
+    try {
+      const apiKeys = {
+        finnhub: finnhubApiKey || undefined,
+        coingecko: coingeckoApiKey || undefined,
+        alphaVantage: alphaVantageApiKey || undefined,
+        twelveData: twelveDataApiKey || undefined,
+      };
+
+      // Use 2010 as default start year for full reload
+      const result = await forceReloadHistoricalPrices(security.id, 2010, apiKeys);
+
+      if (result.error) {
+        setForceReloadMessage({
+          type: 'error',
+          text: `${result.deletedCount} Kurse gelöscht, aber Fehler beim Laden: ${result.error}`,
+        });
+      } else {
+        setForceReloadMessage({
+          type: 'success',
+          text: `${result.deletedCount} alte Kurse gelöscht, ${result.insertedCount} neue Kurse eingefügt (${result.dateFrom} - ${result.dateTo})`,
+        });
+
+        // Reload prices in modal
+        const { from, to } = getDateRange(selectedPeriod);
+        const newPrices = await getPriceHistory(security.id, from, to);
+        setPrices(newPrices);
+      }
+    } catch (err) {
+      setForceReloadMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsForceReloading(false);
     }
   };
 
@@ -646,9 +701,22 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
           <div className="flex flex-col max-h-[500px]">
             {/* Table Header */}
             <div className="flex items-center justify-between p-4 border-b border-border bg-muted/30">
-              <span className="text-sm text-muted-foreground">
-                {prices.length} Kursbuchungen
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">
+                  {prices.length} Kursbuchungen
+                </span>
+                {security?.feed && (
+                  <button
+                    onClick={handleForceReload}
+                    disabled={isForceReloading}
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs border border-amber-500/50 text-amber-600 rounded hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                    title="Alle Kurse löschen und komplett neu laden"
+                  >
+                    <RotateCcw size={12} className={isForceReloading ? 'animate-spin' : ''} />
+                    {isForceReloading ? 'Lädt...' : 'Neu laden'}
+                  </button>
+                )}
+              </div>
               {/* Time Period Selector for Table too */}
               <div className="flex gap-1 overflow-x-auto">
                 {TIME_PERIODS.map((period) => (
@@ -666,6 +734,17 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                 ))}
               </div>
             </div>
+
+            {/* Force Reload Message */}
+            {forceReloadMessage && (
+              <div className={`px-4 py-2 text-sm ${
+                forceReloadMessage.type === 'success'
+                  ? 'bg-green-500/10 text-green-600'
+                  : 'bg-red-500/10 text-red-600'
+              }`}>
+                {forceReloadMessage.text}
+              </div>
+            )}
 
             {/* Scrollable Table */}
             <div className="flex-1 overflow-y-auto">

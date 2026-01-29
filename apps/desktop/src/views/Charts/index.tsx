@@ -188,6 +188,9 @@ export function ChartsView() {
   // Heikin-Ashi mode
   const [useHeikinAshi, setUseHeikinAshi] = useState(false);
 
+  // Logarithmic scale mode
+  const [useLogScale, setUseLogScale] = useState(false);
+
   // Comparison mode
   const [isComparisonMode, setIsComparisonMode] = useState(false);
   const [comparisonSecurities, setComparisonSecurities] = useState<Set<number>>(new Set());
@@ -640,6 +643,19 @@ export function ChartsView() {
               <CandlestickChart size={14} />
               HA
             </button>
+
+            {/* Log Scale Toggle */}
+            <button
+              onClick={() => setUseLogScale(!useLogScale)}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                useLogScale
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              }`}
+              title={useLogScale ? 'Zu linearer Skala wechseln' : 'Zu logarithmischer Skala wechseln'}
+            >
+              Log
+            </button>
           </div>
 
           <button
@@ -675,6 +691,7 @@ export function ChartsView() {
                     theme={resolvedTheme}
                     showVolume={true}
                     symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                    logScale={useLogScale}
                     annotations={chartAnnotations}
                   />
                 </ChartErrorBoundary>
@@ -909,6 +926,21 @@ export function ChartsView() {
                   </button>
                 )}
 
+                {/* Log Scale Toggle */}
+                {!isComparisonMode && (
+                  <button
+                    onClick={() => setUseLogScale(!useLogScale)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                      useLogScale
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                    title={useLogScale ? 'Zu linearer Skala wechseln' : 'Zu logarithmischer Skala wechseln'}
+                  >
+                    Log
+                  </button>
+                )}
+
                 {/* Drawing Tools Toggle */}
                 {!isComparisonMode && (
                   <button
@@ -1020,6 +1052,7 @@ export function ChartsView() {
                         theme={resolvedTheme}
                         showVolume={true}
                         symbol={selectedSecurity?.ticker || selectedSecurity?.name}
+                        logScale={useLogScale}
                         annotations={chartAnnotations}
                       />
                     </ChartErrorBoundary>

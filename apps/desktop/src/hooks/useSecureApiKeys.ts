@@ -45,6 +45,7 @@ function readLegacyKeysFromLocalStorage(): Partial<Record<ApiKeyType, string>> {
       openai: state.openaiApiKey || '',
       gemini: state.geminiApiKey || '',
       perplexity: state.perplexityApiKey || '',
+      divvyDiary: state.divvyDiaryApiKey || '',
     };
   } catch {
     return {};
@@ -73,6 +74,7 @@ function clearLegacyKeysFromLocalStorage(): void {
     delete state.openaiApiKey;
     delete state.geminiApiKey;
     delete state.perplexityApiKey;
+    delete state.divvyDiaryApiKey;
 
     // Write back
     if (parsed?.state) {
@@ -98,6 +100,8 @@ interface SecureApiKeys {
   openaiApiKey: string;
   geminiApiKey: string;
   perplexityApiKey: string;
+  // External services
+  divvyDiaryApiKey: string;
 }
 
 interface UseSecureApiKeysReturn {
@@ -123,6 +127,7 @@ const EMPTY_KEYS: SecureApiKeys = {
   openaiApiKey: '',
   geminiApiKey: '',
   perplexityApiKey: '',
+  divvyDiaryApiKey: '',
 };
 
 /**
@@ -161,6 +166,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const setOpenaiApiKey = useSettingsStore((s) => s.setOpenaiApiKey);
   const setGeminiApiKey = useSettingsStore((s) => s.setGeminiApiKey);
   const setPerplexityApiKey = useSettingsStore((s) => s.setPerplexityApiKey);
+  const setDivvyDiaryApiKey = useSettingsStore((s) => s.setDivvyDiaryApiKey);
 
   // Map key types to Zustand setters
   const setterMap: Record<ApiKeyType, (key: string) => void> = {
@@ -173,6 +179,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     openai: setOpenaiApiKey,
     gemini: setGeminiApiKey,
     perplexity: setPerplexityApiKey,
+    divvyDiary: setDivvyDiaryApiKey,
   };
 
   // Helper to update both local state and Zustand store
@@ -190,6 +197,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     setOpenaiApiKey(newKeys.openaiApiKey);
     setGeminiApiKey(newKeys.geminiApiKey);
     setPerplexityApiKey(newKeys.perplexityApiKey);
+    setDivvyDiaryApiKey(newKeys.divvyDiaryApiKey);
   }, [
     setBrandfetchApiKey,
     setFinnhubApiKey,
@@ -200,6 +208,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     setOpenaiApiKey,
     setGeminiApiKey,
     setPerplexityApiKey,
+    setDivvyDiaryApiKey,
   ]);
 
   // Load keys from secure storage and sync with local state + Zustand
@@ -229,6 +238,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
           openaiApiKey: legacyKeys.openai || '',
           geminiApiKey: legacyKeys.gemini || '',
           perplexityApiKey: legacyKeys.perplexity || '',
+          divvyDiaryApiKey: legacyKeys.divvyDiary || '',
         };
 
         // Update local state and Zustand atomically
@@ -267,6 +277,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
         openaiApiKey: secureKeys.openai,
         geminiApiKey: secureKeys.gemini,
         perplexityApiKey: secureKeys.perplexity,
+        divvyDiaryApiKey: secureKeys.divvyDiary,
       };
 
       syncKeysToState(newKeys);
@@ -293,6 +304,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     openai: 'openaiApiKey',
     gemini: 'geminiApiKey',
     perplexity: 'perplexityApiKey',
+    divvyDiary: 'divvyDiaryApiKey',
   };
 
   // Set a single API key (stores in secure storage and updates local state + Zustand)
