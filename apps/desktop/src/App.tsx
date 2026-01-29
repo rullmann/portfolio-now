@@ -412,6 +412,36 @@ function App() {
     loadDbData();
   }, [loadDbData]);
 
+  // Sync historical exchange rates on app startup (for correct portfolio valuation)
+  useEffect(() => {
+    const syncExchangeRates = async () => {
+      try {
+        const result = await invoke<{
+          fromDate: string;
+          toDate: string;
+          fetchedCount: number;
+          addedCount: number;
+          totalCount: number;
+        }>('sync_historical_exchange_rates');
+
+        if (result.addedCount > 0) {
+          console.log(
+            `Exchange rates synced: ${result.addedCount} new rates added (total: ${result.totalCount})`
+          );
+          // Reload data to recalculate portfolio values with correct FX rates
+          loadDbData();
+          invalidateAllQueries();
+        }
+      } catch (err) {
+        console.warn('Failed to sync exchange rates:', err);
+      }
+    };
+
+    // Run after a short delay to not block initial app load
+    const timer = setTimeout(syncExchangeRates, 2000);
+    return () => clearTimeout(timer);
+  }, [loadDbData]);
+
   // Listen for data_changed events from backend
   useEffect(() => {
     const unlisten = listen<{ entity: string; action: string }>('data_changed', (event) => {

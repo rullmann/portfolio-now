@@ -66,6 +66,7 @@ pub fn run() {
             commands::quotes::fetch_exchange_rates,
             commands::quotes::fetch_exchange_rate,
             commands::quotes::fetch_historical_exchange_rates,
+            commands::quotes::sync_historical_exchange_rates,
             commands::quotes::get_available_quote_providers,
             commands::quotes::search_external_securities,
             commands::quotes::get_provider_status,

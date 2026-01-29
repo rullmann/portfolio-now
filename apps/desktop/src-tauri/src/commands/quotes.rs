@@ -360,6 +360,85 @@ pub async fn fetch_historical_exchange_rates(
     Ok(all_rates)
 }
 
+/// Sync missing exchange rates for portfolio valuation
+/// Fetches historical EUR/USD (and other currencies) from ECB for the entire portfolio history
+#[command]
+pub async fn sync_historical_exchange_rates() -> Result<SyncExchangeRatesResult, String> {
+    // Get earliest transaction date from database
+    let from_date = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        let sql = "SELECT MIN(date) FROM pp_txn WHERE owner_type = 'portfolio'";
+        let min_date: Option<String> = conn.query_row(sql, [], |row| row.get(0)).ok();
+
+        min_date
+            .and_then(|s| NaiveDate::parse_from_str(&s.split(' ').next().unwrap_or(&s), "%Y-%m-%d").ok())
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
+    };
+
+    let to_date = chrono::Utc::now().date_naive();
+
+    log::info!("Syncing historical exchange rates from {} to {}", from_date, to_date);
+
+    // Check how many rates we already have
+    let existing_count = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        let sql = "SELECT COUNT(*) FROM pp_exchange_rate WHERE base_currency = 'EUR'";
+        conn.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap_or(0)
+    };
+
+    // Fetch historical rates from ECB
+    let rates_by_date = ecb::fetch_historical_rates(from_date, to_date)
+        .await
+        .map_err(|e| format!("Failed to fetch historical rates: {}", e))?;
+
+    let all_rates: Vec<ExchangeRate> = rates_by_date.into_values().flatten().collect();
+    let fetched_count = all_rates.len();
+
+    // Save to database
+    if let Err(e) = save_exchange_rates_to_db(&all_rates) {
+        return Err(format!("Failed to save exchange rates: {}", e));
+    }
+
+    // Count how many we have now
+    let new_count = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        let sql = "SELECT COUNT(*) FROM pp_exchange_rate WHERE base_currency = 'EUR'";
+        conn.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap_or(0)
+    };
+
+    let added = new_count - existing_count;
+
+    log::info!(
+        "Exchange rate sync complete: fetched {}, added {} new rates (total: {})",
+        fetched_count, added, new_count
+    );
+
+    Ok(SyncExchangeRatesResult {
+        from_date: from_date.to_string(),
+        to_date: to_date.to_string(),
+        fetched_count: fetched_count as i64,
+        added_count: added,
+        total_count: new_count,
+    })
+}
+
+/// Result of exchange rate sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncExchangeRatesResult {
+    pub from_date: String,
+    pub to_date: String,
+    pub fetched_count: i64,
+    pub added_count: i64,
+    pub total_count: i64,
+}
+
 /// Verfügbare Quote Provider abrufen
 /// Gibt alle Provider zurück, die verwendet werden können
 /// Provider, die einen API-Key benötigen, werden nur zurückgegeben wenn der Key vorhanden ist

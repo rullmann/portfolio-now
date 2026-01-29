@@ -202,6 +202,20 @@ pub fn calculate_ttwror(
         annualized_return * 100.0
     );
 
+    // Debug: Log first 5 and last 5 periods for analysis
+    if periods.len() >= 5 {
+        log::info!("TTWROR first periods:");
+        for p in periods.iter().take(5) {
+            log::info!("  {} to {}: start={:.2}, end={:.2}, cf={:.2}, r={:.4}%",
+                p.start_date, p.end_date, p.start_value, p.end_value, p.cash_flow, p.return_rate * 100.0);
+        }
+        log::info!("TTWROR last periods:");
+        for p in periods.iter().rev().take(5).collect::<Vec<_>>().iter().rev() {
+            log::info!("  {} to {}: start={:.2}, end={:.2}, cf={:.2}, r={:.4}%",
+                p.start_date, p.end_date, p.start_value, p.end_value, p.cash_flow, p.return_rate * 100.0);
+        }
+    }
+
     Ok(TtwrorResult {
         total_return,
         annualized_return,
@@ -362,18 +376,39 @@ fn calculate_ttwror_from_data(
         let start_value = find_value_at_or_near(valuations, period_start);
         let end_value = find_value_at_or_near(valuations, period_end);
 
-        // Sum cash flows that occurred at the END of this period (end-of-day convention)
-        // User chose end-of-day: CF affects the ending NAV, not the starting capital
+        // EOD convention: Cash flows are subtracted from end_value only.
+        // Exception: First period - if there's a CF on the first date (period_start of first period),
+        // that CF is the initial investment and should result in 0% return for that period.
         let period_cash_flow: f64 = cash_flows
             .iter()
             .filter(|cf| cf.date == period_end)
             .map(|cf| cf.amount)
             .sum();
 
-        // Calculate sub-period return using END-OF-DAY convention:
-        // r = (V_end - CF) / V_start - 1
-        // CF is subtracted from end value because it arrived at end of period
-        let period_return = if start_value > 0.0 {
+        // For first period: check if there's CF at start (initial investment)
+        let is_first_period = i == 0;
+        let cf_at_start: f64 = if is_first_period {
+            cash_flows
+                .iter()
+                .filter(|cf| cf.date == period_start)
+                .map(|cf| cf.amount)
+                .sum()
+        } else {
+            0.0
+        };
+
+        // Calculate return
+        let period_return = if is_first_period && cf_at_start > 0.0 {
+            // First period with initial investment: the start_value IS the CF
+            // Return = (V_end - CF_end) / CF_start - 1
+            // This measures how the initial investment performed
+            if cf_at_start > 0.0 {
+                (end_value - period_cash_flow) / cf_at_start - 1.0
+            } else {
+                0.0
+            }
+        } else if start_value > 0.0 {
+            // Normal period: EOD convention
             (end_value - period_cash_flow) / start_value - 1.0
         } else {
             0.0
@@ -1267,7 +1302,7 @@ fn get_cash_flows(
     }
 
     // Include DELIVERY_INBOUND/OUTBOUND as external cash flows for TTWROR
-    // (security transfers in/out should not count as investment performance)
+    // These represent securities transferred in/out with monetary value
     let delivery_flows = get_delivery_cash_flows(conn, portfolio_id, start_date, end_date)?;
     let delivery_count = delivery_flows.len();
     cash_flows.extend(delivery_flows);
@@ -1275,8 +1310,6 @@ fn get_cash_flows(
     // Sort by date
     cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
-    // NO FALLBACK: TTWROR and Risk Metrics must use only external cash flows
-    // For IRR with fallback, use get_cash_flows_with_fallback() instead
     log::info!(
         "TTWROR/Risk: Found {} external cash flows ({} DEPOSIT/REMOVAL + {} DELIVERY, converted to {})",
         cash_flows.len(),

@@ -167,9 +167,9 @@ export function AIModelSelector({
         <ChevronDown size={compact ? 12 : 14} className={cn('text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
       </button>
 
-      {/* Dropdown - opens upward */}
+      {/* Dropdown - opens downward */}
       {isOpen && (
-        <div className="absolute z-50 bottom-full mb-1 min-w-[260px] rounded-lg border border-border bg-popover shadow-lg">
+        <div className="absolute z-50 top-full mt-1 min-w-[260px] rounded-lg border border-border bg-popover shadow-lg">
           <div className="max-h-[320px] overflow-y-auto py-1">
             {PROVIDER_ORDER.map(provider => {
               const hasKey = providerHasKey[provider];
