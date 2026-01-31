@@ -204,6 +204,17 @@ pub fn price_from_db(value: i64) -> f64 {
 pub async fn fetch_all_quotes(
     securities: Vec<SecurityQuoteRequest>,
 ) -> Vec<QuoteResult> {
+    use crate::security::{check_rate_limit, limits};
+
+    // Check rate limit for the entire sync operation
+    if let Err(e) = check_rate_limit("quote_sync", &limits::price_sync()) {
+        log::warn!("Rate limited: {}", e);
+        return securities
+            .iter()
+            .map(|sec| QuoteResult::error(sec.id, sec.symbol.clone(), sec.provider.as_str(), e.clone()))
+            .collect();
+    }
+
     let mut results = Vec::new();
 
     for sec in securities {

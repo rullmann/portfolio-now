@@ -13,6 +13,9 @@ use chrono::{NaiveDate, Local};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+// Import approval functions from parent module (will be available after mod.rs update)
+use super::{is_query_type_approved};
+
 // ============================================================================
 // Watchlist Commands
 // ============================================================================
@@ -92,11 +95,12 @@ pub fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, Strin
 // ============================================================================
 
 /// Transaction query parsed from AI response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionQuery {
     pub security: Option<String>,
     pub year: Option<i32>,
+    #[serde(alias = "type")]
     pub txn_type: Option<String>,
     pub limit: Option<i32>,
 }
@@ -194,7 +198,7 @@ pub fn execute_transaction_queries(queries: &[TransactionQuery]) -> Vec<String> 
 // ============================================================================
 
 /// Portfolio value query parsed from AI response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioValueQuery {
     pub date: String,
@@ -1036,6 +1040,63 @@ pub struct SuggestedAction {
     pub payload: String,
 }
 
+// ============================================================================
+// Query Approval Types (Security Feature)
+// ============================================================================
+
+/// Types of read-only queries that can be executed by the AI.
+/// SECURITY: These queries expose portfolio data and require user approval
+/// before execution to prevent prompt injection attacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryType {
+    /// Transaction queries (QUERY_TRANSACTIONS)
+    TransactionQuery,
+    /// Portfolio value queries (QUERY_PORTFOLIO_VALUE)
+    PortfolioValueQuery,
+    /// Database template queries (QUERY_DB)
+    DatabaseQuery,
+}
+
+impl std::fmt::Display for QueryType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueryType::TransactionQuery => write!(f, "transaction_query"),
+            QueryType::PortfolioValueQuery => write!(f, "portfolio_value_query"),
+            QueryType::DatabaseQuery => write!(f, "database_query"),
+        }
+    }
+}
+
+impl std::str::FromStr for QueryType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "transaction_query" => Ok(QueryType::TransactionQuery),
+            "portfolio_value_query" => Ok(QueryType::PortfolioValueQuery),
+            "database_query" => Ok(QueryType::DatabaseQuery),
+            _ => Err(format!("Unknown query type: {}", s)),
+        }
+    }
+}
+
+/// A query that requires user approval before execution.
+/// SECURITY: Returned to frontend for user confirmation instead of auto-executing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuery {
+    /// Type of query (determines what data will be exposed)
+    pub query_type: QueryType,
+    /// Human-readable description of what the query will return
+    pub description: String,
+    /// Serialized query payload (JSON)
+    pub payload: String,
+    /// Template ID for database queries (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+}
+
 /// Result of parsing AI response for commands
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1045,7 +1106,53 @@ pub struct ParsedResponseWithSuggestions {
     /// Suggested actions that require user confirmation
     pub suggestions: Vec<SuggestedAction>,
     /// Results from read-only queries (transactions, portfolio value)
+    /// SECURITY: Only populated for approved query types
     pub query_results: Vec<String>,
+    /// Queries that require user approval before execution
+    /// SECURITY: Prevents prompt injection from exposing sensitive data
+    #[serde(default)]
+    pub pending_queries: Vec<PendingQuery>,
+}
+
+/// Format a transaction query for user-friendly description
+fn format_txn_query_desc(query: &TransactionQuery) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref sec) = query.security {
+        parts.push(format!("Wertpapier: {}", sec));
+    }
+    if let Some(year) = query.year {
+        parts.push(format!("Jahr: {}", year));
+    }
+    if let Some(ref txn_type) = query.txn_type {
+        parts.push(format!("Typ: {}", txn_type));
+    }
+    if let Some(limit) = query.limit {
+        parts.push(format!("Limit: {}", limit));
+    }
+    if parts.is_empty() {
+        "Alle Transaktionen abfragen".to_string()
+    } else {
+        format!("Transaktionen abfragen ({})", parts.join(", "))
+    }
+}
+
+/// Format a portfolio value query for user-friendly description
+fn format_pv_query_desc(query: &PortfolioValueQuery) -> String {
+    format!("Depotwert am {} abfragen", query.date)
+}
+
+/// Format a database query for user-friendly description
+fn format_db_query_desc(query: &DbQuery) -> String {
+    let params_str = if query.params.is_empty() {
+        String::new()
+    } else {
+        let param_list: Vec<String> = query.params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        format!(" ({})", param_list.join(", "))
+    };
+    format!("Datenbankabfrage: {}{}", query.template, params_str)
 }
 
 /// Parse AI response and extract suggestions without executing anything dangerous
@@ -1054,7 +1161,9 @@ pub struct ParsedResponseWithSuggestions {
 /// - Parses all command types from AI response
 /// - Returns watchlist commands as SUGGESTIONS (not executed)
 /// - Returns transaction commands as SUGGESTIONS (not executed)
-/// - Executes ONLY read-only queries (transaction queries, portfolio value queries)
+/// - For read-only queries: checks session approval before executing
+///   - If approved: executes and returns results
+///   - If NOT approved: returns as PendingQuery for user confirmation
 /// - Returns structured result for frontend to handle
 pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
     // CENTRAL: Normalize once at the start, all parsers benefit
@@ -1062,6 +1171,7 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
     let mut current_response = normalized;
     let mut suggestions: Vec<SuggestedAction> = Vec::new();
     let mut query_results: Vec<String> = Vec::new();
+    let mut pending_queries: Vec<PendingQuery> = Vec::new();
 
     // Parse watchlist commands - DO NOT EXECUTE, return as suggestions
     let (wl_commands, cleaned) = parse_watchlist_commands(&current_response);
@@ -1135,37 +1245,77 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
         });
     }
 
-    // Parse and execute transaction queries (READ-ONLY, safe to execute)
+    // Parse transaction queries - SECURITY: Check approval before executing
     let (txn_queries, cleaned) = parse_transaction_queries(&current_response);
     current_response = cleaned;
 
     if !txn_queries.is_empty() {
-        let results = execute_transaction_queries(&txn_queries);
-        query_results.extend(results);
+        if is_query_type_approved(&QueryType::TransactionQuery) {
+            // Approved: execute and return results
+            let results = execute_transaction_queries(&txn_queries);
+            query_results.extend(results);
+        } else {
+            // Not approved: return as pending queries for user confirmation
+            for query in &txn_queries {
+                pending_queries.push(PendingQuery {
+                    query_type: QueryType::TransactionQuery,
+                    description: format_txn_query_desc(query),
+                    payload: serde_json::to_string(query).unwrap_or_default(),
+                    template_id: None,
+                });
+            }
+        }
     }
 
-    // Parse and execute portfolio value queries (READ-ONLY, safe to execute)
+    // Parse portfolio value queries - SECURITY: Check approval before executing
     let (pv_queries, cleaned) = parse_portfolio_value_queries(&current_response);
     current_response = cleaned;
 
     if !pv_queries.is_empty() {
-        let results = execute_portfolio_value_queries(&pv_queries);
-        query_results.extend(results);
+        if is_query_type_approved(&QueryType::PortfolioValueQuery) {
+            // Approved: execute and return results
+            let results = execute_portfolio_value_queries(&pv_queries);
+            query_results.extend(results);
+        } else {
+            // Not approved: return as pending queries for user confirmation
+            for query in &pv_queries {
+                pending_queries.push(PendingQuery {
+                    query_type: QueryType::PortfolioValueQuery,
+                    description: format_pv_query_desc(query),
+                    payload: serde_json::to_string(query).unwrap_or_default(),
+                    template_id: None,
+                });
+            }
+        }
     }
 
-    // Parse and execute database queries (READ-ONLY, safe to execute)
+    // Parse database queries - SECURITY: Check approval before executing
     let (db_queries, cleaned) = parse_db_queries(&current_response);
     current_response = cleaned;
 
     if !db_queries.is_empty() {
-        let results = execute_db_queries(&db_queries);
-        query_results.extend(results);
+        if is_query_type_approved(&QueryType::DatabaseQuery) {
+            // Approved: execute and return results
+            let results = execute_db_queries(&db_queries);
+            query_results.extend(results);
+        } else {
+            // Not approved: return as pending queries for user confirmation
+            for query in &db_queries {
+                pending_queries.push(PendingQuery {
+                    query_type: QueryType::DatabaseQuery,
+                    description: format_db_query_desc(query),
+                    payload: serde_json::to_string(query).unwrap_or_default(),
+                    template_id: Some(query.template.clone()),
+                });
+            }
+        }
     }
 
     ParsedResponseWithSuggestions {
         cleaned_response: current_response,
         suggestions,
         query_results,
+        pending_queries,
     }
 }
 

@@ -628,6 +628,8 @@ pub struct ExtractedTransactionInput {
     pub exchange_rate: Option<f64>,
     pub taxes: Option<f64>,
     pub note: Option<String>,
+    /// Optional security ID override - if provided, skips ISIN/name lookup
+    pub security_id: Option<i64>,
 }
 
 /// Result of importing extracted transactions
@@ -766,10 +768,36 @@ fn import_single_extracted_transaction(
         let requires_security = is_portfolio_transaction(&effective_txn_type)
             || effective_txn_type == "DIVIDENDS";
 
-        // Find security using the improved fuzzy-matching function
-        // This handles: ISIN match, exact name, partial name, accent-normalized name,
-        // multi-word fuzzy match (e.g., "LVMH" + "Vuitton" -> "LVMH Moët Henn. L. Vuitton")
-        let security_id = find_security_id(conn, &txn.isin, &txn.security_name);
+        // Use security_id override if provided, otherwise use fuzzy-matching
+        // This allows users to manually select the correct security in the import dialog
+        let security_id = if let Some(override_id) = txn.security_id {
+            // Verify the override ID exists
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM pp_security WHERE id = ?1",
+                    [override_id],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if exists {
+                log::info!(
+                    "Using security_id override {} for transaction",
+                    override_id
+                );
+                Some(override_id)
+            } else {
+                log::warn!(
+                    "Security ID override {} not found, falling back to lookup",
+                    override_id
+                );
+                find_security_id(conn, &txn.isin, &txn.security_name)
+            }
+        } else {
+            // Find security using the improved fuzzy-matching function
+            // This handles: ISIN match, exact name, partial name, accent-normalized name,
+            // multi-word fuzzy match (e.g., "LVMH" + "Vuitton" -> "LVMH Moët Henn. L. Vuitton")
+            find_security_id(conn, &txn.isin, &txn.security_name)
+        };
 
         // Report error if security required but not found
         if security_id.is_none() && requires_security {

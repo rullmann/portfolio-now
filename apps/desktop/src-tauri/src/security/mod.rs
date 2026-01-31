@@ -203,12 +203,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Global rate limiter state
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 static RATE_LIMITERS: once_cell::sync::Lazy<Mutex<HashMap<String, RateLimiterState>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// State for a single rate limiter
-#[allow(dead_code)] // Planned API: Used by check_rate_limit
 struct RateLimiterState {
     last_request: Instant,
     request_count: u32,
@@ -216,7 +214,6 @@ struct RateLimiterState {
 }
 
 /// Rate limiter configuration
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 pub struct RateLimitConfig {
     /// Minimum time between requests
     pub min_interval: Duration,
@@ -245,7 +242,6 @@ impl Default for RateLimitConfig {
 /// # Returns
 /// * `Ok(())` - Request is allowed
 /// * `Err(String)` - Request is rate limited with error message
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 pub fn check_rate_limit(key: &str, config: &RateLimitConfig) -> Result<(), String> {
     let mut limiters = RATE_LIMITERS.lock().map_err(|e| format!("Rate limiter lock error: {}", e))?;
 
@@ -290,7 +286,6 @@ pub fn check_rate_limit(key: &str, config: &RateLimitConfig) -> Result<(), Strin
 }
 
 /// Pre-configured rate limits for common operations
-#[allow(dead_code)] // Planned API: Rate limit presets for commands
 pub mod limits {
     use super::*;
 

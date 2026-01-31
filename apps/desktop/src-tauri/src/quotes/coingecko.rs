@@ -160,8 +160,12 @@ pub async fn fetch_historical(
     let currency_lower = currency.to_lowercase();
 
     // Convert dates to Unix timestamps
-    let from_ts = Utc.from_utc_datetime(&from.and_hms_opt(0, 0, 0).unwrap()).timestamp();
-    let to_ts = Utc.from_utc_datetime(&to.and_hms_opt(23, 59, 59).unwrap()).timestamp();
+    let from_ts = from.and_hms_opt(0, 0, 0)
+        .map(|dt| Utc.from_utc_datetime(&dt).timestamp())
+        .ok_or_else(|| anyhow!("Invalid time conversion for from date: {}", from))?;
+    let to_ts = to.and_hms_opt(23, 59, 59)
+        .map(|dt| Utc.from_utc_datetime(&dt).timestamp())
+        .ok_or_else(|| anyhow!("Invalid time conversion for to date: {}", to))?;
 
     let url = format!(
         "{}/coins/{}/market_chart/range?vs_currency={}&from={}&to={}",

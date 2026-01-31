@@ -332,14 +332,19 @@ fn calculate_ttwror_from_data(
 
     // If no cash flows, just calculate simple return over entire period
     if cf_dates.is_empty() {
-        let start_value = valuations.first().unwrap().1;
-        let end_value = valuations.last().unwrap().1;
+        // Safe: we checked valuations.len() >= 2 above
+        let (start_date, start_value) = valuations.first()
+            .map(|(d, v)| (*d, *v))
+            .expect("valuations has at least 2 elements");
+        let (end_date, end_value) = valuations.last()
+            .map(|(d, v)| (*d, *v))
+            .expect("valuations has at least 2 elements");
 
         if start_value > 0.0 {
             let period_return = end_value / start_value - 1.0;
             periods.push(PeriodReturn {
-                start_date: valuations.first().unwrap().0,
-                end_date: valuations.last().unwrap().0,
+                start_date,
+                end_date,
                 start_value,
                 end_value,
                 cash_flow: 0.0,
@@ -354,8 +359,9 @@ fn calculate_ttwror_from_data(
     cf_dates.sort();
 
     // Process sub-periods between cash flows
-    let first_val_date = valuations.first().unwrap().0;
-    let last_val_date = valuations.last().unwrap().0;
+    // Safe: we checked valuations.len() >= 2 above
+    let first_val_date = valuations.first().expect("valuations has at least 2 elements").0;
+    let last_val_date = valuations.last().expect("valuations has at least 2 elements").0;
 
     // Build sub-periods: start → cf1 → cf2 → ... → end
     let mut period_boundaries: Vec<NaiveDate> = vec![first_val_date];
@@ -941,8 +947,22 @@ fn get_initial_investment_amount(
 ///
 /// For investments, CF_0 is typically negative (initial investment)
 /// and CF_n is typically positive (final value + dividends)
-pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: NaiveDate) -> Result<IrrResult> {
-    if cash_flows.is_empty() {
+///
+/// # Arguments
+/// * `cash_flows` - External cash flows (DEPOSIT/REMOVAL/DELIVERY)
+/// * `start_value` - Portfolio value at start_date (treated as initial investment)
+/// * `final_value` - Portfolio value at final_date
+/// * `start_date` - Start date for year calculations
+/// * `final_date` - End date (valuation date)
+pub fn calculate_irr(
+    cash_flows: &[CashFlow],
+    start_value: f64,
+    final_value: f64,
+    start_date: NaiveDate,
+    final_date: NaiveDate,
+) -> Result<IrrResult> {
+    // If no start value and no cash flows, return 0
+    if start_value == 0.0 && cash_flows.is_empty() {
         return Ok(IrrResult {
             irr: 0.0,
             converged: true,
@@ -950,19 +970,22 @@ pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: Naiv
         });
     }
 
-    let first_date = cash_flows.first().unwrap().date;
+    // Build cash flow series: start_value (as initial investment) + external flows + final value
+    let mut cf_series: Vec<(f64, f64)> = Vec::new();
 
-    // Create cash flow series with final value
-    let mut cf_series: Vec<(f64, f64)> = cash_flows
-        .iter()
-        .map(|cf| {
-            let years = (cf.date - first_date).num_days() as f64 / 365.0;
-            (-cf.amount, years) // Invert: deposits are negative for IRR
-        })
-        .collect();
+    // Add start value as initial investment (negative = money invested at t=0)
+    if start_value > 0.0 {
+        cf_series.push((-start_value, 0.0));
+    }
 
-    // Add final value as positive cash flow
-    let final_years = (final_date - first_date).num_days() as f64 / 365.0;
+    // Add external cash flows
+    for cf in cash_flows {
+        let years = (cf.date - start_date).num_days() as f64 / 365.0;
+        cf_series.push((-cf.amount, years)); // Invert: deposits are negative for IRR
+    }
+
+    // Add final value as positive cash flow (money received)
+    let final_years = (final_date - start_date).num_days() as f64 / 365.0;
     cf_series.push((final_value, final_years));
 
     // Newton-Raphson iteration
@@ -1552,13 +1575,19 @@ pub fn calculate_portfolio_performance(
     // Get current portfolio value (now includes cash + currency conversion)
     let current_value = get_current_portfolio_value(conn, portfolio_id)?;
 
+    // Get base currency for start value calculation
+    let base_currency = crate::currency::get_base_currency(conn).unwrap_or_else(|_| "EUR".to_string());
+
+    // Get portfolio value at start date (important for correct IRR!)
+    let start_value = get_portfolio_value_at_date_with_currency(conn, portfolio_id, start_date)?;
+
     // DEBUG: Write detailed cash flow information to file
     let total_cf: f64 = cash_flows.iter().map(|cf| cf.amount).sum();
     {
         use std::io::Write;
         if let Ok(mut file) = std::fs::File::create("/tmp/irr-debug-output.txt") {
-            let _ = writeln!(file, "IRR DEBUG: {} cash flows, total={:.2}, current_value={:.2}, start={}, end={}",
-                cash_flows.len(), total_cf, current_value, start_date, today);
+            let _ = writeln!(file, "IRR DEBUG: {} cash flows, total={:.2}, current_value={:.2}, start_value={:.2}, start={}, end={}, base_currency={}",
+                cash_flows.len(), total_cf, current_value, start_value, start_date, today, base_currency);
             for (i, cf) in cash_flows.iter().take(20).enumerate() {
                 let _ = writeln!(file, "  CF[{}]: date={}, amount={:.2}", i, cf.date, cf.amount);
             }
@@ -1568,8 +1597,8 @@ pub fn calculate_portfolio_performance(
         }
     }
 
-    // IRR final date = today (not last transaction date)
-    let irr = calculate_irr(&cash_flows, current_value, today)?;
+    // IRR calculation: start_value as initial investment + cash flows + final value
+    let irr = calculate_irr(&cash_flows, start_value, current_value, start_date, today)?;
 
     // Append IRR result to debug file
     {
@@ -2542,18 +2571,22 @@ mod tests {
 
     #[test]
     fn test_irr_simple() {
-        // Invest 1000, get back 1100 after 1 year = 10% return
+        // Start with 0, invest 1000, get back 1100 after 1 year = 10% return
+        let start_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+        let end_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let cash_flows = vec![
             CashFlow {
-                date: NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                date: start_date,
                 amount: 1000.0,
             },
         ];
 
         let result = calculate_irr(
             &cash_flows,
-            1100.0,
-            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            0.0,         // start_value
+            1100.0,      // final_value
+            start_date,
+            end_date,
         ).unwrap();
 
         assert!(result.converged);
@@ -2563,9 +2596,11 @@ mod tests {
     #[test]
     fn test_irr_multiple_flows() {
         // Invest 1000 at start, 500 after 6 months, get 1700 after 1 year
+        let start_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+        let end_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let cash_flows = vec![
             CashFlow {
-                date: NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                date: start_date,
                 amount: 1000.0,
             },
             CashFlow {
@@ -2576,8 +2611,10 @@ mod tests {
 
         let result = calculate_irr(
             &cash_flows,
-            1700.0,
-            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            0.0,         // start_value
+            1700.0,      // final_value
+            start_date,
+            end_date,
         ).unwrap();
 
         assert!(result.converged);
@@ -2589,9 +2626,11 @@ mod tests {
     fn test_irr_with_dividend() {
         // Invest 1000, receive 50 dividend mid-year, end value 1050
         // Total return: 1000 → 1050 + 50 = 1100 (10%)
+        let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let end_date = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
         let cash_flows = vec![
             CashFlow {
-                date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                date: start_date,
                 amount: 1000.0,  // Initial investment
             },
             CashFlow {
@@ -2602,8 +2641,10 @@ mod tests {
 
         let result = calculate_irr(
             &cash_flows,
-            1050.0,  // End value (without the already-received dividend)
-            NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+            0.0,         // start_value
+            1050.0,      // End value (without the already-received dividend)
+            start_date,
+            end_date,
         ).unwrap();
 
         assert!(result.converged);
@@ -2614,17 +2655,21 @@ mod tests {
     #[test]
     fn test_irr_negative_return() {
         // Invest 1000, get back 900 = -10% return
+        let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let end_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let cash_flows = vec![
             CashFlow {
-                date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                date: start_date,
                 amount: 1000.0,
             },
         ];
 
         let result = calculate_irr(
             &cash_flows,
-            900.0,
-            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            0.0,         // start_value
+            900.0,       // final_value
+            start_date,
+            end_date,
         ).unwrap();
 
         assert!(result.converged);
