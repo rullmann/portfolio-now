@@ -152,9 +152,7 @@ pub async fn fetch_historical(
     let kraken_pair = normalize_pair(pair, currency);
 
     // Calculate since timestamp (Kraken returns data after this time)
-    let since_ts = from.and_hms_opt(0, 0, 0)
-        .map(|dt| Utc.from_utc_datetime(&dt).timestamp())
-        .ok_or_else(|| anyhow!("Invalid time conversion for date: {}", from))?;
+    let since_ts = Utc.from_utc_datetime(&from.and_hms_opt(0, 0, 0).unwrap()).timestamp();
 
     // Use daily interval (1440 minutes)
     let url = format!(

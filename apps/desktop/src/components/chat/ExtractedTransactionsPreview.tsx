@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Receipt, Check, X, AlertTriangle, ChevronDown, ChevronUp, ArrowRight, Briefcase, Info, Building2 } from 'lucide-react';
+import { Receipt, Check, X, AlertTriangle, ChevronDown, ChevronUp, ArrowRight, Briefcase, Info } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { cn } from '../../lib/utils';
 import { toast } from '../../store';
@@ -14,13 +14,6 @@ import { toast } from '../../store';
 export interface Portfolio {
   id: number;
   name: string;
-}
-
-export interface Security {
-  id: number;
-  name: string;
-  isin?: string;
-  ticker?: string;
 }
 
 export interface ExtractedTransaction {
@@ -52,8 +45,6 @@ export interface ExtractedTransaction {
   note?: string;
   valueDate?: string;
   orderId?: string;
-  // Security ID override (set by user in import dialog)
-  securityId?: number;
 }
 
 export interface ExtractedTransactionsPayload {
@@ -84,7 +75,6 @@ interface EnrichedTransactionResponse {
 interface ExtractedTransactionsPreviewProps {
   payload: ExtractedTransactionsPayload;
   portfolios: Portfolio[];
-  securities: Security[];
   defaultPortfolioId?: number;
   onConfirm: (transactions: ExtractedTransaction[], portfolioId: number | null) => void;
   onDiscard: () => void;
@@ -415,7 +405,6 @@ function getTotalFees(txn: ExtractedTransaction): number | undefined {
 export function ExtractedTransactionsPreview({
   payload,
   portfolios,
-  securities,
   defaultPortfolioId,
   onConfirm,
   onDiscard,
@@ -427,9 +416,6 @@ export function ExtractedTransactionsPreview({
     defaultPortfolioId ?? (portfolios.length > 0 ? portfolios[0].id : null)
   );
   const { transactions: originalTransactions, sourceDescription } = payload;
-
-  // Security overrides per transaction index
-  const [securityOverrides, setSecurityOverrides] = useState<Map<number, number>>(new Map());
 
   // Enriched transactions with shares from holdings for dividends
   const [enrichedTransactions, setEnrichedTransactions] = useState<ExtractedTransaction[]>(originalTransactions);
@@ -638,45 +624,14 @@ export function ExtractedTransactionsPreview({
                       </div>
                     )}
                     {txn.securityName && (
-                      <div className="mt-1 space-y-1">
-                        <div>
-                          <span className="text-sm font-medium">{txn.securityName}</span>
-                          {(txn.isin || txn.ticker) && (
-                            <span className="text-xs text-muted-foreground ml-2">
-                              {txn.ticker && <span>{txn.ticker}</span>}
-                              {txn.ticker && txn.isin && <span> · </span>}
-                              {txn.isin && <span>{txn.isin}</span>}
-                            </span>
-                          )}
-                        </div>
-                        {/* Security override selector */}
-                        {securities.length > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                            <select
-                              value={securityOverrides.get(index) ?? ''}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setSecurityOverrides((prev) => {
-                                  const next = new Map(prev);
-                                  if (value === '') {
-                                    next.delete(index);
-                                  } else {
-                                    next.set(index, Number(value));
-                                  }
-                                  return next;
-                                });
-                              }}
-                              className="text-xs bg-background border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary max-w-[200px]"
-                            >
-                              <option value="">Automatisch</option>
-                              {securities.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name} {s.isin ? `(${s.isin})` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                      <div className="mt-1">
+                        <span className="text-sm font-medium">{txn.securityName}</span>
+                        {(txn.isin || txn.ticker) && (
+                          <span className="text-xs text-muted-foreground ml-2">
+                            {txn.ticker && <span>{txn.ticker}</span>}
+                            {txn.ticker && txn.isin && <span> · </span>}
+                            {txn.isin && <span>{txn.isin}</span>}
+                          </span>
                         )}
                       </div>
                     )}
@@ -835,17 +790,7 @@ export function ExtractedTransactionsPreview({
             </button>
             <button
               type="button"
-              onClick={() => {
-                // Apply security overrides to transactions
-                const transactionsWithOverrides = transactions.map((txn, idx) => {
-                  const overrideId = securityOverrides.get(idx);
-                  if (overrideId !== undefined) {
-                    return { ...txn, securityId: overrideId };
-                  }
-                  return txn;
-                });
-                onConfirm(transactionsWithOverrides, selectedPortfolioId);
-              }}
+              onClick={() => onConfirm(transactions, selectedPortfolioId)}
               disabled={isImporting || isEnriching}
               className={cn(
                 'flex-1 flex items-center justify-center gap-2 px-4 py-2',

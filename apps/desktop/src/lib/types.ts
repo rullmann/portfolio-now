@@ -2025,64 +2025,6 @@ export interface Conversation {
 }
 
 // ============================================================================
-// Query Approval Types (Security Feature)
-// ============================================================================
-
-/**
- * Types of read-only queries that can be executed by the AI.
- * SECURITY: These queries expose portfolio data and require user approval
- * before execution to prevent prompt injection attacks.
- */
-export type QueryType = 'transaction_query' | 'portfolio_value_query' | 'database_query';
-
-/**
- * A query that requires user approval before execution.
- * SECURITY: Returned to frontend for user confirmation instead of auto-executing.
- */
-export interface PendingQuery {
-  /** Type of query (determines what data will be exposed) */
-  queryType: QueryType;
-  /** Human-readable description of what the query will return */
-  description: string;
-  /** Serialized query payload (JSON) */
-  payload: string;
-  /** Template ID for database queries (optional) */
-  templateId?: string;
-}
-
-/**
- * Get a human-readable label for a query type (German)
- */
-export function getQueryTypeLabel(queryType: QueryType): string {
-  switch (queryType) {
-    case 'transaction_query':
-      return 'Transaktionsabfragen';
-    case 'portfolio_value_query':
-      return 'Depotwert-Abfragen';
-    case 'database_query':
-      return 'Datenbankabfragen';
-    default:
-      return 'Unbekannt';
-  }
-}
-
-/**
- * Get a description for what data a query type exposes
- */
-export function getQueryTypeDescription(queryType: QueryType): string {
-  switch (queryType) {
-    case 'transaction_query':
-      return 'Zeigt Details zu Käufen, Verkäufen, Dividenden und anderen Transaktionen';
-    case 'portfolio_value_query':
-      return 'Zeigt den Gesamtwert deines Depots zu einem bestimmten Datum';
-    case 'database_query':
-      return 'Führt vordefinierte Analysen auf deinen Portfolio-Daten aus';
-    default:
-      return '';
-  }
-}
-
-// ============================================================================
 // AI Transaction Command Types
 // ============================================================================
 

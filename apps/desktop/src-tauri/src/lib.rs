@@ -325,11 +325,6 @@ pub fn run() {
             commands::chat::create_conversation,
             commands::chat::update_conversation_title,
             commands::chat::delete_conversation,
-            // Query Approval (Security Feature)
-            commands::chat::approve_query_type_for_session,
-            commands::chat::execute_pending_query,
-            commands::chat::get_session_approved_query_types,
-            commands::chat::revoke_all_query_approvals,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,

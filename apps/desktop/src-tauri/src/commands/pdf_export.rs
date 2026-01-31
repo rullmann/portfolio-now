@@ -414,11 +414,9 @@ pub fn export_performance_pdf(
         .map_err(|e| e.to_string())?;
     let cash_flows = performance::get_cash_flows_with_fallback(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
-    let start_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, start)
-        .map_err(|e| e.to_string())?;
     let current_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, end)
         .map_err(|e| e.to_string())?;
-    let irr_result = performance::calculate_irr(&cash_flows, start_value, current_value, start, end)
+    let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
         .map_err(|e| e.to_string())?;
     let risk_metrics = performance::calculate_risk_metrics(conn, portfolio_id, start, end, None, None).ok();
 

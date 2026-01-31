@@ -74,26 +74,30 @@ pub fn calculate_performance(
     let ttwror_result = performance::calculate_ttwror(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
-    // Get cash flows for IRR calculation (external flows only, not including start value)
-    let cash_flows = get_cash_flows_for_irr(conn, portfolio_id, start, end)
+    // Get cash flows for IRR calculation
+    let mut cash_flows = get_cash_flows_for_irr(conn, portfolio_id, start, end)
         .map_err(|e| e.to_string())?;
 
     // Get portfolio value at START date (initial investment)
-    // IRR calculation now handles start_value as a separate parameter
+    // IRR requires the initial portfolio value as a cash flow (like Portfolio Performance)
     let start_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, start)
         .map_err(|e| e.to_string())?;
+
+    // Add initial value as cash flow at start - represents existing investment at period start
+    if start_value > 0.0 {
+        cash_flows.insert(0, performance::CashFlow { date: start, amount: start_value });
+    }
 
     // Get portfolio value at end_date using SSOT
     let current_value = performance::get_portfolio_value_at_date_with_currency(conn, portfolio_id, end)
         .map_err(|e| e.to_string())?;
 
-    // Calculate IRR with start_value as initial investment
-    let irr_result = performance::calculate_irr(&cash_flows, start_value, current_value, start, end)
+    // Calculate IRR
+    let irr_result = performance::calculate_irr(&cash_flows, current_value, end)
         .map_err(|e| e.to_string())?;
 
-    // Calculate total invested (start_value + positive cash flows)
-    let cf_invested: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
-    let total_invested = start_value + cf_invested;
+    // Calculate total invested (positive cash flows = money invested)
+    let total_invested: f64 = cash_flows.iter().filter(|cf| cf.amount > 0.0).map(|cf| cf.amount).sum();
 
     // Calculate total withdrawn (negative cash flows = money withdrawn)
     let total_withdrawn: f64 = cash_flows.iter().filter(|cf| cf.amount < 0.0).map(|cf| -cf.amount).sum();

@@ -412,11 +412,8 @@ fn calculate_portfolio_metrics(
 
     let cash_flows = performance::get_cash_flows_with_fallback(conn, Some(portfolio_id), start_date, end_date)
         .unwrap_or_default();
-    // Get start value for IRR calculation
-    let start_value = performance::get_portfolio_value_at_date_with_currency(conn, Some(portfolio_id), start_date)
-        .unwrap_or(0.0);
-    let irr = if start_value > 0.0 || !cash_flows.is_empty() {
-        performance::calculate_irr(&cash_flows, start_value, value, start_date, end_date)
+    let irr = if !cash_flows.is_empty() {
+        performance::calculate_irr(&cash_flows, value, end_date)
             .map(|r| r.irr * 100.0)
             .unwrap_or(0.0)
     } else {
@@ -510,15 +507,8 @@ pub fn get_consortium_performance(consortium_id: i64) -> Result<ConsortiumPerfor
     }
     all_cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
-    // Calculate total start value for IRR
-    let mut total_start_value = 0.0;
-    for pid in &portfolio_ids {
-        total_start_value += performance::get_portfolio_value_at_date_with_currency(conn, Some(*pid), start_date)
-            .unwrap_or(0.0);
-    }
-
-    let (irr, irr_converged) = if total_start_value > 0.0 || !all_cash_flows.is_empty() {
-        performance::calculate_irr(&all_cash_flows, total_start_value, total_value, start_date, end_date)
+    let (irr, irr_converged) = if !all_cash_flows.is_empty() {
+        performance::calculate_irr(&all_cash_flows, total_value, end_date)
             .map(|r| (r.irr * 100.0, r.converged))
             .unwrap_or((0.0, false))
     } else {
@@ -780,15 +770,8 @@ pub fn compare_portfolios(portfolio_ids: Vec<i64>) -> Result<PortfolioComparison
     }
     all_cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
-    // Calculate total start value for IRR
-    let mut total_start_value = 0.0;
-    for pid in &portfolio_ids {
-        total_start_value += performance::get_portfolio_value_at_date_with_currency(conn, Some(*pid), combined_start)
-            .unwrap_or(0.0);
-    }
-
-    let combined_irr = if total_start_value > 0.0 || !all_cash_flows.is_empty() {
-        performance::calculate_irr(&all_cash_flows, total_start_value, total_value, combined_start, combined_end)
+    let combined_irr = if !all_cash_flows.is_empty() {
+        performance::calculate_irr(&all_cash_flows, total_value, combined_end)
             .map(|r| r.irr * 100.0)
             .unwrap_or(0.0)
     } else {

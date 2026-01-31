@@ -1397,11 +1397,10 @@ pub fn create_transaction(
     }
 
     // Rebuild FIFO lots if this affects a security in a portfolio
-    if data.owner_type == "portfolio" {
-        if let Some(security_id) = data.security_id {
-            if let Err(e) = crate::fifo::build_fifo_lots(conn, security_id) {
-                log::warn!("Failed to rebuild FIFO lots: {}", e);
-            }
+    if data.owner_type == "portfolio" && data.security_id.is_some() {
+        let security_id = data.security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, security_id) {
+            log::warn!("Failed to rebuild FIFO lots: {}", e);
         }
     }
 
@@ -1487,11 +1486,10 @@ pub fn delete_transaction(app: AppHandle, id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     // Rebuild FIFO lots if this was a portfolio transaction with a security
-    if owner_type == "portfolio" {
-        if let Some(sec_id) = security_id {
-            if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
-                log::warn!("Failed to rebuild FIFO lots: {}", e);
-            }
+    if owner_type == "portfolio" && security_id.is_some() {
+        let sec_id = security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
+            log::warn!("Failed to rebuild FIFO lots: {}", e);
         }
     }
 
@@ -1955,20 +1953,18 @@ pub fn update_transaction(
     let security_changed = old_security_id != new_security_id;
 
     // Rebuild FIFO lots for old security if it was a portfolio transaction
-    if old_owner_type == "portfolio" {
-        if let Some(sec_id) = old_security_id {
-            if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
-                log::warn!("Failed to rebuild FIFO lots for old security: {}", e);
-            }
+    if old_owner_type == "portfolio" && old_security_id.is_some() {
+        let sec_id = old_security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
+            log::warn!("Failed to rebuild FIFO lots for old security: {}", e);
         }
     }
 
     // Rebuild FIFO lots for new security if changed and is portfolio transaction
-    if security_changed && new_owner_type == "portfolio" {
-        if let Some(sec_id) = new_security_id {
-            if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
-                log::warn!("Failed to rebuild FIFO lots for new security: {}", e);
-            }
+    if security_changed && new_owner_type == "portfolio" && new_security_id.is_some() {
+        let sec_id = new_security_id.unwrap();
+        if let Err(e) = crate::fifo::build_fifo_lots(conn, sec_id) {
+            log::warn!("Failed to rebuild FIFO lots for new security: {}", e);
         }
     }
 

@@ -121,74 +121,16 @@ pub use command_parser::{
     parse_watchlist_commands,
     parse_transaction_queries, execute_transaction_queries,
     parse_portfolio_value_queries, execute_portfolio_value_queries,
-    parse_db_queries, execute_db_queries,
     // Transaction command parsing (returns suggestions, no auto-execution)
     parse_transaction_create_commands, parse_portfolio_transfer_commands,
     // Security: Suggestion-based execution (replaces auto-execution)
     parse_response_with_suggestions, execute_confirmed_watchlist_action,
     // Types
-    WatchlistCommand, TransactionQuery, PortfolioValueQuery, DbQuery,
+    WatchlistCommand, TransactionQuery, PortfolioValueQuery,
     SuggestedAction, ParsedResponseWithSuggestions,
-    // Query approval types (security feature)
-    QueryType, PendingQuery,
     // Extracted transactions from images (returns suggestions, no auto-execution)
     ExtractedTransaction, ExtractedTransactionsPayload,
 };
-
-// ============================================================================
-// Query Type Session Approval (Security Feature)
-// ============================================================================
-//
-// SECURITY: Read-only queries (QUERY_TRANSACTIONS, QUERY_PORTFOLIO_VALUE, QUERY_DB)
-// can expose sensitive portfolio data. To prevent prompt injection attacks where
-// malicious content tricks the AI into exfiltrating data, users must explicitly
-// approve query types before they execute.
-//
-// Approvals are session-based (cleared on app restart) to balance security
-// with usability.
-// ============================================================================
-
-use std::sync::Mutex;
-use std::collections::HashSet;
-use once_cell::sync::Lazy;
-
-/// Session-scoped set of approved query types.
-/// SECURITY: Cleared on app restart to require re-approval.
-static APPROVED_QUERY_TYPES: Lazy<Mutex<HashSet<QueryType>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
-
-/// Check if a query type has been approved for this session.
-pub fn is_query_type_approved(qt: &QueryType) -> bool {
-    APPROVED_QUERY_TYPES
-        .lock()
-        .map(|guard| guard.contains(qt))
-        .unwrap_or(false)
-}
-
-/// Approve a query type for the current session.
-/// SECURITY: This should only be called after explicit user confirmation.
-pub fn approve_query_type(qt: QueryType) {
-    if let Ok(mut guard) = APPROVED_QUERY_TYPES.lock() {
-        log::info!("Query type {:?} approved for session", qt);
-        guard.insert(qt);
-    }
-}
-
-/// Get all currently approved query types.
-pub fn get_approved_query_types() -> Vec<QueryType> {
-    APPROVED_QUERY_TYPES
-        .lock()
-        .map(|guard| guard.iter().cloned().collect())
-        .unwrap_or_default()
-}
-
-/// Revoke all query type approvals (e.g., for security reset).
-pub fn revoke_all_approvals() {
-    if let Ok(mut guard) = APPROVED_QUERY_TYPES.lock() {
-        guard.clear();
-        log::info!("All query type approvals revoked");
-    }
-}
 
 // ============================================================================
 // Model Listing API Functions

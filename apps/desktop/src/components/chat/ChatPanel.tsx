@@ -27,9 +27,8 @@ import { VisionIndicator } from './VisionIndicator';
 import { ImageAttachmentPreview, type ChatImageAttachment } from './ImageAttachmentPreview';
 import { ImageUploadConsentDialog } from './ImageUploadConsentDialog';
 import { ExtractedTransactionsPreview, type ExtractedTransaction, type ExtractedTransactionsPayload, type Portfolio } from './ExtractedTransactionsPreview';
-import { QueryApprovalCard } from './QueryApprovalCard';
 import { cn } from '../../lib/utils';
-import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult, DuplicateCheckResponse, PendingQuery } from '../../lib/types';
+import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult, DuplicateCheckResponse } from '../../lib/types';
 import { formatSharesFromScaled, formatAmountFromScaled, getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { DropdownMenu, DropdownItem } from '../common/DropdownMenu';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
@@ -66,7 +65,6 @@ interface PortfolioChatResponse {
   model: string;
   tokensUsed: number | null;
   suggestions?: SuggestedAction[];
-  pendingQueries?: PendingQuery[];
 }
 
 const EXAMPLE_QUESTIONS = [
@@ -302,7 +300,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [showImageConsent, setShowImageConsent] = useState(false);
   const [imageConsentGiven, setImageConsentGiven] = useState(false);
   const [pendingImageUpload, setPendingImageUpload] = useState<File[] | null>(null);
-  const pendingImageUploadRef = useRef<File[] | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Speech-to-text state
@@ -324,13 +321,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const [isFirstMessage, setIsFirstMessage] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // Portfolio and security state for extracted transactions
+  // Portfolio state for extracted transactions
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
-  const [securities, setSecurities] = useState<Array<{ id: number; name: string; isin?: string; ticker?: string }>>([]);
-
-  // Query approval state (security feature)
-  const [pendingQueries, setPendingQueries] = useState<Array<PendingQuery & { messageId: number }>>([]);
-  const [executingQuery, setExecutingQuery] = useState<string | null>(null);
 
   const {
     aiFeatureSettings,
@@ -406,24 +398,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     loadPortfolios();
   }, []);
 
-  // Load securities for transaction import security override
-  useEffect(() => {
-    const loadSecurities = async () => {
-      try {
-        const result = await invoke<Array<{ id: number; name: string; isin?: string; ticker?: string }>>('get_securities', {});
-        // Sort by name and filter out retired
-        setSecurities(
-          result
-            .filter((s) => s.name)
-            .sort((a, b) => a.name.localeCompare(b.name))
-        );
-      } catch (e) {
-        console.error('Failed to load securities:', e);
-      }
-    };
-    loadSecurities();
-  }, []);
-
   // Refs for stable access in Tauri drag-drop handler
   const hasVisionSupportRef = useRef(hasVisionSupport);
   const imageConsentGivenRef = useRef(imageConsentGiven);
@@ -443,9 +417,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
-  useEffect(() => {
-    pendingImageUploadRef.current = pendingImageUpload;
-  }, [pendingImageUpload]);
 
   // Tauri native drag-drop handler (external files)
   // Uses refs for mutable values to avoid re-registering listener on every state change
@@ -529,9 +500,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               if (pendingAttachments.length > 0) {
                 // Store attachments directly instead of File objects
                 // After consent, we'll add them directly without re-processing
-                const pending = pendingAttachments as unknown as File[];
-                setPendingImageUpload(pending);
-                pendingImageUploadRef.current = pending;
+                setPendingImageUpload(pendingAttachments as unknown as File[]);
                 setShowImageConsent(true);
               }
               return;
@@ -631,7 +600,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     // Check consent first
     if (!imageConsentGiven) {
       setPendingImageUpload(files);
-      pendingImageUploadRef.current = files;
       setShowImageConsent(true);
       return;
     }
@@ -656,38 +624,29 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     setImageConsentGiven(true);
     setShowImageConsent(false);
 
-    // Use ref to get the latest pending files (avoids stale closure issue)
-    const pending = pendingImageUploadRef.current;
-
-    if (pending && pending.length > 0) {
-      // Clear pending state
+    // Process pending uploads directly (don't call handleImageFiles as state isn't updated yet)
+    if (pendingImageUpload) {
+      const pending = pendingImageUpload;
       setPendingImageUpload(null);
-      pendingImageUploadRef.current = null;
       setError(null);
-
-      let attachmentsToSend: ChatImageAttachment[] = [];
 
       // Check if these are already ChatImageAttachment objects (from Tauri D&D)
       // or File objects (from browser D&D / paste)
-      if ('mimeType' in pending[0]) {
-        // Already processed attachments from Tauri D&D - use directly
-        attachmentsToSend = pending as unknown as ChatImageAttachment[];
+      if (pending.length > 0 && 'mimeType' in pending[0]) {
+        // Already processed attachments from Tauri D&D - add directly
+        setAttachments((prev) => [...prev, ...(pending as unknown as ChatImageAttachment[])]);
       } else {
         // File objects from browser - process them
+        const newAttachments: ChatImageAttachment[] = [];
         for (const file of pending as File[]) {
           const attachment = await processImageFile(file);
           if (attachment) {
-            attachmentsToSend.push(attachment);
+            newAttachments.push(attachment);
           }
         }
-      }
-
-      // Send immediately with the attachments (user clicked "Zustimmen & Senden")
-      if (attachmentsToSend.length > 0) {
-        // Use current input text or empty string - sendMessage handles image-only messages
-        const currentInput = input.trim();
-        setInput(''); // Clear input
-        sendMessage(currentInput, attachmentsToSend);
+        if (newAttachments.length > 0) {
+          setAttachments((prev) => [...prev, ...newAttachments]);
+        }
       }
     }
   };
@@ -695,7 +654,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   const handleImageConsentCancel = () => {
     setShowImageConsent(false);
     setPendingImageUpload(null);
-    pendingImageUploadRef.current = null;
   };
 
   // ============================================================================
@@ -1093,9 +1051,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         }));
         setSuggestions(loadedSuggestions);
 
-        // Clear pending queries (they are session-only, not persisted)
-        setPendingQueries([]);
-
         // Scroll to bottom after loading messages
         setTimeout(() => {
           messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
@@ -1407,15 +1362,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         }
         setSuggestions((prev) => [...prev, ...savedSuggestions]);
       }
-
-      // Handle pending queries (security feature - queries that need approval)
-      if (response.pendingQueries && response.pendingQueries.length > 0) {
-        const queriesWithMessageId = response.pendingQueries.map((q) => ({
-          ...q,
-          messageId: Number(assistantMsgId),
-        }));
-        setPendingQueries((prev) => [...prev, ...queriesWithMessageId]);
-      }
     } catch (err) {
       const errorMessage = typeof err === 'string' ? err : String(err);
 
@@ -1452,7 +1398,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       setCurrentConversationId(newConv.id);
       setMessages([]);
       setSuggestions([]);
-      setPendingQueries([]);
       setIsFirstMessage(true);
       setError(null);
     } catch (err) {
@@ -1605,116 +1550,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     );
   };
 
-  // ============================================================================
-  // Query Approval Handlers (Security Feature)
-  // ============================================================================
-
-  /**
-   * Execute a pending query once (without session approval)
-   */
-  const handleApproveQueryOnce = async (query: PendingQuery & { messageId: number }) => {
-    if (!currentConversationId) return;
-
-    setExecutingQuery(query.payload);
-    try {
-      // Execute the query directly
-      const results = await invoke<string[]>('execute_pending_query', {
-        queryType: query.queryType,
-        payload: query.payload,
-      });
-
-      // Add results as a message
-      if (results.length > 0) {
-        const resultContent = results.join('\n\n');
-        const msgId = await invoke<number>('save_chat_message', {
-          role: 'assistant',
-          content: resultContent,
-          conversationId: currentConversationId,
-        });
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: String(msgId),
-            role: 'assistant',
-            content: resultContent,
-            timestamp: new Date(),
-          },
-        ]);
-      }
-
-      // Remove the pending query
-      setPendingQueries((prev) =>
-        prev.filter((q) => q.payload !== query.payload || q.messageId !== query.messageId)
-      );
-    } catch (err) {
-      setError(typeof err === 'string' ? err : String(err));
-    } finally {
-      setExecutingQuery(null);
-    }
-  };
-
-  /**
-   * Approve a query type for the session and execute the pending query
-   */
-  const handleApproveQuerySession = async (query: PendingQuery & { messageId: number }) => {
-    if (!currentConversationId) return;
-
-    setExecutingQuery(query.payload);
-    try {
-      // First approve the query type for the session
-      await invoke('approve_query_type_for_session', {
-        queryType: query.queryType,
-      });
-
-      // Then execute the query
-      const results = await invoke<string[]>('execute_pending_query', {
-        queryType: query.queryType,
-        payload: query.payload,
-      });
-
-      // Add results as a message
-      if (results.length > 0) {
-        const resultContent = results.join('\n\n');
-        const msgId = await invoke<number>('save_chat_message', {
-          role: 'assistant',
-          content: resultContent,
-          conversationId: currentConversationId,
-        });
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: String(msgId),
-            role: 'assistant',
-            content: resultContent,
-            timestamp: new Date(),
-          },
-        ]);
-      }
-
-      // Remove the pending query
-      setPendingQueries((prev) =>
-        prev.filter((q) => q.payload !== query.payload || q.messageId !== query.messageId)
-      );
-
-      toast.success(`${query.queryType === 'transaction_query' ? 'Transaktionsabfragen' : query.queryType === 'portfolio_value_query' ? 'Depotwert-Abfragen' : 'Datenbankabfragen'} für diese Sitzung erlaubt`);
-    } catch (err) {
-      setError(typeof err === 'string' ? err : String(err));
-    } finally {
-      setExecutingQuery(null);
-    }
-  };
-
-  /**
-   * Decline a pending query
-   */
-  const handleDeclineQuery = (query: PendingQuery & { messageId: number }) => {
-    setPendingQueries((prev) =>
-      prev.filter((q) => q.payload !== query.payload || q.messageId !== query.messageId)
-    );
-  };
-
   // Handle extracted transactions import
   const handleImportExtractedTransactions = async (
     suggestion: SuggestedAction,
@@ -1743,7 +1578,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           exchange_rate: t.exchangeRate || null,
           taxes: t.taxes || null,
           note: t.note || null,
-          security_id: t.securityId || null, // User-selected security override
         })),
         portfolioId: portfolioId,
         deliveryMode: deliveryMode,
@@ -2040,26 +1874,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                 ? suggestions.filter((s) => s.messageId === Number(message.id))
                 : [];
 
-              // Get pending queries for this message (security feature)
-              const messagePendingQueries = message.role === 'assistant'
-                ? pendingQueries.filter((q) => q.messageId === Number(message.id))
-                : [];
-
               return (
                 <div key={message.id} className="space-y-3">
                   <ChatMessage message={message} onDelete={deleteMessage} />
-
-                  {/* Render pending queries that require approval (security feature) */}
-                  {messagePendingQueries.map((query, idx) => (
-                    <QueryApprovalCard
-                      key={`query-${message.id}-${idx}`}
-                      query={query}
-                      onApproveOnce={() => handleApproveQueryOnce(query)}
-                      onApproveSession={() => handleApproveQuerySession(query)}
-                      onDecline={() => handleDeclineQuery(query)}
-                      isExecuting={executingQuery === query.payload}
-                    />
-                  ))}
 
                   {/* Render suggestions inline after their associated message */}
                   {messageSuggestions.map((suggestion, idx) => {
@@ -2152,7 +1969,6 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                             <ExtractedTransactionsPreview
                               payload={payload}
                               portfolios={portfolios}
-                              securities={securities}
                               onConfirm={(txns, portfolioId) => handleImportExtractedTransactions(suggestion, txns, portfolioId)}
                               onDiscard={() => handleDiscardExtractedTransactions(suggestion)}
                               isImporting={importingTransactions === suggestion.payload}

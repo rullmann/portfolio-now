@@ -140,6 +140,17 @@ export function HistoricalQuotesModal({ isOpen, onClose, onComplete }: Historica
     }
   }, [fromYear, onlyHeld, forceReload, finnhubApiKey, coingeckoApiKey, alphaVantageApiKey, twelveDataApiKey]);
 
+  const handleCancel = useCallback(async () => {
+    if (isLoading) {
+      try {
+        await cancelHistoricalBatch();
+      } catch (err) {
+        console.error('Failed to cancel:', err);
+      }
+    }
+    setIsLoading(false);
+  }, [isLoading]);
+
   const handleClose = () => {
     if (isLoading) {
       // Cancel the batch fetch before closing

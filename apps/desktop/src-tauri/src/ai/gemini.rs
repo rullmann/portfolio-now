@@ -110,10 +110,6 @@ pub async fn analyze(
     api_key: &str,
     context: &ChartContext,
 ) -> Result<ChartAnalysisResponse, AiError> {
-    // Check rate limit before making the request
-    crate::security::check_rate_limit("ai_gemini_analyze", &crate::security::limits::ai_analysis())
-        .map_err(|_| AiError::rate_limit("Gemini", model, Some(5)))?;
-
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 

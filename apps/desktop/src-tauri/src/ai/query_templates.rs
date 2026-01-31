@@ -2622,11 +2622,10 @@ mod tests {
     #[test]
     fn test_get_all_templates() {
         let templates = get_all_templates();
-        assert_eq!(templates.len(), 20);
+        assert_eq!(templates.len(), 13);
 
         // Check template IDs
         let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
-        // Original 13 templates
         assert!(ids.contains(&"security_transactions"));
         assert!(ids.contains(&"dividends_by_security"));
         assert!(ids.contains(&"all_dividends"));
@@ -2640,14 +2639,6 @@ mod tests {
         assert!(ids.contains(&"portfolio_accounts"));
         assert!(ids.contains(&"tax_relevant_sales"));
         assert!(ids.contains(&"account_balance_analysis"));
-        // New Performance & Allocation templates
-        assert!(ids.contains(&"portfolio_performance_summary"));
-        assert!(ids.contains(&"current_holdings"));
-        assert!(ids.contains(&"unrealized_gains_losses"));
-        assert!(ids.contains(&"realized_gains_by_year"));
-        assert!(ids.contains(&"portfolio_allocation"));
-        assert!(ids.contains(&"securities_in_multiple_portfolios"));
-        assert!(ids.contains(&"quote_fetch_errors"));
     }
 
     #[test]
