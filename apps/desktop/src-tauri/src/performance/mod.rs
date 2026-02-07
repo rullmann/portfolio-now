@@ -189,7 +189,8 @@ pub fn calculate_ttwror(
     let (total_return, periods) = calculate_ttwror_from_data(&valuations, &cash_flows);
 
     // Annualize: (1 + r)^(365/days) - 1
-    let annualized_return = if days > 0 && total_return > -1.0 {
+    // Skip annualization for very short periods (<30 days) to avoid misleading extrapolation
+    let annualized_return = if days >= 30 && total_return > -1.0 {
         (1.0 + total_return).powf(365.0 / days as f64) - 1.0
     } else {
         0.0
@@ -984,6 +985,15 @@ pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: Naiv
 
         let new_rate = rate - npv / dnpv;
 
+        // Guard against NaN/Infinity from extreme values
+        if new_rate.is_nan() || new_rate.is_infinite() {
+            return Ok(IrrResult {
+                irr: rate,
+                converged: false,
+                iterations: iteration,
+            });
+        }
+
         if (new_rate - rate).abs() < tolerance {
             return Ok(IrrResult {
                 irr: new_rate,
@@ -992,6 +1002,8 @@ pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: Naiv
             });
         }
 
+        // Detect oscillation between clamping bounds
+        let old_rate = rate;
         rate = new_rate;
 
         // Bound the rate to reasonable values
@@ -999,6 +1011,15 @@ pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: Naiv
             rate = -0.99;
         } else if rate > 10.0 {
             rate = 10.0;
+        }
+
+        // If rate is stuck at bounds and keeps bouncing, bail out
+        if iteration > 20 && (old_rate - rate).abs() < tolerance {
+            return Ok(IrrResult {
+                irr: rate,
+                converged: false,
+                iterations: iteration,
+            });
         }
     }
 

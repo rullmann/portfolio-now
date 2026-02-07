@@ -2,16 +2,61 @@
 
 Cross-Platform Desktop-App zur Portfolio-Verwaltung. Neuimplementierung von [Portfolio Performance](https://github.com/portfolio-performance/portfolio) mit Tauri (Rust + React/TypeScript).
 
-| Eigenschaft | Wert |
-|-------------|------|
-| **Bundle ID** | `com.portfolio-now.app` |
-| **Version** | 0.1.6 |
-| **Jahr** | 2026 |
+| Eigenschaft | Wert | SSOT |
+|-------------|------|------|
+| **Bundle ID** | `com.portfolio-now.app` | `tauri.conf.json` |
+| **Version** | 0.1.8 | `Cargo.toml` + `package.json` |
+| **Jahr** | 2026 | - |
+
+> **Versions-Pflege:** Bei jedem Release müssen `Cargo.toml`, `package.json`, `tauri.conf.json` und `CHANGELOG.md` synchron aktualisiert werden.
 
 ## Build-Hinweise
 
 - **KEINE Mac DMG bauen** - nur Development-Builds verwenden
 - Für Release-Builds: `pnpm tauri build --bundles app`
+
+---
+
+## AI Agents
+
+Für komplexe Aufgaben sollen spezialisierte Agenten eingesetzt werden:
+
+| Agent | Rolle | Aufgaben |
+|-------|-------|----------|
+| **Product / Requirements** | Anforderungsanalyse | User Stories verstehen, Akzeptanzkriterien definieren, Scope klären |
+| **Architect / Design** | Systemdesign | Architekturentscheidungen, Datenmodelle, API-Design, Technologie-Auswahl |
+| **Coding / Implementation** | Entwicklung | Code schreiben, Refactoring, Bug-Fixes, Feature-Implementierung |
+| **Test / QA** | Qualitätssicherung | Tests schreiben, Edge Cases finden, Testabdeckung prüfen |
+| **Review / Critic** | Code-Review | Code-Qualität bewerten, Verbesserungen vorschlagen, Best Practices |
+| **DevOps / Deployment** | Build & Deploy | CI/CD, Build-Prozesse, Release-Management, Performance |
+| **Security** | Sicherheit | Schwachstellen finden, Security-Best-Practices, Audit |
+| **Documentation** | Dokumentation | README, API-Docs, Code-Kommentare, User-Guides |
+
+**Einsatz:** Bei komplexen Tasks mehrere Agenten parallel oder sequentiell nutzen. Der Architect plant, Coding implementiert, Test validiert, Review prüft.
+
+### Automatisierung nach Änderungen
+
+**PFLICHT nach jeder signifikanten Änderung:**
+
+| Schritt | Aktion | Verantwortlich |
+|---------|--------|----------------|
+| 1. **Code-Änderung** | Feature/Fix implementieren | Coding Agent |
+| 2. **Tests** | Unit/Integration Tests anpassen | Test Agent |
+| 3. **Review** | Code-Qualität prüfen | Review Agent |
+| 4. **CHANGELOG.md** | Version + Änderungen dokumentieren | Documentation Agent |
+| 5. **CLAUDE.md** | Architektur/SSOT/Commands aktualisieren | Documentation Agent |
+
+**Bei größeren Änderungen (>100 Zeilen, neue Module, Architektur):**
+- **Alle 8 Agenten einbeziehen** (parallel oder sequentiell)
+- Product → Architect → Coding → Test → Review → Security → DevOps → Documentation
+- Keine Änderung ist abgeschlossen ohne CHANGELOG.md und CLAUDE.md Update
+
+**Checkliste vor Abschluss:**
+- [ ] Kompiliert fehlerfrei (`cargo build --release` + `pnpm build`)
+- [ ] Tests laufen (`cargo test --release`)
+- [ ] CHANGELOG.md hat neuen Eintrag (Version + Datum + Kategorien)
+- [ ] CLAUDE.md reflektiert aktuelle Architektur
+- [ ] Keine TODO-Kommentare im neuen Code
 
 ---
 
@@ -32,11 +77,18 @@ Cross-Platform Desktop-App zur Portfolio-Verwaltung. Neuimplementierung von [Por
 apps/desktop/
 ├── src/                    # React Frontend (TypeScript)
 │   ├── store/              # Zustand State Management
-│   ├── components/         # UI (layout/, common/, modals/, charts/, chat/)
-│   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, SafeMarkdown, ...)
+│   ├── components/         # UI (11 Unterordner)
+│   │   ├── alerts/         # Alert-Anzeige
+│   │   ├── attributes/     # Custom-Attribute
 │   │   ├── charts/         # TradingViewChart, AIAnalysisPanel, DrawingTools, SignalsPanel
 │   │   ├── chat/           # ChatPanel, ChatMessage, ChatButton
-│   │   └── modals/         # PortfolioInsightsModal, TransactionFormModal, etc.
+│   │   ├── common/         # Shared (Skeleton, DropdownMenu, AIProviderLogo, SafeMarkdown, ...)
+│   │   ├── dashboard/      # Dashboard-Cards, Widgets
+│   │   ├── layout/         # Layout-Wrapper
+│   │   ├── metrics/        # Kennzahlen-Anzeige
+│   │   ├── modals/         # PortfolioInsightsModal, TransactionFormModal, etc.
+│   │   ├── quote-assistant/ # Kursquellen-Konfiguration
+│   │   └── settings/       # Einstellungs-Komponenten
 │   ├── views/              # View-Komponenten pro Route
 │   └── lib/                # API, Types, Hooks
 │       ├── indicators.ts   # Technische Indikatoren (SMA, EMA, RSI, MACD, BB, Stochastic, OBV, ADX, ATR)
@@ -44,16 +96,23 @@ apps/desktop/
 │       └── signals.ts      # Signal-Erkennung und Divergenzen
 └── src-tauri/              # Rust Backend
     └── src/
-        ├── commands/       # Tauri IPC Commands (26 Module)
+        ├── commands/       # Tauri IPC Commands (33 Module)
         ├── db/             # SQLite (rusqlite)
         ├── pp/             # Portfolio Performance Datenmodelle
         ├── protobuf/       # .portfolio Parser
         ├── quotes/         # Kursquellen (Yahoo, Finnhub, EZB, etc.)
         ├── fifo/           # FIFO Cost Basis
         ├── pdf_import/     # PDF Import mit OCR (Vision API)
-        ├── ai/             # KI-Analyse, Chat, Portfolio Insights, Models Registry, Query Templates
+        ├── csv_import/     # CSV Import (Broker-Templates)
+        ├── ai/             # KI-Analyse, Chat, Portfolio Insights, Models Registry, Dynamic SQL
+        ├── currency/       # Währungsumrechnung, Wechselkurse
+        ├── performance/    # TTWROR, IRR Berechnungen
         ├── optimization/   # Portfolio-Optimierung (Markowitz, Efficient Frontier)
-        └── tax/            # Steuerberechnungen (DE: Anlage KAP)
+        ├── tax/            # Steuerberechnungen (DE: Anlage KAP)
+        ├── security/       # Pfadvalidierung, Rate Limiting
+        ├── validation/     # Input-Validierung, AI-Fallback
+        ├── models/         # Datenstrukturen
+        └── events.rs       # Tauri Event-Emitter (data_changed, etc.)
 ```
 
 ## Tech Stack
@@ -87,8 +146,7 @@ cd apps/desktop/src-tauri && cargo test --release  # Rust Tests
 | **Cashflows (IRR)** | `performance/mod.rs` | `get_cash_flows_with_fallback()` - mit BUY/SELL Fallback | Mischen von BUY/SELL + DEPOSIT/REMOVAL |
 | **Portfolio-Wert** | `performance/mod.rs` | `get_portfolio_value_at_date_with_currency()` | latest_price ohne FX/Cash |
 | **Datumsformatierung** | `lib/types.ts` | `formatDate()`, `formatDateTime()`, `formatDateShort()` | Eigene Date-Formatierung |
-| **ChatBot DB-Abfragen** | `ai/query_templates.rs` | `execute_template()`, `get_all_templates()` | Eigene SQL im ChatBot |
-| **Account Running Balance** | `ai/query_templates.rs` | `account_balance_analysis` Template | Eigene Saldo-Berechnung |
+| **ChatBot DB-Abfragen** | `ai/sql_executor.rs` | `execute_sql()`, `validate_sql()` | Hardcodierte SQL im ChatBot |
 
 **Neue Funktion?** 1. Prüfen ob SSOT existiert → 2. Falls ja: verwenden → 3. Falls nein: Im passenden Modul hinzufügen
 
@@ -218,12 +276,14 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 
 | Provider | Modelle | Besonderheiten |
 |----------|---------|----------------|
-| **Claude** | claude-sonnet-4-5, claude-haiku-4-5 | Vision + **direkter PDF-Upload** |
-| **OpenAI** | o3, o4-mini, gpt-4.1, gpt-4o, gpt-4o-mini | o3/o4: Vision + **Web-Suche** |
-| **Gemini** | gemini-3-flash, gemini-3-pro | Vision + **direkter PDF-Upload** |
+| **Claude** | claude-sonnet-4-5-20250514, claude-haiku-4-5-20251015 | Vision + **direkter PDF-Upload** |
+| **OpenAI** | o3, o4-mini, gpt-5-mini, gpt-4.1, gpt-4o, gpt-4o-mini | o3/o4: Vision + **Web-Suche**, gpt-4.1 nur Coding (kein Vision) |
+| **Gemini** | gemini-2.5-flash, gemini-2.5-pro, gemini-3-flash-preview, gemini-3-pro-preview | Vision + **direkter PDF-Upload** |
 | **Perplexity** | sonar-pro, sonar | Vision + Web-Suche |
 
 **PDF OCR:** Claude/Gemini = direkter Upload, OpenAI/Perplexity = Poppler nötig (`brew install poppler`)
+
+**Defaults:** Claude → claude-sonnet-4-5-20250514, OpenAI → gpt-5-mini, Gemini → gemini-2.5-flash, Perplexity → sonar-pro
 
 ### Unterstützte Banken (PDF Import)
 
@@ -295,7 +355,7 @@ useSettingsStore: {
 
 ## Views
 
-Dashboard, Portfolio, Securities, Accounts, Transactions, Holdings, Dividends, Watchlist, Taxonomies, Benchmark, Charts, Plans, Reports, Rebalancing, Optimization, Settings - alle ✅ implementiert.
+Dashboard, WidgetDashboard, Portfolio, Securities, Accounts, Transactions, Holdings, Dividends, Watchlist, Taxonomies, Benchmark, Charts, Plans, Reports, Rebalancing, Optimization, AssetStatement, Consortium, Screener, Settings - alle ✅ implementiert.
 
 ---
 
@@ -353,6 +413,7 @@ await setApiKey('anthropic', 'sk-ant-...');
 16. **AI-Markdown** - `<SafeMarkdown>` statt `<ReactMarkdown>` (XSS-Schutz)
 17. **PDF Parser** - `strict_mode: true` Default, `parse_date_strict()` verwenden
 18. **Wechselkurse X/EUR** - NIEMALS direkte X/EUR Kurse (z.B. USD/EUR) in `pp_exchange_rate` speichern! EZB liefert nur EUR/X Kurse. Der Code invertiert automatisch: `get_exchange_rate()` sucht erst direkt, dann invers (1/rate). Falsche direkte Einträge (z.B. USD/EUR=1.16 statt 0.85) führen zu massiv falschen Portfoliowerten!
+19. **ChatBot Bild-Erkennung** - 🚧 OFFEN: LLM ignoriert `[[EXTRACTED_TRANSACTIONS:...]]` Command-Anweisung im System-Prompt (`prompts.rs`). Gibt nur Text-Zusammenfassung aus statt Command → keine Transaktion-Vorschau erscheint. **Lösungsansätze:** (a) Prompt aggressiver formulieren, (b) Few-shot Examples, (c) Post-Processing: Text→Command extrahieren, (d) Function Calling/Tool Use statt Text-Commands, (e) Anderes LLM-Modell testen
 
 ---
 
@@ -404,7 +465,16 @@ Alle Aktionen mit Bestätigung (Watchlist, Transaktionen, Transfers) nutzen:
 ### ChatBot Commands
 
 - `[[WATCHLIST:{"action":"add","name":"...","security":"..."}]]`
-- `[[QUERY_DB:{"query":"template_id","params":{...}}]]`
+- SQL-Abfragen: LLM generiert ```sql``` Code-Blöcke (dynamisches SQL via `sql_executor.rs`)
+
+### ChatBot SQL-System
+
+Das LLM generiert dynamisch SQL-Abfragen als ```sql``` Code-Blöcke. Validierung:
+- Nur `SELECT` erlaubt
+- Nur `pp_*` Tabellen
+- Session-basierte Pattern-Approval (`sqlApprovalMode: 'always' | 'session' | 'never'`)
+
+**Skalierungsfaktoren in SQL:** `shares / 100000000.0`, `amount / 100.0`, `prices / 100000000.0`
 
 ### Speech-to-Text (Whisper)
 
@@ -416,12 +486,6 @@ Alle Aktionen mit Bestätigung (Watchlist, Transaktionen, Transfers) nutzen:
 - Audio-Format: WebM
 
 Tauri Command: `transcribe_audio(audio_base64, api_key, language?)`
-
-### Query Templates (13)
-
-`security_transactions`, `dividends_by_security`, `all_dividends`, `transactions_by_date`, `security_cost_basis`, `sold_securities`, `holding_period_analysis`, `fifo_lot_details`, `account_transactions`, `investment_plans`, `portfolio_accounts`, `tax_relevant_sales`, `account_balance_analysis`
-
-**account_balance_analysis:** Running Balance mit INFLOWS vor OUTFLOWS am gleichen Tag.
 
 ### Chart Features
 

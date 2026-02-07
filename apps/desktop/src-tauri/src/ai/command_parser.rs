@@ -8,10 +8,62 @@
 //! injection attacks where malicious data could trigger unwanted actions.
 
 use crate::ai::normalizer::normalize_ai_response;
+use crate::ai::sql_executor::{extract_sql_from_response, remove_sql_blocks};
 use crate::commands::ai_helpers;
 use chrono::{NaiveDate, Local};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// Helper: Extract JSON object by brace-counting
+// ============================================================================
+
+/// Extract a JSON object from a string by counting braces.
+/// The string must start with (or near) a `{`. Returns the JSON substring including braces.
+fn extract_json_brace(s: &str) -> Option<String> {
+    let trimmed = s.trim_start();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let mut brace_count = 0;
+    for (byte_offset, c) in trimmed.char_indices() {
+        match c {
+            '{' => brace_count += 1,
+            '}' => {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    return Some(trimmed[..byte_offset + 1].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+// ============================================================================
+// Query Approval Types (Security Feature)
+// ============================================================================
+
+/// Type of database query that requires user approval
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryType {
+    /// Dynamic SQL query extracted from ```sql``` blocks
+    SqlQuery,
+}
+
+/// A pending query that requires user approval before execution
+/// SECURITY: These are queries that haven't been approved yet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuery {
+    pub query_type: QueryType,
+    pub description: String,
+    pub payload: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+}
 
 // ============================================================================
 // Watchlist Commands
@@ -79,367 +131,14 @@ pub fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, Strin
         }
     }
 
-    // Remove all command tags from response
-    let clean_re = Regex::new(r#"\[\[WATCHLIST_(ADD|REMOVE):[^\]]*\]\]"#).unwrap();
+    // Remove all command tags from response (use .*? for non-greedy match across any characters)
+    let clean_re = Regex::new(r#"\[\[WATCHLIST_(ADD|REMOVE):.*?\]\]"#).unwrap();
     cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
     cleaned_response = cleaned_response.trim_start().to_string();
 
     (commands, cleaned_response)
 }
 
-// ============================================================================
-// Transaction Queries
-// ============================================================================
-
-/// Transaction query parsed from AI response
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransactionQuery {
-    pub security: Option<String>,
-    pub year: Option<i32>,
-    pub txn_type: Option<String>,
-    pub limit: Option<i32>,
-}
-
-/// Parse transaction query commands from AI response
-///
-/// Extracts `[[QUERY_TRANSACTIONS:...]]` commands
-pub fn parse_transaction_queries(response: &str) -> (Vec<TransactionQuery>, String) {
-    let mut queries = Vec::new();
-    let mut cleaned_response = response.to_string();
-
-    let query_re = Regex::new(r#"\[\[QUERY_TRANSACTIONS:\s*\{([^}]*)\}\]\]"#).unwrap();
-
-    for cap in query_re.captures_iter(response) {
-        let json_content = &cap[1];
-
-        let security = Regex::new(r#""security"\s*:\s*"([^"]+)""#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .map(|c| c[1].to_string());
-
-        let year = Regex::new(r#""year"\s*:\s*(\d{4})"#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .and_then(|c| c[1].parse::<i32>().ok());
-
-        let txn_type = Regex::new(r#""type"\s*:\s*"([^"]+)""#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .map(|c| c[1].to_string());
-
-        let limit = Regex::new(r#""limit"\s*:\s*(\d+)"#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .and_then(|c| c[1].parse::<i32>().ok());
-
-        queries.push(TransactionQuery {
-            security,
-            year,
-            txn_type,
-            limit,
-        });
-    }
-
-    let clean_re = Regex::new(r#"\[\[QUERY_TRANSACTIONS:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
-    cleaned_response = cleaned_response.trim_start().to_string();
-
-    (queries, cleaned_response)
-}
-
-/// Execute transaction queries and return formatted results
-pub fn execute_transaction_queries(queries: &[TransactionQuery]) -> Vec<String> {
-    let mut results = Vec::new();
-
-    for query in queries {
-        match ai_helpers::ai_query_transactions(
-            query.security.clone(),
-            query.year,
-            query.txn_type.clone(),
-            query.limit,
-        ) {
-            Ok(result) => {
-                if result.transactions.is_empty() {
-                    results.push("Keine Transaktionen gefunden.".to_string());
-                } else {
-                    let mut output = format!("**{}**\n\n", result.message);
-                    for txn in &result.transactions {
-                        let sec_str = txn.security_name.as_ref()
-                            .map(|s| {
-                                let ticker = txn.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
-                                format!(" - {}{}", s, ticker)
-                            })
-                            .unwrap_or_default();
-                        let shares_str = txn.shares.map(|s| format!(", {:.4} Stk.", s)).unwrap_or_default();
-                        output.push_str(&format!(
-                            "- {}: {}{}, {:.2} {}{}\n",
-                            txn.date, txn.txn_type, sec_str, txn.amount, txn.currency, shares_str
-                        ));
-                    }
-                    results.push(output);
-                }
-            }
-            Err(e) => {
-                results.push(format!("Fehler bei Transaktionsabfrage: {}", e));
-            }
-        }
-    }
-
-    results
-}
-
-// ============================================================================
-// Portfolio Value Queries
-// ============================================================================
-
-/// Portfolio value query parsed from AI response
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PortfolioValueQuery {
-    pub date: String,
-}
-
-/// Parse portfolio value query commands from AI response
-///
-/// Extracts `[[QUERY_PORTFOLIO_VALUE:...]]` commands
-pub fn parse_portfolio_value_queries(response: &str) -> (Vec<PortfolioValueQuery>, String) {
-    let mut queries = Vec::new();
-    let mut cleaned_response = response.to_string();
-
-    let query_re = Regex::new(r#"\[\[QUERY_PORTFOLIO_VALUE:\s*\{([^}]*)\}\]\]"#).unwrap();
-
-    for cap in query_re.captures_iter(response) {
-        let json_content = &cap[1];
-
-        let date = Regex::new(r#""date"\s*:\s*"([^"]+)""#)
-            .ok()
-            .and_then(|re| re.captures(json_content))
-            .map(|c| c[1].to_string());
-
-        if let Some(date) = date {
-            queries.push(PortfolioValueQuery { date });
-        }
-    }
-
-    let clean_re = Regex::new(r#"\[\[QUERY_PORTFOLIO_VALUE:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
-    cleaned_response = cleaned_response.trim_start().to_string();
-
-    (queries, cleaned_response)
-}
-
-/// Execute portfolio value queries and return formatted results
-pub fn execute_portfolio_value_queries(queries: &[PortfolioValueQuery]) -> Vec<String> {
-    let mut results = Vec::new();
-
-    for query in queries {
-        match ai_helpers::ai_query_portfolio_value(query.date.clone()) {
-            Ok(result) => {
-                if result.found {
-                    results.push(format!("**Depotwert am {}:** {:.2} {}", result.date, result.value, result.currency));
-                } else {
-                    results.push(result.message);
-                }
-            }
-            Err(e) => {
-                results.push(format!("Fehler bei Depotwert-Abfrage: {}", e));
-            }
-        }
-    }
-
-    results
-}
-
-// ============================================================================
-// Database Query Commands (using query_templates)
-// ============================================================================
-
-use crate::ai::query_templates::{execute_template, QueryRequest};
-use crate::db::get_connection;
-use std::collections::HashMap;
-
-/// Database query parsed from AI response (internal - accepts any JSON value for params)
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DbQueryRaw {
-    pub template: String,
-    #[serde(default)]
-    pub params: HashMap<String, serde_json::Value>,
-}
-
-/// Database query parsed from AI response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DbQuery {
-    pub template: String,
-    #[serde(default)]
-    pub params: HashMap<String, String>,
-}
-
-impl From<DbQueryRaw> for DbQuery {
-    fn from(raw: DbQueryRaw) -> Self {
-        let params = raw.params.into_iter()
-            .map(|(k, v)| {
-                let str_val = match v {
-                    serde_json::Value::String(s) => s,
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    other => other.to_string(),
-                };
-                (k, str_val)
-            })
-            .collect();
-        DbQuery {
-            template: raw.template,
-            params,
-        }
-    }
-}
-
-/// Parse database query commands from AI response
-///
-/// Extracts `[[QUERY_DB:...]]` commands using brace-counting for robust JSON extraction.
-/// This approach correctly handles nested objects and special characters in values.
-///
-/// NOTE: AI response formatting quirks (like `] ]` or `[[ QUERY_DB :`) are handled
-/// centrally by `normalize_ai_response()` in `parse_response_with_suggestions()`.
-pub fn parse_db_queries(response: &str) -> (Vec<DbQuery>, String) {
-    let mut queries = Vec::new();
-    let mut cleaned_response = response.to_string();
-    let marker = "[[QUERY_DB:";
-    let end_marker = "]]";
-
-    // Find all occurrences of the marker and extract JSON by counting braces
-    let mut search_start = 0;
-    while let Some(start_idx) = cleaned_response[search_start..].find(marker) {
-        let abs_start = search_start + start_idx;
-        let json_start = abs_start + marker.len();
-
-        // Find matching closing brace by counting (using char_indices for correct byte positions)
-        let mut brace_count = 0;
-        let mut json_end = None;
-
-        for (byte_offset, c) in cleaned_response[json_start..].char_indices() {
-            match c {
-                '{' => brace_count += 1,
-                '}' => {
-                    brace_count -= 1;
-                    if brace_count == 0 {
-                        // byte_offset is the start of '}', add 1 for the byte length of '}'
-                        json_end = Some(json_start + byte_offset + 1);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(end_idx) = json_end {
-            let json_str = &cleaned_response[json_start..end_idx];
-
-            // Verify it ends with ]]
-            let after_json = &cleaned_response[end_idx..];
-            if after_json.starts_with(end_marker) {
-                // Try to parse as JSON using serde (via DbQueryRaw to handle int/string params)
-                match serde_json::from_str::<DbQueryRaw>(json_str) {
-                    Ok(raw_query) => {
-                        queries.push(raw_query.into());
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse QUERY_DB: {} - JSON: {}", e, json_str);
-                    }
-                }
-
-                // Always remove this command from the response
-                let full_end = end_idx + end_marker.len();
-                cleaned_response = format!(
-                    "{}{}",
-                    &cleaned_response[..abs_start],
-                    &cleaned_response[full_end..]
-                );
-                // Don't advance search_start since we removed content
-            } else {
-                // No closing ]], try to find and remove partial command anyway
-                if let Some(fallback_end) = cleaned_response[abs_start..].find("]]") {
-                    let full_end = abs_start + fallback_end + 2;
-                    log::warn!("Removing malformed QUERY_DB command");
-                    cleaned_response = format!(
-                        "{}{}",
-                        &cleaned_response[..abs_start],
-                        &cleaned_response[full_end..]
-                    );
-                } else {
-                    search_start = end_idx;
-                }
-            }
-        } else {
-            // No matching brace found, skip this marker
-            search_start = json_start;
-        }
-    }
-
-    // Final cleanup: Remove any remaining [[QUERY_DB:...]] patterns that might have been missed
-    // This is a safety net for edge cases like malformed JSON or unexpected formatting
-    // NOTE: Whitespace issues like "] ]" are handled by normalize_ai_response() upstream
-    let re_fallback = regex::Regex::new(r"(?s)\[\[QUERY_DB:.*?\]\]").unwrap();
-    cleaned_response = re_fallback.replace_all(&cleaned_response, "").to_string();
-
-    cleaned_response = cleaned_response.trim().to_string();
-    (queries, cleaned_response)
-}
-
-/// Execute database queries and return formatted results
-pub fn execute_db_queries(queries: &[DbQuery]) -> Vec<String> {
-    let mut results = Vec::new();
-
-    let guard = match get_connection() {
-        Ok(g) => g,
-        Err(e) => {
-            results.push(format!("Fehler beim Zugriff auf Datenbank: {}", e));
-            return results;
-        }
-    };
-
-    let conn = match guard.as_ref() {
-        Some(c) => c,
-        None => {
-            results.push("Datenbank nicht initialisiert.".to_string());
-            return results;
-        }
-    };
-
-    for query in queries {
-        let request = QueryRequest {
-            template_id: query.template.clone(),
-            parameters: query.params.clone(),
-        };
-
-        match execute_template(conn, &request) {
-            Ok(result) => {
-                if result.row_count == 0 {
-                    results.push(format!("**{}**: Keine Ergebnisse gefunden.", query.template));
-                } else {
-                    // Some templates (like account_balance_analysis) return a complete answer
-                    // - no need for a header
-                    if query.template == "account_balance_analysis" {
-                        results.push(result.formatted_markdown);
-                    } else {
-                        results.push(format!(
-                            "**{} ({} Ergebnisse)**:\n\n{}",
-                            query.template, result.row_count, result.formatted_markdown
-                        ));
-                    }
-                }
-            }
-            Err(e) => {
-                results.push(format!("Fehler bei Abfrage '{}': {}", query.template, e));
-            }
-        }
-    }
-
-    results
-}
 
 // ============================================================================
 // Transaction Create Commands
@@ -455,25 +154,38 @@ pub fn parse_transaction_create_commands(response: &str) -> (Vec<TransactionCrea
     let mut commands = Vec::new();
     let mut cleaned_response = response.to_string();
 
-    // Match [[TRANSACTION_CREATE:{...}]]
-    let cmd_re = Regex::new(r#"\[\[TRANSACTION_CREATE:\s*(\{[^]]+\})\]\]"#).unwrap();
+    // Use brace-counting to extract JSON from [[TRANSACTION_CREATE:{...}]]
+    let tag = "[[TRANSACTION_CREATE:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(tag) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + tag.len();
+        // Skip whitespace
+        let json_start = json_start + cleaned_response[json_start..].len() - cleaned_response[json_start..].trim_start().len();
 
-    for cap in cmd_re.captures_iter(response) {
-        let json_str = &cap[1];
-
-        // Try to parse as JSON
-        if let Ok(cmd) = serde_json::from_str::<TransactionCreateCommand>(json_str) {
-            commands.push(cmd);
+        if let Some(json_str) = extract_json_brace(&cleaned_response[json_start..]) {
+            if let Ok(cmd) = serde_json::from_str::<TransactionCreateCommand>(&json_str) {
+                commands.push(cmd);
+            } else {
+                log::warn!("Failed to parse TRANSACTION_CREATE command: {}", json_str);
+            }
+            // Find the closing ]] after the JSON
+            let after_json = json_start + json_str.len();
+            let end = if cleaned_response[after_json..].starts_with("]]") {
+                after_json + 2
+            } else if cleaned_response[after_json..].starts_with("]") {
+                after_json + 1
+            } else {
+                after_json
+            };
+            cleaned_response = format!("{}{}", &cleaned_response[..abs_start], &cleaned_response[end..]);
+            search_from = abs_start;
         } else {
-            log::warn!("Failed to parse TRANSACTION_CREATE command: {}", json_str);
+            search_from = json_start;
         }
     }
 
-    // Remove command tags from response
-    let clean_re = Regex::new(r#"\[\[TRANSACTION_CREATE:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
     cleaned_response = cleaned_response.trim().to_string();
-
     (commands, cleaned_response)
 }
 
@@ -485,25 +197,34 @@ pub fn parse_portfolio_transfer_commands(response: &str) -> (Vec<PortfolioTransf
     let mut commands = Vec::new();
     let mut cleaned_response = response.to_string();
 
-    // Match [[PORTFOLIO_TRANSFER:{...}]]
-    let cmd_re = Regex::new(r#"\[\[PORTFOLIO_TRANSFER:\s*(\{[^]]+\})\]\]"#).unwrap();
+    let tag = "[[PORTFOLIO_TRANSFER:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(tag) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + tag.len();
 
-    for cap in cmd_re.captures_iter(response) {
-        let json_str = &cap[1];
-
-        // Try to parse as JSON
-        if let Ok(cmd) = serde_json::from_str::<PortfolioTransferCommand>(json_str) {
-            commands.push(cmd);
+        if let Some(json_str) = extract_json_brace(&cleaned_response[json_start..]) {
+            if let Ok(cmd) = serde_json::from_str::<PortfolioTransferCommand>(&json_str) {
+                commands.push(cmd);
+            } else {
+                log::warn!("Failed to parse PORTFOLIO_TRANSFER command: {}", json_str);
+            }
+            let after_json = json_start + json_str.len();
+            let end = if cleaned_response[after_json..].starts_with("]]") {
+                after_json + 2
+            } else if cleaned_response[after_json..].starts_with("]") {
+                after_json + 1
+            } else {
+                after_json
+            };
+            cleaned_response = format!("{}{}", &cleaned_response[..abs_start], &cleaned_response[end..]);
+            search_from = abs_start;
         } else {
-            log::warn!("Failed to parse PORTFOLIO_TRANSFER command: {}", json_str);
+            search_from = json_start;
         }
     }
 
-    // Remove command tags from response
-    let clean_re = Regex::new(r#"\[\[PORTFOLIO_TRANSFER:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
     cleaned_response = cleaned_response.trim().to_string();
-
     (commands, cleaned_response)
 }
 
@@ -564,25 +285,34 @@ pub fn parse_transaction_delete_commands(response: &str) -> (Vec<TransactionDele
     let mut commands = Vec::new();
     let mut cleaned_response = response.to_string();
 
-    // Match [[TRANSACTION_DELETE:{...}]]
-    let cmd_re = Regex::new(r#"\[\[TRANSACTION_DELETE:\s*(\{[^]]+\})\]\]"#).unwrap();
+    let tag = "[[TRANSACTION_DELETE:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(tag) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + tag.len();
 
-    for cap in cmd_re.captures_iter(response) {
-        let json_str = &cap[1];
-
-        // Try to parse as JSON
-        if let Ok(cmd) = serde_json::from_str::<TransactionDeleteCommand>(json_str) {
-            commands.push(cmd);
+        if let Some(json_str) = extract_json_brace(&cleaned_response[json_start..]) {
+            if let Ok(cmd) = serde_json::from_str::<TransactionDeleteCommand>(&json_str) {
+                commands.push(cmd);
+            } else {
+                log::warn!("Failed to parse TRANSACTION_DELETE command: {}", json_str);
+            }
+            let after_json = json_start + json_str.len();
+            let end = if cleaned_response[after_json..].starts_with("]]") {
+                after_json + 2
+            } else if cleaned_response[after_json..].starts_with("]") {
+                after_json + 1
+            } else {
+                after_json
+            };
+            cleaned_response = format!("{}{}", &cleaned_response[..abs_start], &cleaned_response[end..]);
+            search_from = abs_start;
         } else {
-            log::warn!("Failed to parse TRANSACTION_DELETE command: {}", json_str);
+            search_from = json_start;
         }
     }
 
-    // Remove command tags from response
-    let clean_re = Regex::new(r#"\[\[TRANSACTION_DELETE:[^\]]*\]\]"#).unwrap();
-    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
     cleaned_response = cleaned_response.trim().to_string();
-
     (commands, cleaned_response)
 }
 
@@ -1046,6 +776,10 @@ pub struct ParsedResponseWithSuggestions {
     pub suggestions: Vec<SuggestedAction>,
     /// Results from read-only queries (transactions, portfolio value)
     pub query_results: Vec<String>,
+    /// Pending queries that need user approval before execution
+    /// SECURITY: These queries haven't been approved yet
+    #[serde(default)]
+    pub pending_queries: Vec<PendingQuery>,
 }
 
 /// Parse AI response and extract suggestions without executing anything dangerous
@@ -1054,14 +788,24 @@ pub struct ParsedResponseWithSuggestions {
 /// - Parses all command types from AI response
 /// - Returns watchlist commands as SUGGESTIONS (not executed)
 /// - Returns transaction commands as SUGGESTIONS (not executed)
-/// - Executes ONLY read-only queries (transaction queries, portfolio value queries)
+/// - Checks query type approval before executing read-only queries
+/// - Returns unapproved queries as PENDING_QUERIES for user approval
 /// - Returns structured result for frontend to handle
 pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
+    // DEBUG: Log incoming response for troubleshooting
+    log::info!("=== PARSING AI RESPONSE ===");
+    log::info!("Response length: {} chars", response.len());
+    if response.len() > 0 {
+        let preview_len = response.len().min(400);
+        log::info!("First {} chars: {}", preview_len, &response[..preview_len]);
+    }
+
     // CENTRAL: Normalize once at the start, all parsers benefit
     let normalized = normalize_ai_response(&response);
     let mut current_response = normalized;
     let mut suggestions: Vec<SuggestedAction> = Vec::new();
     let mut query_results: Vec<String> = Vec::new();
+    let mut pending_queries: Vec<PendingQuery> = Vec::new();
 
     // Parse watchlist commands - DO NOT EXECUTE, return as suggestions
     let (wl_commands, cleaned) = parse_watchlist_commands(&current_response);
@@ -1127,6 +871,16 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
     let (extracted_payloads, cleaned) = parse_extracted_transactions(&current_response);
     current_response = cleaned;
 
+    // DEBUG: Log extracted transactions count
+    log::info!("Found {} EXTRACTED_TRANSACTIONS payloads", extracted_payloads.len());
+    for (i, payload) in extracted_payloads.iter().enumerate() {
+        log::info!("  Payload {}: {} transactions, source: {:?}",
+            i + 1,
+            payload.transactions.len(),
+            payload.source_description
+        );
+    }
+
     for payload in extracted_payloads {
         suggestions.push(SuggestedAction {
             action_type: "extracted_transactions".to_string(),
@@ -1135,37 +889,73 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
         });
     }
 
-    // Parse and execute transaction queries (READ-ONLY, safe to execute)
-    let (txn_queries, cleaned) = parse_transaction_queries(&current_response);
-    current_response = cleaned;
+    // NEW: Parse dynamic SQL queries from ```sql``` blocks
+    // This is the new system - LLM generates SQL directly
+    let sql_queries = extract_sql_from_response(&current_response);
 
-    if !txn_queries.is_empty() {
-        let results = execute_transaction_queries(&txn_queries);
-        query_results.extend(results);
+    // DEBUG: Log SQL queries found
+    log::info!("Found {} SQL queries in response", sql_queries.len());
+    for (i, q) in sql_queries.iter().enumerate() {
+        log::info!("  Query {}: {} ({}...)", i + 1, &q.description, &q.sql[..q.sql.len().min(80)]);
     }
 
-    // Parse and execute portfolio value queries (READ-ONLY, safe to execute)
-    let (pv_queries, cleaned) = parse_portfolio_value_queries(&current_response);
-    current_response = cleaned;
+    if !sql_queries.is_empty() {
+        // Remove SQL blocks from response
+        current_response = remove_sql_blocks(&current_response);
 
-    if !pv_queries.is_empty() {
-        let results = execute_portfolio_value_queries(&pv_queries);
-        query_results.extend(results);
+        // Check if SQL queries are approved for this session
+        use crate::ai::sql_executor::is_sql_pattern_approved;
+
+        for query in sql_queries {
+            let is_approved = is_sql_pattern_approved(&query.sql);
+            log::info!("SQL query '{}' approved: {}", &query.description, is_approved);
+
+            if is_approved {
+                // Pattern approved for session - execute directly
+                use crate::db::get_connection;
+                use crate::ai::sql_executor::{execute_sql, format_as_markdown};
+
+                match get_connection() {
+                    Ok(conn_guard) => {
+                        if let Some(conn) = conn_guard.as_ref() {
+                            match execute_sql(conn, &query.sql) {
+                                Ok(result) => {
+                                    let markdown = format_as_markdown(&result);
+                                    query_results.push(markdown);
+                                }
+                                Err(e) => {
+                                    query_results.push(format!("SQL-Fehler: {}", e));
+                                }
+                            }
+                        } else {
+                            query_results.push("Datenbank nicht initialisiert.".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        query_results.push(format!("Datenbankfehler: {}", e));
+                    }
+                }
+            } else {
+                // Not approved - add to pending_queries for user confirmation
+                pending_queries.push(PendingQuery {
+                    query_type: QueryType::SqlQuery,
+                    description: query.description.clone(),
+                    payload: serde_json::to_string(&query).unwrap_or_default(),
+                    template_id: None,
+                });
+            }
+        }
     }
 
-    // Parse and execute database queries (READ-ONLY, safe to execute)
-    let (db_queries, cleaned) = parse_db_queries(&current_response);
-    current_response = cleaned;
-
-    if !db_queries.is_empty() {
-        let results = execute_db_queries(&db_queries);
-        query_results.extend(results);
-    }
+    // NOTE: Old QUERY_TRANSACTIONS, QUERY_PORTFOLIO_VALUE, QUERY_DB and STRUCTURED_QUERY parsing removed.
+    // The new dynamic SQL system uses ```sql``` code blocks instead,
+    // which are handled separately via sql_executor.rs
 
     ParsedResponseWithSuggestions {
         cleaned_response: current_response,
         suggestions,
         query_results,
+        pending_queries,
     }
 }
 
@@ -1273,84 +1063,10 @@ Erledigt!"#;
     }
 
     #[test]
-    fn test_parse_transaction_query_security_only() {
-        let response = r#"[[QUERY_TRANSACTIONS:{"security":"Apple"}]]"#;
-
-        let (queries, _) = parse_transaction_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].security, Some("Apple".to_string()));
-        assert_eq!(queries[0].year, None);
-        assert_eq!(queries[0].txn_type, None);
-    }
-
-    #[test]
-    fn test_parse_transaction_query_with_year() {
-        let response = r#"[[QUERY_TRANSACTIONS:{"year":2024,"type":"BUY"}]]"#;
-
-        let (queries, _) = parse_transaction_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].year, Some(2024));
-        assert_eq!(queries[0].txn_type, Some("BUY".to_string()));
-    }
-
-    #[test]
-    fn test_parse_transaction_query_all_params() {
-        let response = r#"[[QUERY_TRANSACTIONS:{"security":"Microsoft","year":2023,"type":"SELL","limit":50}]]"#;
-
-        let (queries, _) = parse_transaction_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].security, Some("Microsoft".to_string()));
-        assert_eq!(queries[0].year, Some(2023));
-        assert_eq!(queries[0].txn_type, Some("SELL".to_string()));
-        assert_eq!(queries[0].limit, Some(50));
-    }
-
-    #[test]
-    fn test_parse_portfolio_value_query() {
-        let response = r#"[[QUERY_PORTFOLIO_VALUE:{"date":"2025-04-04"}]]"#;
-
-        let (queries, _) = parse_portfolio_value_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].date, "2025-04-04");
-    }
-
-    #[test]
     fn test_parse_empty_response() {
         let (wl_cmds, _) = parse_watchlist_commands("");
-        let (txn_queries, _) = parse_transaction_queries("");
-        let (pv_queries, _) = parse_portfolio_value_queries("");
 
         assert!(wl_cmds.is_empty());
-        assert!(txn_queries.is_empty());
-        assert!(pv_queries.is_empty());
-    }
-
-    #[test]
-    fn test_combined_commands_in_response() {
-        let response = r#"Ich habe die Transaktionen abgefragt und füge Apple zur Watchlist hinzu.
-
-[[QUERY_TRANSACTIONS:{"security":"Tesla","year":2024}]]
-[[WATCHLIST_ADD:{"watchlist":"Tech","security":"Apple"}]]
-[[QUERY_PORTFOLIO_VALUE:{"date":"2024-12-31"}]]
-
-Das war's!"#;
-
-        let (wl_cmds, r1) = parse_watchlist_commands(response);
-        let (txn_queries, r2) = parse_transaction_queries(&r1);
-        let (pv_queries, final_cleaned) = parse_portfolio_value_queries(&r2);
-
-        assert_eq!(wl_cmds.len(), 1);
-        assert_eq!(txn_queries.len(), 1);
-        assert_eq!(pv_queries.len(), 1);
-
-        assert!(!final_cleaned.contains("WATCHLIST"));
-        assert!(!final_cleaned.contains("QUERY_TRANSACTIONS"));
-        assert!(!final_cleaned.contains("QUERY_PORTFOLIO_VALUE"));
-        assert!(final_cleaned.contains("Das war's!"));
     }
 
     #[test]
@@ -1494,107 +1210,6 @@ Ich habe 2 Transaktionen erkannt."#;
         assert!(cleaned.contains("Ich habe 2 Transaktionen erkannt."));
     }
 
-    #[test]
-    fn test_parse_db_query_simple() {
-        let response = r#"[[QUERY_DB:{"template":"all_dividends","params":{"year":"2024"}}]]"#;
-
-        let (queries, cleaned) = parse_db_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].template, "all_dividends");
-        assert_eq!(queries[0].params.get("year"), Some(&"2024".to_string()));
-        assert!(!cleaned.contains("QUERY_DB"));
-    }
-
-    #[test]
-    fn test_parse_db_query_nested_params() {
-        let response = r#"Ich frage die Daten ab.
-[[QUERY_DB:{"template":"account_balance_analysis","params":{"account":"Referenzkonto"}}]]
-Hier sind die Ergebnisse."#;
-
-        let (queries, cleaned) = parse_db_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].template, "account_balance_analysis");
-        assert_eq!(queries[0].params.get("account"), Some(&"Referenzkonto".to_string()));
-        assert!(cleaned.contains("Ich frage die Daten ab."));
-        assert!(cleaned.contains("Hier sind die Ergebnisse."));
-        assert!(!cleaned.contains("QUERY_DB"));
-    }
-
-    #[test]
-    fn test_parse_db_query_empty_params() {
-        let response = r#"[[QUERY_DB:{"template":"sold_securities","params":{}}]]"#;
-
-        let (queries, cleaned) = parse_db_queries(response);
-
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].template, "sold_securities");
-        assert!(queries[0].params.is_empty());
-        assert!(cleaned.is_empty());
-    }
-
-    #[test]
-    fn test_parse_db_query_multiple() {
-        let response = r#"[[QUERY_DB:{"template":"all_dividends","params":{"year":"2024"}}]]
-[[QUERY_DB:{"template":"security_transactions","params":{"security":"Apple"}}]]"#;
-
-        let (queries, cleaned) = parse_db_queries(response);
-
-        assert_eq!(queries.len(), 2);
-        assert_eq!(queries[0].template, "all_dividends");
-        assert_eq!(queries[1].template, "security_transactions");
-        assert!(!cleaned.contains("QUERY_DB"));
-    }
-
-    #[test]
-    fn test_parse_db_query_integer_param() {
-        // Test with integer parameter (not string) - exact format from AI
-        let response = r#"[[QUERY_DB:{"template":"securities_in_multiple_portfolios","params":{"min_portfolios":2}}]]"#;
-
-        let (queries, cleaned) = parse_db_queries(response);
-
-        assert_eq!(queries.len(), 1, "Should find 1 query");
-        assert_eq!(queries[0].template, "securities_in_multiple_portfolios");
-        assert_eq!(queries[0].params.get("min_portfolios"), Some(&"2".to_string()));
-        assert!(!cleaned.contains("QUERY_DB"), "Command should be removed from response");
-        assert!(cleaned.is_empty(), "Cleaned response should be empty");
-    }
-
-    #[test]
-    fn test_parse_db_query_whitespace_in_brackets() {
-        // Test with space before closing bracket (AI formatting issue)
-        // NOTE: Whitespace issues are now handled by normalize_ai_response() centrally.
-        // This test verifies that normalize + parse_db_queries works correctly.
-        let response = r#"[[QUERY_DB:{"template":"securities_in_multiple_portfolios","params":{"min_portfolios":2}}] ]"#;
-
-        // First normalize (as done in parse_response_with_suggestions)
-        let normalized = normalize_ai_response(response);
-        let (queries, cleaned) = parse_db_queries(&normalized);
-
-        assert_eq!(queries.len(), 1, "Should find 1 query after normalization");
-        assert_eq!(queries[0].template, "securities_in_multiple_portfolios");
-        assert!(!cleaned.contains("QUERY_DB"), "Command should be removed");
-        assert!(!cleaned.contains("] ]"), "Malformed brackets should be removed");
-        assert!(cleaned.is_empty(), "Cleaned response should be empty");
-    }
-
-    #[test]
-    fn test_parse_response_with_suggestions_normalizes_whitespace() {
-        // Integration test: verify that parse_response_with_suggestions handles
-        // AI formatting quirks correctly through central normalization
-        let response = r#"Text before
-
-[[ QUERY_DB :{"template":"all_dividends","params":{}}] ]
-
-Text after"#.to_string();
-
-        let result = parse_response_with_suggestions(response);
-
-        // Query results are executed, so we check the cleaned response
-        assert!(!result.cleaned_response.contains("QUERY_DB"), "Command should be removed");
-        assert!(!result.cleaned_response.contains("] ]"), "Malformed brackets should not remain");
-        assert!(result.cleaned_response.contains("Text before"), "Regular text preserved");
-        assert!(result.cleaned_response.contains("Text after"), "Regular text preserved");
-    }
+    // NOTE: Tests for parse_db_queries and parse_structured_queries removed.
+    // The old template system has been replaced by dynamic SQL via sql_executor.rs
 }

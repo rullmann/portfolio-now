@@ -99,7 +99,7 @@ fn parse_error(status: u16, body: &str, model: &str) -> AiError {
         500..=599 => AiError::server_error("Claude", model, &format!("HTTP {}", status)),
         _ => AiError::other("Claude", model, &format!("HTTP {}: {}",
             status,
-            if body.len() > 200 { &body[..200] } else { body }
+            if body.len() > 200 { &body[..body.char_indices().nth(200).map(|(i, _)| i).unwrap_or(body.len())] } else { body }
         )),
     }
 }
@@ -254,7 +254,7 @@ pub async fn analyze_with_custom_prompt(
                 ContentBlock::Image {
                     source: ImageSource {
                         source_type: "base64".to_string(),
-                        media_type: "image/png".to_string(),
+                        media_type: crate::ai::detect_image_media_type(image_base64),
                         data: image_base64.to_string(),
                     },
                 },
@@ -906,6 +906,16 @@ pub async fn chat(
     // Check if any message has image attachments
     let has_images = messages.iter().any(|m| !m.attachments.is_empty());
 
+    // DEBUG: Log request details
+    log::info!("=== CLAUDE CHAT REQUEST ===");
+    log::info!("Model: {}", model);
+    log::info!("Messages count: {}", messages.len());
+    log::info!("Has images: {}", has_images);
+    for (i, msg) in messages.iter().enumerate() {
+        log::info!("  Message {}: role={}, content_len={}, attachments={}",
+            i, msg.role, msg.content.len(), msg.attachments.len());
+    }
+
     let mut last_error = AiError::other("Claude", model, "No attempts made");
 
     for attempt in 0..=MAX_RETRIES {
@@ -1014,12 +1024,22 @@ pub async fn chat(
             .and_then(|c| c.text.clone())
             .unwrap_or_default();
 
+        if response_text.trim().is_empty() {
+            log::warn!("Empty chat response from Claude (attempt {})", attempt + 1);
+            last_error = AiError::other("Claude", model, "Leere Antwort vom Modell");
+            if attempt < MAX_RETRIES {
+                continue;
+            }
+            return Err(last_error);
+        }
+
         return Ok(PortfolioChatResponse {
             response: response_text,
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
             suggestions: Vec::new(),
+            pending_queries: Vec::new(),
         });
     }
 

@@ -12,6 +12,10 @@
 //! - `models`: Vision model registry and metadata
 //! - Provider implementations: `claude`, `openai`, `gemini`, `perplexity`
 
+use std::collections::HashSet;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
 // Provider implementations
 pub mod claude;
 pub mod gemini;
@@ -28,8 +32,76 @@ pub mod parsing;
 pub mod command_parser;
 pub mod context;
 pub mod normalizer;
-pub mod query_templates;
-pub mod user_templates;
+
+// Dynamic SQL execution (replaces query_templates, structured_query, user_templates)
+pub mod sql_executor;
+
+// Re-export SQL executor functions
+pub use sql_executor::{
+    extract_sql_from_response, remove_sql_blocks, validate_sql, execute_sql,
+    format_as_markdown, is_sql_pattern_approved, approve_sql_pattern,
+    clear_sql_approvals, SqlQuery, SqlResult, SqlValidationError,
+};
+
+// ============================================================================
+// Session State for Query Approvals
+// ============================================================================
+
+/// Session-scoped approved query types
+/// SECURITY: Approvals are cleared on app restart
+static APPROVED_QUERY_TYPES: Lazy<Mutex<HashSet<command_parser::QueryType>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Check if a query type has been approved for this session
+pub fn is_query_type_approved(qt: &command_parser::QueryType) -> bool {
+    APPROVED_QUERY_TYPES
+        .lock()
+        .map(|guard| guard.contains(qt))
+        .unwrap_or(false)
+}
+
+/// Approve a query type for this session
+pub fn approve_query_type(qt: command_parser::QueryType) {
+    if let Ok(mut guard) = APPROVED_QUERY_TYPES.lock() {
+        guard.insert(qt);
+    }
+}
+
+/// Get all currently approved query types
+pub fn get_approved_query_types() -> Vec<command_parser::QueryType> {
+    APPROVED_QUERY_TYPES
+        .lock()
+        .map(|guard| guard.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Revoke all query type approvals (e.g., on logout or session end)
+pub fn revoke_all_approvals() {
+    if let Ok(mut guard) = APPROVED_QUERY_TYPES.lock() {
+        guard.clear();
+    }
+}
+
+// ============================================================================
+// Utility functions
+// ============================================================================
+
+/// Detect image media type from base64-encoded data by looking at magic bytes
+pub fn detect_image_media_type(base64_data: &str) -> String {
+    // Check first few characters of base64 for known magic byte patterns
+    if base64_data.starts_with("/9j/") {
+        "image/jpeg".to_string()
+    } else if base64_data.starts_with("iVBOR") {
+        "image/png".to_string()
+    } else if base64_data.starts_with("R0lGO") {
+        "image/gif".to_string()
+    } else if base64_data.starts_with("UklGR") {
+        "image/webp".to_string()
+    } else {
+        // Default to JPEG for optimized chart images
+        "image/jpeg".to_string()
+    }
+}
 
 // ============================================================================
 // Re-exports from types module
@@ -119,15 +191,15 @@ pub use normalizer::normalize_ai_response;
 pub use command_parser::{
     // Parsing functions (read-only)
     parse_watchlist_commands,
-    parse_transaction_queries, execute_transaction_queries,
-    parse_portfolio_value_queries, execute_portfolio_value_queries,
     // Transaction command parsing (returns suggestions, no auto-execution)
     parse_transaction_create_commands, parse_portfolio_transfer_commands,
     // Security: Suggestion-based execution (replaces auto-execution)
     parse_response_with_suggestions, execute_confirmed_watchlist_action,
     // Types
-    WatchlistCommand, TransactionQuery, PortfolioValueQuery,
+    WatchlistCommand,
     SuggestedAction, ParsedResponseWithSuggestions,
+    // Security: Query approval types
+    QueryType, PendingQuery,
     // Extracted transactions from images (returns suggestions, no auto-execution)
     ExtractedTransaction, ExtractedTransactionsPayload,
 };

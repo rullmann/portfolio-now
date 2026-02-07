@@ -11,6 +11,14 @@ use chrono::NaiveDate;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
+/// Normalize GBX/GBp to GBP (1 GBP = 100 GBX/GBp)
+fn normalize_gbx(currency: &str) -> (&str, f64) {
+    match currency {
+        "GBX" | "GBx" | "GBp" => ("GBP", 0.01),
+        _ => (currency, 1.0),
+    }
+}
+
 /// Convert an amount from one currency to another on a specific date
 pub fn convert(
     conn: &Connection,
@@ -23,8 +31,17 @@ pub fn convert(
         return Ok(amount);
     }
 
-    let rate = get_exchange_rate(conn, from, to, date)?;
-    Ok(amount * rate)
+    // Handle GBX/GBp → GBP (1 GBP = 100 GBX)
+    let (from_norm, from_factor) = normalize_gbx(from);
+    let (to_norm, to_factor) = normalize_gbx(to);
+
+    if from_norm == to_norm {
+        // e.g. GBX → GBP or GBP → GBX
+        return Ok(amount * from_factor / to_factor);
+    }
+
+    let rate = get_exchange_rate(conn, from_norm, to_norm, date)?;
+    Ok(amount * from_factor * rate / to_factor)
 }
 
 /// Convert an amount (in cents) from one currency to another
@@ -39,12 +56,20 @@ pub fn convert_cents(
         return Ok(amount);
     }
 
-    let rate = get_exchange_rate(conn, from, to, date)?;
-    Ok((amount as f64 * rate).round() as i64)
+    let (from_norm, from_factor) = normalize_gbx(from);
+    let (to_norm, to_factor) = normalize_gbx(to);
+
+    if from_norm == to_norm {
+        return Ok((amount as f64 * from_factor / to_factor).round() as i64);
+    }
+
+    let rate = get_exchange_rate(conn, from_norm, to_norm, date)?;
+    Ok((amount as f64 * from_factor * rate / to_factor).round() as i64)
 }
 
 /// Get exchange rate for a currency pair on a specific date
 /// Uses forward-fill: if no rate on date, uses most recent rate before
+/// Note: GBX/GBp normalization should be done by callers (convert/convert_cents)
 pub fn get_exchange_rate(
     conn: &Connection,
     base: &str,
@@ -62,6 +87,9 @@ pub fn get_exchange_rate(
 
     // Try inverse rate
     if let Some(rate) = lookup_rate(conn, target, base, date)? {
+        if rate == 0.0 {
+            return Err(anyhow!("Exchange rate {}/{} is 0.0 on {} – cannot invert", target, base, date));
+        }
         return Ok(1.0 / rate);
     }
 
@@ -88,19 +116,35 @@ fn lookup_rate(
     // Get rate on or before the date (forward-fill)
     // Note: Database uses term_currency, rate stored as TEXT
     let sql = r#"
-        SELECT rate FROM pp_exchange_rate
+        SELECT rate, date FROM pp_exchange_rate
         WHERE base_currency = ?1 AND term_currency = ?2 AND date <= ?3
         ORDER BY date DESC
         LIMIT 1
     "#;
 
-    let result: Option<String> = conn
+    let result: Option<(String, String)> = conn
         .query_row(sql, params![base, target, date.to_string()], |row| {
-            row.get(0)
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .ok();
 
-    Ok(result.and_then(|r| r.parse::<f64>().ok()))
+    match result {
+        Some((rate_str, rate_date_str)) => {
+            let rate = rate_str.parse::<f64>().ok();
+            // Warn if using a stale rate (>30 days old)
+            if let Ok(rate_date) = NaiveDate::parse_from_str(&rate_date_str, "%Y-%m-%d") {
+                let age_days = (date - rate_date).num_days();
+                if age_days > 30 {
+                    log::warn!(
+                        "Using stale exchange rate {}/{}: {} days old (rate date: {}, requested: {})",
+                        base, target, age_days, rate_date_str, date
+                    );
+                }
+            }
+            Ok(rate)
+        }
+        None => Ok(None),
+    }
 }
 
 /// Get all available exchange rates for a date (forward-filled)
@@ -199,6 +243,9 @@ pub fn get_latest_rate(conn: &Connection, base: &str, target: &str) -> Result<(N
             NaiveDate::parse_from_str(&date_str, "%Y-%m-%d"),
             rate_str.parse::<f64>(),
         ) {
+            if rate == 0.0 {
+                return Err(anyhow!("Exchange rate {}/{} is 0.0 – cannot invert", target, base));
+            }
             return Ok((date, 1.0 / rate));
         }
     }

@@ -232,13 +232,7 @@ pub fn run() {
             commands::ai_helpers::ai_query_transactions,
             commands::ai_helpers::ai_query_portfolio_value,
             commands::ai_helpers::ai_save_api_key,
-            // User-defined query templates
-            commands::ai_helpers::get_user_templates,
-            commands::ai_helpers::create_user_template,
-            commands::ai_helpers::update_user_template,
-            commands::ai_helpers::delete_user_template,
-            commands::ai_helpers::test_user_template,
-            commands::ai_helpers::get_query_templates_prompt,
+            // NOTE: User templates removed - replaced by dynamic SQL system
             commands::ai_helpers::suggest_quote_config,
             // PDF Import
             commands::pdf_import::get_supported_banks,
@@ -325,6 +319,15 @@ pub fn run() {
             commands::chat::create_conversation,
             commands::chat::update_conversation_title,
             commands::chat::delete_conversation,
+            // Query Approval (Security Feature)
+            commands::chat::approve_query_type_for_session,
+            commands::chat::execute_pending_query,
+            commands::chat::get_session_approved_query_types,
+            commands::chat::revoke_all_query_approvals,
+            // SQL Pattern Approval (Dynamic SQL System)
+            commands::chat::execute_sql_query,
+            commands::chat::approve_sql_pattern_for_session,
+            commands::chat::clear_all_sql_approvals,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,

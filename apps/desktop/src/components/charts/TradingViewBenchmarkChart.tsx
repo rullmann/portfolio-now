@@ -132,10 +132,13 @@ export function TradingViewBenchmarkChart({
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    const resizeObserver = new ResizeObserver(handleResize);
+    if (chartContainerRef.current) {
+      resizeObserver.observe(chartContainerRef.current);
+    }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;

@@ -46,13 +46,62 @@ const sanitizeSchema = {
   },
 };
 
+/**
+ * Removes any remaining command tags from AI response content.
+ * Defense in depth: catches tags that weren't properly parsed by the backend.
+ * Uses brace-counting to correctly handle JSON with nested brackets.
+ */
+function sanitizeCommandTags(content: string): string {
+  // Pattern: [[COMMAND: followed by JSON object
+  const commandStart = /\[\[[A-Z_]+:\{/g;
+  let result = content;
+  let match;
+
+  // Process each command tag by counting braces
+  while ((match = commandStart.exec(result)) !== null) {
+    const startIdx = match.index;
+    const jsonStart = startIdx + match[0].length - 1; // Position of opening {
+
+    // Count braces to find matching }
+    let braceCount = 1;
+    let jsonEnd = -1;
+
+    for (let i = jsonStart + 1; i < result.length && braceCount > 0; i++) {
+      if (result[i] === '{') braceCount++;
+      else if (result[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          jsonEnd = i;
+          break;
+        }
+      }
+    }
+
+    if (jsonEnd === -1) break; // Malformed, stop processing
+
+    // Find closing brackets (] or ]])
+    let endIdx = jsonEnd + 1;
+    while (endIdx < result.length && result[endIdx] === ']') {
+      endIdx++;
+    }
+
+    // Remove this command tag
+    result = result.slice(0, startIdx) + result.slice(endIdx);
+    commandStart.lastIndex = startIdx; // Reset to check for more tags
+  }
+
+  return result.trim();
+}
+
 export function SafeMarkdown({ children, className }: SafeMarkdownProps) {
+  // Sanitize command tags before rendering (defense in depth)
+  const sanitizedContent = sanitizeCommandTags(children);
   const content = (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
     >
-      {children}
+      {sanitizedContent}
     </ReactMarkdown>
   );
 

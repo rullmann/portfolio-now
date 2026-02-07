@@ -141,10 +141,13 @@ export function ComparisonChart({
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    const resizeObserver = new ResizeObserver(handleResize);
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
       seriesRef.current.clear();

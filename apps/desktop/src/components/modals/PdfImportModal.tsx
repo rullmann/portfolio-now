@@ -791,6 +791,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
         onDragOver={handleDragOver}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
+        role="dialog"
+        aria-modal="true"
         className="bg-background rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] flex flex-col relative"
       >
         {/* Header */}
@@ -801,6 +803,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
           </div>
           <button
             onClick={onClose}
+            aria-label="Schließen"
             className="p-1 hover:bg-muted rounded-md transition-colors"
           >
             <X size={20} />

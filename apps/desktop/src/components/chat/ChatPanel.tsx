@@ -27,8 +27,9 @@ import { VisionIndicator } from './VisionIndicator';
 import { ImageAttachmentPreview, type ChatImageAttachment } from './ImageAttachmentPreview';
 import { ImageUploadConsentDialog } from './ImageUploadConsentDialog';
 import { ExtractedTransactionsPreview, type ExtractedTransaction, type ExtractedTransactionsPayload, type Portfolio } from './ExtractedTransactionsPreview';
+import { QueryApprovalCard } from './QueryApprovalCard';
 import { cn } from '../../lib/utils';
-import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult, DuplicateCheckResponse } from '../../lib/types';
+import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCommand, Conversation, ImageImportTransactionsResult, DuplicateCheckResponse, PendingQuery } from '../../lib/types';
 import { formatSharesFromScaled, formatAmountFromScaled, getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { DropdownMenu, DropdownItem } from '../common/DropdownMenu';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
@@ -65,6 +66,7 @@ interface PortfolioChatResponse {
   model: string;
   tokensUsed: number | null;
   suggestions?: SuggestedAction[];
+  pendingQueries?: PendingQuery[];
 }
 
 const EXAMPLE_QUESTIONS = [
@@ -324,9 +326,15 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   // Portfolio state for extracted transactions
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
 
+  // Query approval state (security feature)
+  // SECURITY: Tracks pending queries that need user approval before execution
+  const [pendingQueries, setPendingQueries] = useState<Array<PendingQuery & { messageId: number; id?: number; status?: 'pending' | 'confirmed' | 'declined' }>>([]);
+  const [executingQuery, setExecutingQuery] = useState<string | null>(null);
+
   const {
     aiFeatureSettings,
     baseCurrency,
+    language,
     alphaVantageApiKey,
     userName,
     chatContextSize,
@@ -397,6 +405,10 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     };
     loadPortfolios();
   }, []);
+
+  // Ref for stable access to messages in async sendMessage
+  const messagesRef = useRef<ChatMessageData[]>(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   // Refs for stable access in Tauri drag-drop handler
   const hasVisionSupportRef = useRef(hasVisionSupport);
@@ -1041,15 +1053,33 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         const dbSuggestions = await invoke<DbSuggestion[]>('get_pending_suggestions', {
           conversationId: currentConversationId,
         });
-        const loadedSuggestions: SuggestedAction[] = dbSuggestions.map((s) => ({
-          id: s.id,
-          messageId: s.messageId,
-          actionType: s.actionType,
-          description: s.description,
-          payload: s.payload,
-          status: s.status as 'pending' | 'confirmed' | 'declined',
-        }));
+        const loadedSuggestions: SuggestedAction[] = [];
+        const loadedPendingQueries: Array<PendingQuery & { messageId: number; id?: number; status?: 'pending' | 'confirmed' | 'declined' }> = [];
+
+        for (const s of dbSuggestions) {
+          if (s.actionType === 'sql_query') {
+            loadedPendingQueries.push({
+              queryType: 'sql_query',
+              description: s.description,
+              payload: s.payload,
+              messageId: s.messageId,
+              id: s.id,
+              status: s.status as 'pending' | 'confirmed' | 'declined',
+            });
+          } else {
+            loadedSuggestions.push({
+              id: s.id,
+              messageId: s.messageId,
+              actionType: s.actionType,
+              description: s.description,
+              payload: s.payload,
+              status: s.status as 'pending' | 'confirmed' | 'declined',
+            });
+          }
+        }
+
         setSuggestions(loadedSuggestions);
+        setPendingQueries(loadedPendingQueries);
 
         // Scroll to bottom after loading messages
         setTimeout(() => {
@@ -1175,8 +1205,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         setIsFirstMessage(false);
       }
 
-      // Build message history for API with sliding window
-      const allMessages = [...messages, userMessage];
+      // Build message history for API with sliding window (use ref for latest state)
+      const allMessages = [...messagesRef.current, userMessage];
       const contextMessages = allMessages.slice(-chatContextSize);
 
       // Format messages for API - include attachments only on the last (current) message
@@ -1200,6 +1230,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           apiKey: getApiKey(aiProvider),
           baseCurrency: baseCurrency || 'EUR',
           userName: userName || null,
+          language: language || 'de',
         },
       });
 
@@ -1253,16 +1284,16 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                     txn_type: t.txnType,
                     security_name: t.securityName || null,
                     isin: t.isin || null,
-                    shares: t.shares || null,
-                    gross_amount: t.grossAmount || null,
+                    shares: t.shares ?? null,
+                    gross_amount: t.grossAmount ?? null,
                     gross_currency: t.grossCurrency || null,
-                    amount: t.amount || null,
+                    amount: t.amount ?? null,
                     currency: t.currency,
-                    fees: t.fees || null,
-                    fees_foreign: t.feesForeign || null,
+                    fees: t.fees ?? null,
+                    fees_foreign: t.feesForeign ?? null,
                     fees_foreign_currency: t.feesForeignCurrency || null,
-                    exchange_rate: t.exchangeRate || null,
-                    taxes: t.taxes || null,
+                    exchange_rate: t.exchangeRate ?? null,
+                    taxes: t.taxes ?? null,
                     note: t.note || null,
                   })),
                 }
@@ -1361,6 +1392,43 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           }
         }
         setSuggestions((prev) => [...prev, ...savedSuggestions]);
+      }
+
+      // SECURITY: Handle pending queries that need user approval
+      // These are database queries that were NOT auto-executed because approval wasn't given yet
+      if (response.pendingQueries && response.pendingQueries.length > 0) {
+        const savedQueries: Array<PendingQuery & { messageId: number; id?: number; status?: 'pending' | 'confirmed' | 'declined' }> = [];
+        for (const q of response.pendingQueries) {
+          try {
+            const queryId = await invoke<number>('save_chat_suggestion', {
+              messageId: Number(assistantMsgId),
+              conversationId: currentConversationId,
+              actionType: 'sql_query',
+              description: q.description,
+              payload: q.payload,
+            });
+            savedQueries.push({
+              ...q,
+              messageId: Number(assistantMsgId),
+              id: queryId,
+              status: 'pending',
+            });
+          } catch (err) {
+            console.error('Failed to save pending query:', err);
+            savedQueries.push({
+              ...q,
+              messageId: Number(assistantMsgId),
+            });
+          }
+        }
+        setPendingQueries((prev) => [...prev, ...savedQueries]);
+      }
+
+      // UX: Warn user if image was sent but no transactions were extracted
+      const hasImageAttachments = currentAttachments.some(a => a.mimeType.startsWith('image/'));
+      const hasExtractedTransactions = response.suggestions?.some(s => s.actionType === 'extracted_transactions');
+      if (hasImageAttachments && !hasExtractedTransactions && response.response.length < 200) {
+        toast.warning('Keine Transaktionen im Bild erkannt. Versuche ein klareres Bild oder beschreibe den Inhalt.');
       }
     } catch (err) {
       const errorMessage = typeof err === 'string' ? err : String(err);
@@ -1526,7 +1594,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         await invoke('update_suggestion_status', { id: suggestion.id, status: 'confirmed' });
       }
       setSuggestions((prev) =>
-        prev.map((s) => (s.payload === suggestion.payload ? { ...s, status: 'confirmed' as const } : s))
+        prev.map((s) => ((s.id != null && suggestion.id != null ? s.id === suggestion.id : s.payload === suggestion.payload) ? { ...s, status: 'confirmed' as const } : s))
       );
     } catch (err) {
       setError(typeof err === 'string' ? err : String(err));
@@ -1546,8 +1614,134 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       }
     }
     setSuggestions((prev) =>
-      prev.map((s) => (s.payload === suggestion.payload ? { ...s, status: 'declined' as const } : s))
+      prev.map((s) => ((s.id != null && suggestion.id != null ? s.id === suggestion.id : s.payload === suggestion.payload) ? { ...s, status: 'declined' as const } : s))
     );
+  };
+
+  // ============================================================================
+  // Query Approval Handlers (Security Feature)
+  // ============================================================================
+
+  /**
+   * Execute a pending query once without session approval
+   * SECURITY: Query is executed but not approved for future use
+   */
+  const handleApproveQueryOnce = async (query: PendingQuery & { messageId: number; id?: number }) => {
+    if (!currentConversationId) return;
+
+    setExecutingQuery(query.payload);
+    try {
+      // Execute the query without approving the type
+      const results = await invoke<string[]>('execute_pending_query', {
+        queryType: query.queryType,
+        payload: query.payload,
+      });
+
+      // Remove this query from pending
+      setPendingQueries((prev) => prev.filter((q) => q.payload !== query.payload));
+      if (query.id) {
+        await invoke('update_suggestion_status', { id: query.id, status: 'confirmed' });
+      }
+
+      // Show query results as a new message
+      if (results.length > 0) {
+        const resultContent = results.join('\n\n');
+        const msgId = await invoke<number>('save_chat_message', {
+          role: 'assistant',
+          content: resultContent,
+          conversationId: currentConversationId,
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: String(msgId),
+            role: 'assistant',
+            content: resultContent,
+            timestamp: new Date(),
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed to execute query:', err);
+      setError(typeof err === 'string' ? err : String(err));
+    } finally {
+      setExecutingQuery(null);
+    }
+  };
+
+  /**
+   * Approve query type for the entire session and execute
+   * SECURITY: All queries of this type will be auto-approved until app restart
+   * NOTE: This uses execute_sql_query with approve_pattern=true to register the SQL pattern
+   * for automatic approval of similar queries in the future.
+   */
+  const handleApproveQuerySession = async (query: PendingQuery & { messageId: number; id?: number }) => {
+    if (!currentConversationId) return;
+
+    setExecutingQuery(query.payload);
+    try {
+      // Execute all pending queries of this type with pattern approval
+      const sametype = pendingQueries.filter((q) => q.queryType === query.queryType);
+      const allResults: string[] = [];
+
+      for (const q of sametype) {
+        // Parse the SQL from the payload and execute with pattern approval
+        // This registers the SQL pattern so similar queries are auto-approved
+        const sqlQuery = JSON.parse(q.payload) as { sql: string; description: string };
+        const result = await invoke<string>('execute_sql_query', {
+          sql: sqlQuery.sql,
+          approvePattern: true, // This is the key: approve the pattern for future queries
+        });
+        allResults.push(result);
+        if (q.id) {
+          await invoke('update_suggestion_status', { id: q.id, status: 'confirmed' });
+        }
+      }
+
+      // Remove all queries of this type from pending
+      setPendingQueries((prev) => prev.filter((q) => q.queryType !== query.queryType));
+
+      // Show query results as a new message
+      if (allResults.length > 0) {
+        const resultContent = allResults.join('\n\n');
+        const msgId = await invoke<number>('save_chat_message', {
+          role: 'assistant',
+          content: resultContent,
+          conversationId: currentConversationId,
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: String(msgId),
+            role: 'assistant',
+            content: resultContent,
+            timestamp: new Date(),
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed to approve and execute query:', err);
+      setError(typeof err === 'string' ? err : String(err));
+    } finally {
+      setExecutingQuery(null);
+    }
+  };
+
+  /**
+   * Decline a pending query
+   * SECURITY: Query is removed without exposing any data
+   */
+  const handleDeclineQuery = async (query: PendingQuery & { messageId: number; id?: number }) => {
+    setPendingQueries((prev) => prev.filter((q) => q.payload !== query.payload));
+    if (query.id) {
+      try {
+        await invoke('update_suggestion_status', { id: query.id, status: 'declined' });
+      } catch (err) {
+        console.error('Failed to update pending query status:', err);
+      }
+    }
   };
 
   // Handle extracted transactions import
@@ -1567,16 +1761,16 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           txn_type: t.txnType,
           security_name: t.securityName || null,
           isin: t.isin || null,
-          shares: t.shares || null,
-          gross_amount: t.grossAmount || null,
+          shares: t.shares ?? null,
+          gross_amount: t.grossAmount ?? null,
           gross_currency: t.grossCurrency || null,
-          amount: t.amount || null,
+          amount: t.amount ?? null,
           currency: t.currency,
-          fees: t.fees || null,
-          fees_foreign: t.feesForeign || null,
+          fees: t.fees ?? null,
+          fees_foreign: t.feesForeign ?? null,
           fees_foreign_currency: t.feesForeignCurrency || null,
-          exchange_rate: t.exchangeRate || null,
-          taxes: t.taxes || null,
+          exchange_rate: t.exchangeRate ?? null,
+          taxes: t.taxes ?? null,
           note: t.note || null,
         })),
         portfolioId: portfolioId,
@@ -1670,7 +1864,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         await invoke('update_suggestion_status', { id: suggestion.id, status: 'confirmed' });
       }
       setSuggestions((prev) =>
-        prev.map((s) => (s.payload === suggestion.payload ? { ...s, status: 'confirmed' as const } : s))
+        prev.map((s) => ((s.id != null && suggestion.id != null ? s.id === suggestion.id : s.payload === suggestion.payload) ? { ...s, status: 'confirmed' as const } : s))
       );
     } catch (err) {
       setError(typeof err === 'string' ? err : String(err));
@@ -1689,7 +1883,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       }
     }
     setSuggestions((prev) =>
-      prev.map((s) => (s.payload === suggestion.payload ? { ...s, status: 'declined' as const } : s))
+      prev.map((s) => ((s.id != null && suggestion.id != null ? s.id === suggestion.id : s.payload === suggestion.payload) ? { ...s, status: 'declined' as const } : s))
     );
   };
 
@@ -1874,6 +2068,11 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                 ? suggestions.filter((s) => s.messageId === Number(message.id))
                 : [];
 
+              // Get pending queries for this message (security feature)
+              const messagePendingQueries = message.role === 'assistant'
+                ? pendingQueries.filter((q) => q.messageId === Number(message.id))
+                : [];
+
               return (
                 <div key={message.id} className="space-y-3">
                   <ChatMessage message={message} onDelete={deleteMessage} />
@@ -2040,6 +2239,19 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                       </div>
                     );
                   })}
+
+                  {/* SECURITY: Render pending queries that need user approval */}
+                  {messagePendingQueries.map((query, idx) => (
+                    <QueryApprovalCard
+                      key={`query-${message.id}-${idx}`}
+                      query={query}
+                      onApproveOnce={() => handleApproveQueryOnce(query)}
+                      onApproveSession={() => handleApproveQuerySession(query)}
+                      onDecline={() => handleDeclineQuery(query)}
+                      isExecuting={executingQuery === query.payload}
+                      disabled={executingQuery !== null}
+                    />
+                  ))}
                 </div>
               );
             })

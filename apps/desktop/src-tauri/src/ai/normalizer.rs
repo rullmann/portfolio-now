@@ -18,9 +18,10 @@ static RE_CLOSE_BRACKET: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]\s+\]").unwra
 static RE_OPEN_BRACKET: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\s+\[").unwrap());
 static RE_COMMAND_MARKERS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"\[\[\s*(QUERY_DB|WATCHLIST_ADD|WATCHLIST_REMOVE|TRANSACTION_CREATE|TRANSACTION_DELETE|PORTFOLIO_TRANSFER|QUERY_TRANSACTIONS|QUERY_PORTFOLIO_VALUE|EXTRACTED_TRANSACTIONS)\s*:"
+        r"(?i)\[\[\s*(QUERY[\s_]*DB|WATCHLIST[\s_]*ADD|WATCHLIST[\s_]*REMOVE|TRANSACTION[\s_]*CREATE|TRANSACTION[\s_]*DELETE|PORTFOLIO[\s_]*TRANSFER|QUERY[\s_]*TRANSACTIONS|QUERY[\s_]*PORTFOLIO[\s_]*VALUE|EXTRACTED[\s_]*TRANSACTIONS|STRUCTURED[\s_]*QUERY)\s*:"
     ).unwrap()
 });
+// Fixes LLM bug: single closing bracket after JSON (e.g., [[COMMAND:{...}] instead of [[COMMAND:{...}]])
 
 /// Normalize AI response for consistent command parsing
 ///
@@ -33,6 +34,17 @@ static RE_COMMAND_MARKERS: Lazy<Regex> = Lazy::new(|| {
 /// let (commands, cleaned) = parse_db_queries(&normalized);
 /// ```
 pub fn normalize_ai_response(response: &str) -> String {
+    log::info!("=== normalize_ai_response called ===");
+    log::info!("Input length: {}", response.len());
+    if response.contains("[[") {
+        log::info!("Input contains [[, checking for command tags...");
+        // Log the part with [[ for debugging
+        if let Some(idx) = response.find("[[") {
+            let end = (idx + 200).min(response.len());
+            log::info!("Tag region: {}", &response[idx..end]);
+        }
+    }
+
     let mut result = response.to_string();
 
     // 1. Normalize line endings (CRLF → LF)
@@ -41,13 +53,70 @@ pub fn normalize_ai_response(response: &str) -> String {
     // 2. Normalize Unicode whitespace to ASCII space (except newlines)
     result = normalize_unicode_whitespace(&result);
 
-    // 3. Fix bracket spacing: "] ]" → "]]", "[ [" → "[["
+    // 3. Normalize Unicode brackets to ASCII (e.g., 【】 → [[]])
+    result = normalize_unicode_brackets(&result);
+
+    // 4. Fix bracket spacing: "] ]" → "]]", "[ [" → "[["
     //    Also handles "]\n]" and similar patterns
     result = normalize_brackets(&result);
 
-    // 4. Fix command marker spacing: "[[ QUERY_DB :" → "[[QUERY_DB:"
+    // 5. Fix command marker spacing: "[[ QUERY_DB :" → "[[QUERY_DB:"
     result = normalize_command_markers(&result);
 
+    // 6. Fix single closing bracket: [[COMMAND:{...}] → [[COMMAND:{...}]]
+    result = fix_single_close_bracket(&result);
+
+    // DEBUG: Log output
+    if result.contains("[[") {
+        log::info!("=== normalize_ai_response OUTPUT ===");
+        if let Some(idx) = result.find("[[") {
+            let end = (idx + 200).min(result.len());
+            log::info!("Normalized tag region: {}", &result[idx..end]);
+        }
+    }
+
+    result
+}
+
+/// Fixes LLM bug where command tags have only one closing bracket
+/// Example: [[COMMAND:{...}] → [[COMMAND:{...}]]
+fn fix_single_close_bracket(s: &str) -> String {
+    // Match pattern: [[COMMAND:{...}] followed by anything except ]
+    // We look for }] that's NOT followed by another ]
+    static RE_COMMAND_END: Lazy<Regex> = Lazy::new(|| {
+        // Match the }] pattern that might need fixing
+        Regex::new(r"\}\]").unwrap()
+    });
+
+    let mut result = String::with_capacity(s.len() + 10);
+    let mut last_end = 0;
+
+    for mat in RE_COMMAND_END.find_iter(s) {
+        let match_end = mat.end();
+        // Check if next char is NOT a ]
+        let next_char = s.get(match_end..match_end + 1);
+        let needs_fix = next_char != Some("]");
+
+        // Also verify we're inside a command tag by checking backwards for [[
+        let before = &s[..mat.start()];
+        let in_command = {
+            if let Some(bracket_pos) = before.rfind("[[") {
+                let between = &before[bracket_pos..];
+                // Must have [[COMMAND: pattern AND no closing ]] between the [[ and here
+                between.contains(":") && !between.contains("]]")
+            } else {
+                false
+            }
+        };
+
+        if needs_fix && in_command {
+            result.push_str(&s[last_end..match_end]);
+            result.push(']'); // Add the missing ]
+            last_end = match_end;
+        }
+    }
+
+    result.push_str(&s[last_end..]);
     result
 }
 
@@ -66,6 +135,17 @@ fn normalize_unicode_whitespace(s: &str) -> String {
         .collect()
 }
 
+/// Normalize Unicode bracket characters to ASCII equivalents
+/// Handles CJK brackets that some LLMs may output
+fn normalize_unicode_brackets(s: &str) -> String {
+    s.replace('【', "[")   // U+3010 Left Black Lenticular Bracket
+     .replace('】', "]")   // U+3011 Right Black Lenticular Bracket
+     .replace('［', "[")   // U+FF3B Fullwidth Left Square Bracket
+     .replace('］', "]")   // U+FF3D Fullwidth Right Square Bracket
+     .replace('「', "[")   // U+300C Left Corner Bracket
+     .replace('」', "]")   // U+300D Right Corner Bracket
+}
+
 /// Normalize bracket patterns
 /// Handles: "] ]", "]\n]", "] \n]", "[ [", "[\n[" etc.
 fn normalize_brackets(s: &str) -> String {
@@ -76,7 +156,33 @@ fn normalize_brackets(s: &str) -> String {
 /// Normalize command markers
 /// Handles: "[[ QUERY_DB :" → "[[QUERY_DB:", "[[QUERY_DB :" → "[[QUERY_DB:" etc.
 fn normalize_command_markers(s: &str) -> String {
-    RE_COMMAND_MARKERS.replace_all(s, "[[$1:").to_string()
+    RE_COMMAND_MARKERS
+        .replace_all(s, |caps: &regex::Captures| {
+            let raw = &caps[1];
+            let canonical = canonicalize_command_marker(raw);
+            format!("[[{}:", canonical)
+        })
+        .to_string()
+}
+
+/// Normalize command marker variants to canonical UPPER_SNAKE_CASE
+fn canonicalize_command_marker(raw: &str) -> String {
+    let mut out = String::new();
+    let mut last_underscore = false;
+
+    for ch in raw.chars() {
+        if ch.is_ascii_whitespace() || ch == '_' || ch == '-' {
+            if !last_underscore {
+                out.push('_');
+                last_underscore = true;
+            }
+        } else {
+            out.push(ch.to_ascii_uppercase());
+            last_underscore = false;
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -210,6 +316,91 @@ Hier sind die Ergebnisse."#;
     #[test]
     fn test_no_commands() {
         let input = "Das ist eine normale Antwort ohne Commands.";
+        assert_eq!(normalize_ai_response(input), input);
+    }
+
+    #[test]
+    fn test_unicode_brackets_cjk() {
+        // Test CJK lenticular brackets (U+3010, U+3011)
+        let input = "【【QUERY_DB:{}】】";
+        let expected = "[[QUERY_DB:{}]]";
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_unicode_brackets_fullwidth() {
+        // Test fullwidth brackets (U+FF3B, U+FF3D)
+        let input = "［［STRUCTURED_QUERY:{}］］";
+        let expected = "[[STRUCTURED_QUERY:{}]]";
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_unicode_brackets_corner() {
+        // Test corner brackets (U+300C, U+300D)
+        let input = "「「QUERY_DB:{}」」";
+        let expected = "[[QUERY_DB:{}]]";
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_structured_query_marker() {
+        assert_eq!(
+            normalize_ai_response("[[ STRUCTURED_QUERY :{\"from\":\"transactions\"}]]"),
+            "[[STRUCTURED_QUERY:{\"from\":\"transactions\"}]]"
+        );
+    }
+
+    #[test]
+    fn test_structured_query_marker_lowercase() {
+        assert_eq!(
+            normalize_ai_response("[[ structured_query :{\"from\":\"transactions\"}]]"),
+            "[[STRUCTURED_QUERY:{\"from\":\"transactions\"}]]"
+        );
+    }
+
+    #[test]
+    fn test_structured_query_marker_with_space() {
+        assert_eq!(
+            normalize_ai_response("[[ STRUCTURED QUERY :{\"from\":\"transactions\"}]]"),
+            "[[STRUCTURED_QUERY:{\"from\":\"transactions\"}]]"
+        );
+    }
+
+    #[test]
+    fn test_single_close_bracket() {
+        // LLM sometimes generates only one closing bracket
+        let input = r#"[[STRUCTURED_QUERY:{"from":"transactions"}]"#;
+        let expected = r#"[[STRUCTURED_QUERY:{"from":"transactions"}]]"#;
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_single_close_bracket_query_db() {
+        let input = r#"[[QUERY_DB:{"query":"all_dividends"}]"#;
+        let expected = r#"[[QUERY_DB:{"query":"all_dividends"}]]"#;
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_single_close_bracket_with_text() {
+        let input = r#"Hier sind die Ergebnisse:
+
+[[STRUCTURED_QUERY:{"from":"transactions","where":{"type":"BUY"}}]
+
+Das sind alle Käufe."#;
+        let expected = r#"Hier sind die Ergebnisse:
+
+[[STRUCTURED_QUERY:{"from":"transactions","where":{"type":"BUY"}}]]
+
+Das sind alle Käufe."#;
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_double_close_bracket_unchanged() {
+        // Already correct - should not add extra bracket
+        let input = r#"[[STRUCTURED_QUERY:{"from":"transactions"}]]"#;
         assert_eq!(normalize_ai_response(input), input);
     }
 }

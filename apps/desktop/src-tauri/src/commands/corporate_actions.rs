@@ -4,9 +4,10 @@
 //! that affect share counts and cost basis.
 
 use crate::db;
+use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pp::common::shares;
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle};
 
 // ============================================================================
 // Types
@@ -267,7 +268,7 @@ pub fn preview_stock_split(
 
 /// Apply a stock split
 #[command]
-pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateActionResult, String> {
+pub fn apply_stock_split(app: AppHandle, request: ApplyStockSplitRequest) -> Result<CorporateActionResult, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -277,14 +278,15 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
     let inverse_ratio = request.ratio_to as f64 / request.ratio_from as f64;
 
     let mut transactions_adjusted = 0i64;
-    let mut fifo_lots_adjusted = 0i64;
+    let fifo_lots_adjusted: i64;
     let mut prices_adjusted = 0i64;
 
     // 1. Adjust shares in transactions before effective date
+    // Use ROUND() instead of CAST() to avoid truncation errors with fractional ratios (e.g. 3:2 split)
     let result = conn.execute(
         r#"
         UPDATE pp_txn
-        SET shares = CAST(shares * ? AS INTEGER)
+        SET shares = ROUND(shares * ?)
         WHERE security_id = ? AND date < ? AND shares IS NOT NULL
         "#,
         rusqlite::params![ratio, request.security_id, request.effective_date],
@@ -293,27 +295,22 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
         transactions_adjusted = count as i64;
     }
 
-    // 2. Adjust FIFO lots
-    // Adjust shares (both original and remaining) - cost basis stays the same
-    let result = conn.execute(
-        r#"
-        UPDATE pp_fifo_lot
-        SET original_shares = CAST(original_shares * ? AS INTEGER),
-            remaining_shares = CAST(remaining_shares * ? AS INTEGER)
-        WHERE security_id = ? AND purchase_date < ?
-        "#,
-        rusqlite::params![ratio, ratio, request.security_id, request.effective_date],
-    );
-    if let Ok(count) = result {
-        fifo_lots_adjusted = count as i64;
-    }
+    // 2. Rebuild FIFO lots from adjusted transactions (this also rebuilds consumption records)
+    let _ = crate::fifo::build_fifo_lots(conn, request.security_id);
+    fifo_lots_adjusted = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pp_fifo_lot WHERE security_id = ?",
+            [request.security_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
 
     // 3. Adjust historical prices if requested
     if request.adjust_prices {
         let result = conn.execute(
             r#"
             UPDATE pp_price
-            SET value = CAST(value * ? AS INTEGER)
+            SET value = ROUND(value * ?)
             WHERE security_id = ? AND date < ?
             "#,
             rusqlite::params![inverse_ratio, request.security_id, request.effective_date],
@@ -326,9 +323,9 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
         let _ = conn.execute(
             r#"
             UPDATE pp_latest_price
-            SET value = CAST(value * ? AS INTEGER),
-                high = CAST(high * ? AS INTEGER),
-                low = CAST(low * ? AS INTEGER)
+            SET value = ROUND(value * ?),
+                high = ROUND(high * ?),
+                low = ROUND(low * ?)
             WHERE security_id = ? AND date < ?
             "#,
             rusqlite::params![inverse_ratio, inverse_ratio, inverse_ratio, request.security_id, request.effective_date],
@@ -358,6 +355,8 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
         );
     }
 
+    emit_data_changed(&app, DataChangedPayload::transaction("updated", Some(request.security_id)));
+
     Ok(CorporateActionResult {
         success: true,
         message: format!(
@@ -373,6 +372,7 @@ pub fn apply_stock_split(request: ApplyStockSplitRequest) -> Result<CorporateAct
 /// Undo a stock split (reverse the adjustments)
 #[command]
 pub fn undo_stock_split(
+    app: AppHandle,
     security_id: i64,
     effective_date: String,
     ratio_from: i32,
@@ -380,7 +380,7 @@ pub fn undo_stock_split(
     adjust_prices: bool,
 ) -> Result<CorporateActionResult, String> {
     // Simply apply the inverse split
-    apply_stock_split(ApplyStockSplitRequest {
+    apply_stock_split(app, ApplyStockSplitRequest {
         security_id,
         effective_date,
         ratio_from: ratio_to,
@@ -392,7 +392,7 @@ pub fn undo_stock_split(
 
 /// Apply a spin-off (create holdings in new security from existing holdings)
 #[command]
-pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionResult, String> {
+pub fn apply_spin_off(app: AppHandle, request: ApplySpinOffRequest) -> Result<CorporateActionResult, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -428,6 +428,15 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
         .query_row("SELECT id FROM pp_import ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
         .unwrap_or(1);
 
+    // Look up the target security's currency instead of hardcoding EUR
+    let target_currency: String = conn
+        .query_row(
+            "SELECT currency FROM pp_security WHERE id = ?",
+            [request.target_security_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "EUR".to_string());
+
     let mut transactions_created = 0i64;
 
     for (portfolio_id, source_shares) in holdings {
@@ -440,7 +449,7 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
             let _ = conn.execute(
                 r#"
                 INSERT INTO pp_txn (import_id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note)
-                VALUES (?, ?, 'portfolio', ?, ?, 'DELIVERY_INBOUND', ?, 0, 'EUR', ?, ?)
+                VALUES (?, ?, 'portfolio', ?, ?, 'DELIVERY_INBOUND', ?, 0, ?, ?, ?)
                 "#,
                 rusqlite::params![
                     import_id,
@@ -448,6 +457,7 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
                     portfolio_id,
                     request.target_security_id,
                     request.effective_date,
+                    &target_currency,
                     new_shares,
                     request.note.as_deref().unwrap_or("Spin-off")
                 ],
@@ -481,7 +491,7 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
                 let _ = conn.execute(
                     r#"
                     INSERT INTO pp_fifo_lot (security_id, portfolio_id, purchase_txn_id, purchase_date, original_shares, remaining_shares, gross_amount, net_amount, currency)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                     rusqlite::params![
                         request.target_security_id,
@@ -491,7 +501,8 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
                         new_shares,
                         new_shares,
                         allocated_cost,
-                        net_cost
+                        net_cost,
+                        &target_currency
                     ],
                 );
 
@@ -500,8 +511,8 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
                 let _ = conn.execute(
                     r#"
                     UPDATE pp_fifo_lot
-                    SET gross_amount = CAST(gross_amount * ? AS INTEGER),
-                        net_amount = CAST(net_amount * ? AS INTEGER)
+                    SET gross_amount = ROUND(gross_amount * ?),
+                        net_amount = ROUND(net_amount * ?)
                     WHERE security_id = ? AND portfolio_id = ?
                     "#,
                     rusqlite::params![
@@ -514,6 +525,8 @@ pub fn apply_spin_off(request: ApplySpinOffRequest) -> Result<CorporateActionRes
             }
         }
     }
+
+    emit_data_changed(&app, DataChangedPayload::transaction("created", Some(request.target_security_id)));
 
     Ok(CorporateActionResult {
         success: true,
@@ -661,7 +674,7 @@ pub fn preview_merger(
 /// Creates SELL for source and BUY for target (stock component)
 /// Plus cash dividend if cash component exists
 #[command]
-pub fn apply_merger(request: ApplyMergerRequest) -> Result<CorporateActionResult, String> {
+pub fn apply_merger(app: AppHandle, request: ApplyMergerRequest) -> Result<CorporateActionResult, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -838,6 +851,8 @@ pub fn apply_merger(request: ApplyMergerRequest) -> Result<CorporateActionResult
         );
         fifo_lots_adjusted += 1;
     }
+
+    emit_data_changed(&app, DataChangedPayload::transaction("created", Some(request.target_security_id)));
 
     Ok(CorporateActionResult {
         success: true,

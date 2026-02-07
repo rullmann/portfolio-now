@@ -452,3 +452,117 @@ pub fn delete_conversation(id: i64) -> Result<(), String> {
 
     Ok(())
 }
+
+// ============================================================================
+// Query Approval Commands (Security Feature)
+// ============================================================================
+
+use crate::ai::{
+    QueryType,
+    approve_query_type, get_approved_query_types, revoke_all_approvals,
+    // Dynamic SQL executor (replaces query_templates, structured_query, and old QUERY_TRANSACTIONS/QUERY_PORTFOLIO_VALUE)
+    SqlQuery, execute_sql, format_as_markdown, approve_sql_pattern, clear_sql_approvals,
+};
+
+/// Approve a query type for the current session
+/// SECURITY: This allows queries of this type to be executed automatically
+#[command]
+pub fn approve_query_type_for_session(query_type: String) -> Result<(), String> {
+    let qt = match query_type.as_str() {
+        "sql_query" => QueryType::SqlQuery,
+        _ => return Err(format!("Unknown query type: {}", query_type)),
+    };
+
+    approve_query_type(qt);
+    log::info!("Approved query type for session: {}", query_type);
+    Ok(())
+}
+
+/// Execute a pending query after user approval
+/// Returns the query results as formatted strings
+#[command]
+pub fn execute_pending_query(query_type: String, payload: String) -> Result<Vec<String>, String> {
+    match query_type.as_str() {
+        "sql_query" => {
+            // Dynamic SQL query system - the only supported query type
+            let query: SqlQuery = serde_json::from_str(&payload)
+                .map_err(|e| format!("Invalid SQL query payload: {}", e))?;
+
+            use crate::db::get_connection;
+
+            let conn_guard = get_connection()
+                .map_err(|e| format!("Database connection error: {}", e))?;
+            let conn = conn_guard.as_ref()
+                .ok_or_else(|| "Database not initialized".to_string())?;
+
+            let result = execute_sql(conn, &query.sql)
+                .map_err(|e| format!("SQL execution error: {}", e))?;
+
+            Ok(vec![format_as_markdown(&result)])
+        }
+        _ => Err(format!("Unknown query type: {}", query_type)),
+    }
+}
+
+/// Get all currently approved query types for this session
+#[command]
+pub fn get_session_approved_query_types() -> Vec<String> {
+    get_approved_query_types()
+        .into_iter()
+        .map(|qt| match qt {
+            QueryType::SqlQuery => "sql_query".to_string(),
+        })
+        .collect()
+}
+
+/// Revoke all query type approvals for this session
+/// SECURITY: Useful for logout or when user wants to reset permissions
+#[command]
+pub fn revoke_all_query_approvals() {
+    revoke_all_approvals();
+    clear_sql_approvals(); // Also clear SQL pattern approvals
+    log::info!("Revoked all query type approvals");
+}
+
+// ============================================================================
+// SQL Pattern Approval Commands (New Dynamic SQL System)
+// ============================================================================
+
+/// Execute a SQL query and optionally approve its pattern for the session
+/// This is the main entry point for the new dynamic SQL system
+#[command]
+pub fn execute_sql_query(sql: String, approve_pattern: bool) -> Result<String, String> {
+    use crate::db::get_connection;
+
+    // If approve_pattern is true, add this SQL pattern to session approvals
+    if approve_pattern {
+        approve_sql_pattern(&sql);
+        log::info!("Approved SQL pattern for session");
+    }
+
+    // Execute the query
+    let conn_guard = get_connection()
+        .map_err(|e| format!("Database connection error: {}", e))?;
+    let conn = conn_guard.as_ref()
+        .ok_or_else(|| "Database not initialized".to_string())?;
+
+    let result = execute_sql(conn, &sql)
+        .map_err(|e| format!("SQL execution error: {}", e))?;
+
+    Ok(format_as_markdown(&result))
+}
+
+/// Approve a SQL pattern for the current session
+/// Similar patterns will be auto-executed without asking
+#[command]
+pub fn approve_sql_pattern_for_session(sql: String) {
+    approve_sql_pattern(&sql);
+    log::info!("Approved SQL pattern for session");
+}
+
+/// Clear all SQL pattern approvals
+#[command]
+pub fn clear_all_sql_approvals() {
+    clear_sql_approvals();
+    log::info!("Cleared all SQL pattern approvals");
+}

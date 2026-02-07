@@ -1109,6 +1109,7 @@ pub async fn analyze_csv_with_ai(
         analysis_date: "".to_string(),
         base_currency: "EUR".to_string(),
         user_name: None,
+        language: None,
         provider_status: None,
         fees_and_taxes: FeesAndTaxesSummary {
             total_fees: 0.0,

@@ -5,13 +5,45 @@ All notable changes to Portfolio Now will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-02-01
+
+### Changed
+- **Dynamic SQL System**: ChatBot now uses dynamic SQL generation via `sql_executor.rs` instead of fixed templates
+- SQL queries generated as ```sql``` code blocks by the LLM
+- Session-based SQL pattern approval (`sqlApprovalMode: 'always' | 'session' | 'never'`)
+- Configurable error handling (`sqlErrorHandling: 'auto_retry' | 'show_error'`)
+- **AI Models Update**: o3/o4-mini jetzt mit Vision + Web-Suche, gpt-4.1 nur noch Coding-Modell (kein Vision)
+- OpenAI Fallback-Chain: gpt-5-mini → o3 → gpt-4o → gpt-4o-mini
+
+### Added
+- **Query Approval Commands**: `approve_query_type_for_session`, `execute_pending_query`, `get_session_approved_query_types`, `revoke_all_query_approvals` in `commands/chat.rs`
+- **E2E Test**: AI-Chat Playwright Test (`ai-chat.spec.ts`)
+
+### Removed
+- **Query Templates** (~4,800 lines deleted):
+  - `query_templates.rs` - 13 fixed query templates
+  - `structured_query.rs` - Structured query JSON parser
+  - `user_templates.rs` - User-defined template system
+- "Eigene Abfragen" settings section and UI components
+- `UserTemplatesSettings.tsx`, `UserTemplateModal.tsx`
+- `gpt-4.1` aus Vision-Modell-Registry entfernt (Coding-fokussiert, kein Vision-Support)
+
+### Fixed
+- **Tag-Leak Fix**: LLM-generated tags with single closing bracket `]` now normalized to `]]`
+  - Backend: `fix_single_close_bracket()` in `normalizer.rs`
+  - Frontend: `sanitizeCommandTags()` in `SafeMarkdown.tsx`
+- **Version Sync**: `tauri.conf.json` auf 0.1.8 aktualisiert (war auf 0.1.6 stehen geblieben)
+
 ## [0.1.7] - 2026-01-29
+
+> **Hinweis:** Manifest-Versionen (`Cargo.toml`, `package.json`) wurden bei diesem Release versehentlich nicht aktualisiert (blieben auf 0.1.6). Ab 0.1.8 gelten strikte Automatisierungsregeln (siehe CLAUDE.md).
 
 ### Added
 - **Logarithmic Scale**: Chart toggle button for logarithmic/linear Y-axis scale (normal + fullscreen mode)
 - **Historical Quotes Batch**: New modal for batch loading historical prices with progress tracking, spike detection, and cancel support
 - **Inline Quote Assistant**: AI-powered quote configuration suggestions integrated directly in SecurityFormModal
 - **Quote Error Tracking**: Quote fetch errors are now saved to database for debugging
+- **Widget Dashboard**: Drag & drop Widget-Dashboard als alternative Dashboard-Ansicht
 
 ### Changed
 - **Quote UI Refactor**: Consolidated 4 separate quote modals into inline assistant and batch loader
@@ -47,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Extended AI Dropdown**: Header dropdown now shows all 5 AI features
 - **Feature-specific AI Config**: Each AI feature can have its own provider/model
 - **29 New Bank Parsers**: Extended PDF import support
+- **Consortium View**: Neue View für Konzern-/Gruppenübersicht
 
 ### Fixed
 - Dashboard AiFeaturesCard now scrollable to show all 5 features
@@ -99,6 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - AI module extraction for better maintainability
 - Improved crypto provider (CoinGecko, Kraken)
+- **Screener View**: Neue View für Wertpapier-Screening
+- **GPT-5 Mini**: OpenAI gpt-5-mini Modell hinzugefügt
 
 ### Fixed
 - PDF import duplicate detection
@@ -110,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Initial Release**: Complete portfolio tracking application
 - **.portfolio Import/Export**: Full support for Portfolio Performance file format
 - **Quote Providers**: Yahoo Finance, Finnhub, Alpha Vantage, CoinGecko, EZB, TradingView, Portfolio Report
-- **AI Providers**: Claude, OpenAI (GPT-4/5), Gemini, Perplexity with vision support
+- **AI Providers**: Claude (Sonnet/Haiku 4.5), OpenAI (o3, o4-mini, GPT-5 Mini, GPT-4o), Gemini (2.5 Flash/Pro, 3 Flash/Pro Preview), Perplexity (Sonar Pro/Sonar) with vision support
 - **FIFO Cost Basis**: Automatic lot tracking with realized gains calculation
 - **Performance Metrics**: TTWROR, IRR, benchmark comparison (Alpha, Beta, Sharpe)
 - **Technical Analysis**: Candlestick charts with RSI, MACD, Bollinger Bands, SMA/EMA
@@ -125,6 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Corporate Actions**: Stock splits, spin-offs, and mergers
 - **German Tax Report**: Anlage KAP generation
 - **Multi-currency**: ECB exchange rates with automatic conversion
+- **Asset Statement View**: Vermögensaufstellung-Ansicht
 
 ### Technical
 - Tauri 2.9 with Rust backend
@@ -132,6 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQLite database with prost Protobuf
 - pnpm workspaces with Turbo build system
 
+[0.1.8]: https://github.com/rullmann/portfolio-now/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/rullmann/portfolio-now/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/rullmann/portfolio-now/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/rullmann/portfolio-now/compare/v0.1.4...v0.1.5

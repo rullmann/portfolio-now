@@ -202,7 +202,7 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative bg-card border border-border rounded-lg shadow-xl w-full max-w-md mx-4">
+      <div role="dialog" aria-modal="true" className="relative bg-card border border-border rounded-lg shadow-xl w-full max-w-md mx-4">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h2 className="text-lg font-semibold">
@@ -210,6 +210,7 @@ export function AccountFormModal({ isOpen, onClose, onSuccess, account }: Accoun
           </h2>
           <button
             onClick={onClose}
+            aria-label="Schließen"
             className="p-1 hover:bg-muted rounded-md transition-colors"
           >
             <X size={20} />

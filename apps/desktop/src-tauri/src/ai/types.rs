@@ -26,7 +26,8 @@ pub const MAX_TOKENS: u32 = 1500;
 pub const MAX_TOKENS_INSIGHTS: u32 = 2000;
 
 /// Maximum tokens for chat responses
-pub const MAX_TOKENS_CHAT: u32 = 1000;
+/// Note: 4096 needed for SQL queries + explanations + command markers (e.g. EXTRACTED_TRANSACTIONS JSON)
+pub const MAX_TOKENS_CHAT: u32 = 4096;
 
 // ============================================================================
 // Structured AI Errors
@@ -643,6 +644,8 @@ pub struct PortfolioInsightsContext {
 
     // User profile
     pub user_name: Option<String>,
+    /// UI language ("de" or "en") — used to instruct the LLM response language
+    pub language: Option<String>,
 
     // Quote provider status (for AI to know about sync issues)
     pub provider_status: Option<QuoteProviderStatusSummary>,
@@ -720,6 +723,10 @@ pub struct PortfolioChatResponse {
     /// Suggested actions that require user confirmation (watchlist modifications)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suggestions: Vec<ChatSuggestedAction>,
+    /// Pending queries that need user approval before execution
+    /// SECURITY: These queries haven't been approved yet
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub pending_queries: Vec<super::command_parser::PendingQuery>,
 }
 
 // ============================================================================

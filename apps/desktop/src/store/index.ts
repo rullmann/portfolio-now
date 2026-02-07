@@ -446,6 +446,12 @@ interface SettingsState {
   // Chat Context Settings
   chatContextSize: number; // Number of messages to send to AI (sliding window)
   setChatContextSize: (size: number) => void;
+
+  // ChatBot SQL Settings (Dynamic Query System)
+  sqlApprovalMode: 'always' | 'session' | 'never'; // always=ask every time, session=once per pattern, never=auto-execute
+  setSqlApprovalMode: (mode: 'always' | 'session' | 'never') => void;
+  sqlErrorHandling: 'auto_retry' | 'show_error'; // auto_retry=LLM fixes SQL, show_error=show error only
+  setSqlErrorHandling: (mode: 'auto_retry' | 'show_error') => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -557,10 +563,16 @@ export const useSettingsStore = create<SettingsState>()(
       // Chat Context Settings
       chatContextSize: 20, // Default: 20 messages in context window
       setChatContextSize: (size) => set({ chatContextSize: size }),
+
+      // ChatBot SQL Settings (Dynamic Query System)
+      sqlApprovalMode: 'session', // Default: approve once per session per pattern
+      setSqlApprovalMode: (mode) => set({ sqlApprovalMode: mode }),
+      sqlErrorHandling: 'auto_retry', // Default: let LLM fix SQL errors
+      setSqlErrorHandling: (mode) => set({ sqlErrorHandling: mode }),
     }),
     {
       name: 'portfolio-settings',
-      version: 8, // v8: Added quoteAssistant to aiFeatureSettings
+      version: 9, // v9: Added ChatBot SQL settings (sqlApprovalMode, sqlErrorHandling)
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -620,6 +632,12 @@ export const useSettingsStore = create<SettingsState>()(
               model: 'sonar-pro',
             };
           }
+        }
+
+        // Migration v9: Add ChatBot SQL settings
+        if (version < 9) {
+          state.sqlApprovalMode = 'session'; // Default: approve once per session per pattern
+          state.sqlErrorHandling = 'auto_retry'; // Default: let LLM fix SQL errors
         }
 
         return state as SettingsState;

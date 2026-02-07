@@ -255,17 +255,34 @@ pub fn load_portfolio_context(
         0.0
     };
 
-    // Calculate annual dividends
+    // Calculate annual dividends (converted to base currency)
     let dividends_sql = r#"
-        SELECT COALESCE(SUM(amount), 0)
+        SELECT COALESCE(SUM(amount), 0), currency
         FROM pp_txn
         WHERE txn_type = 'DIVIDENDS'
         AND date >= date('now', '-1 year')
+        GROUP BY currency
     "#;
-    let annual_dividends: f64 = conn
-        .query_row(dividends_sql, [], |row| row.get::<_, i64>(0))
-        .map(|v| v as f64 / 100.0)
-        .unwrap_or(0.0);
+    let annual_dividends: f64 = {
+        let mut total = 0.0;
+        if let Ok(mut stmt) = conn.prepare(dividends_sql) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    let (amount_cents, cur) = row;
+                    let amount = amount_cents as f64 / 100.0;
+                    if cur == base_currency {
+                        total += amount;
+                    } else {
+                        total += currency::convert(conn, amount, &cur, base_currency, today)
+                            .unwrap_or(amount);
+                    }
+                }
+            }
+        }
+        total
+    };
 
     // Calculate dividend yield
     let dividend_yield = if total_value > 0.0 {
@@ -301,7 +318,7 @@ pub fn load_portfolio_context(
     let sold_positions = load_sold_positions(conn);
 
     // Load yearly overview
-    let yearly_overview = load_yearly_overview(conn);
+    let yearly_overview = load_yearly_overview(conn, base_currency);
 
     // Calculate TTWROR performance
     let (ttwror, ttwror_annualized) = if let Some(start_date) = first_date {
@@ -330,7 +347,7 @@ pub fn load_portfolio_context(
     let investment_summary = load_investment_summary(conn);
 
     // Load sector/taxonomy allocation
-    let sector_allocation = load_sector_allocation(conn, total_value);
+    let sector_allocation = load_sector_allocation(conn, total_value, base_currency);
 
     // Load portfolio extremes (high/low)
     let portfolio_extremes = load_portfolio_extremes(conn);
@@ -357,6 +374,7 @@ pub fn load_portfolio_context(
         analysis_date: Utc::now().format("%d.%m.%Y").to_string(),
         base_currency: base_currency.to_string(),
         user_name,
+        language: None,
         provider_status,
         fees_and_taxes,
         investment_summary,
@@ -679,8 +697,9 @@ fn load_sold_positions(conn: &Connection) -> Vec<SoldPosition> {
 }
 
 /// Load yearly overview (last 5 years)
-fn load_yearly_overview(conn: &Connection) -> Vec<YearlyOverview> {
+fn load_yearly_overview(conn: &Connection, base_currency: &str) -> Vec<YearlyOverview> {
     let current_year = Utc::now().year();
+    let today = Utc::now().date_naive();
     let mut yearly_overview = Vec::new();
 
     for year in (current_year - 4)..=current_year {
@@ -699,16 +718,33 @@ fn load_yearly_overview(conn: &Connection) -> Vec<YearlyOverview> {
             .map(|v| v as f64 / 100.0)
             .unwrap_or(0.0);
 
-        // Dividends for the year
+        // Dividends for the year (converted to base currency)
         let dividends_sql = r#"
-            SELECT COALESCE(SUM(amount), 0)
+            SELECT COALESCE(SUM(amount), 0), currency
             FROM pp_txn
             WHERE txn_type = 'DIVIDENDS' AND strftime('%Y', date) = ?1
+            GROUP BY currency
         "#;
-        let dividends: f64 = conn
-            .query_row(dividends_sql, [year.to_string()], |row| row.get::<_, i64>(0))
-            .map(|v| v as f64 / 100.0)
-            .unwrap_or(0.0);
+        let dividends: f64 = {
+            let mut total = 0.0;
+            if let Ok(mut stmt) = conn.prepare(dividends_sql) {
+                if let Ok(rows) = stmt.query_map([year.to_string()], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                }) {
+                    for row in rows.flatten() {
+                        let (amount_cents, cur) = row;
+                        let amount = amount_cents as f64 / 100.0;
+                        if cur == base_currency {
+                            total += amount;
+                        } else {
+                            total += currency::convert(conn, amount, &cur, base_currency, today)
+                                .unwrap_or(amount);
+                        }
+                    }
+                }
+            }
+            total
+        };
 
         // Transaction count for the year
         let txn_count_sql = r#"
@@ -971,10 +1007,12 @@ pub fn load_investment_summary(conn: &Connection) -> InvestmentSummary {
 }
 
 /// Load sector/taxonomy allocation
-pub fn load_sector_allocation(conn: &Connection, total_value: f64) -> Vec<SectorAllocation> {
+pub fn load_sector_allocation(conn: &Connection, total_value: f64, base_currency: &str) -> Vec<SectorAllocation> {
     if total_value <= 0.0 {
         return Vec::new();
     }
+
+    let today = Utc::now().date_naive();
 
     let sql = r#"
         SELECT
@@ -988,7 +1026,8 @@ pub fn load_sector_allocation(conn: &Connection, total_value: f64) -> Vec<Sector
                 END
             ), 0) as net_shares,
             lp.value as price,
-            ca.weight as weight
+            ca.weight as weight,
+            s.currency as security_currency
         FROM pp_taxonomy tax
         JOIN pp_classification cls ON cls.taxonomy_id = tax.id
         JOIN pp_classification_assignment ca ON ca.classification_id = cls.id
@@ -1010,13 +1049,28 @@ pub fn load_sector_allocation(conn: &Connection, total_value: f64) -> Vec<Sector
                 row.get::<_, i64>(2)?,
                 row.get::<_, Option<i64>>(3)?,
                 row.get::<_, i32>(4)?,
+                row.get::<_, String>(5)?,
             ))
         }) {
             for row in rows.flatten() {
-                let (tax_name, cls_name, shares_scaled, price_scaled, weight) = row;
+                let (tax_name, cls_name, shares_scaled, price_scaled, weight, security_currency) = row;
                 let shares_val = shares::to_decimal(shares_scaled);
-                let price_val = price_scaled.map(|p| prices::to_decimal(p)).unwrap_or(0.0);
-                let position_value = shares_val * price_val;
+                let price_val = price_scaled.map(|p| {
+                    let pd = prices::to_decimal(p);
+                    if security_currency == "GBX" || security_currency == "GBp" { pd / 100.0 } else { pd }
+                }).unwrap_or(0.0);
+                let convert_currency = if security_currency == "GBX" || security_currency == "GBp" {
+                    "GBP".to_string()
+                } else {
+                    security_currency.clone()
+                };
+                let position_value_native = shares_val * price_val;
+                let position_value = if convert_currency == base_currency {
+                    position_value_native
+                } else {
+                    currency::convert(conn, position_value_native, &convert_currency, base_currency, today)
+                        .unwrap_or(position_value_native)
+                };
                 let weighted_value = position_value * (weight as f64 / 10000.0);
 
                 let entry = taxonomy_map.entry(tax_name).or_default();

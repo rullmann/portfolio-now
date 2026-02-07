@@ -33,10 +33,10 @@ import { AIProviderLogo } from '../../components/common/AIProviderLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { ApiKeyType } from '../../lib/secureStorage';
 import { AttributeTypeManager } from '../../components/attributes';
-import { AiFeatureMatrix, UserTemplatesSettings } from '../../components/settings';
+import { AiFeatureMatrix } from '../../components/settings';
 import type { ValidationStatusSummary, ValidationResponse } from '../../lib/types';
 import { cn } from '../../lib/utils';
-import { MessageSquarePlus } from 'lucide-react';
+// MessageSquarePlus removed - user templates feature deleted
 
 // Settings sections configuration
 const SETTINGS_SECTIONS = [
@@ -44,7 +44,6 @@ const SETTINGS_SECTIONS = [
   { id: 'transactions', name: 'Buchungen', icon: Receipt },
   { id: 'quotes', name: 'Kurse', icon: TrendingUp },
   { id: 'ai', name: 'KI-Analyse', icon: Sparkles },
-  { id: 'queries', name: 'Eigene Abfragen', icon: MessageSquarePlus },
   { id: 'services', name: 'Dienste', icon: Link },
   { id: 'data', name: 'Daten', icon: Database },
   { id: 'danger', name: 'Gefahrenzone', icon: AlertTriangle },
@@ -99,6 +98,10 @@ export function SettingsView() {
     setChatContextSize,
     defaultChartTimeRange,
     setDefaultChartTimeRange,
+    sqlApprovalMode,
+    setSqlApprovalMode,
+    sqlErrorHandling,
+    setSqlErrorHandling,
   } = useSettingsStore();
 
   // SECURITY: Use secure storage for API keys
@@ -1023,21 +1026,65 @@ export function SettingsView() {
                       Der Chat-Verlauf wird vollständig gespeichert, aber nur die letzten {chatContextSize} Nachrichten werden an die KI gesendet.
                     </p>
                   </div>
+
+                  {/* ChatBot SQL Settings */}
+                  <div className="bg-card rounded-lg border border-border p-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Database size={20} className="text-primary" />
+                      <h3 className="text-lg font-semibold">ChatBot SQL-Abfragen</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Einstellungen für dynamisch generierte Datenbank-Abfragen im ChatBot.
+                    </p>
+
+                    {/* SQL Approval Mode */}
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm font-medium">Abfrage-Bestätigung</label>
+                        <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+                          Wie sollen SQL-Abfragen des ChatBots behandelt werden?
+                        </p>
+                        <select
+                          value={sqlApprovalMode}
+                          onChange={(e) => setSqlApprovalMode(e.target.value as 'always' | 'session' | 'never')}
+                          className="mt-1 block w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
+                        >
+                          <option value="always">Immer fragen</option>
+                          <option value="session">Einmal pro Session (empfohlen)</option>
+                          <option value="never">Automatisch ausführen</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {sqlApprovalMode === 'always' && 'Jede Abfrage erfordert eine Bestätigung.'}
+                          {sqlApprovalMode === 'session' && 'Ähnliche Abfragen werden nach einmaliger Bestätigung automatisch ausgeführt.'}
+                          {sqlApprovalMode === 'never' && (
+                            <span className="text-amber-600">Alle Abfragen werden ohne Rückfrage ausgeführt (nur SELECT erlaubt).</span>
+                          )}
+                        </p>
+                      </div>
+
+                      {/* SQL Error Handling */}
+                      <div className="pt-4 border-t border-border">
+                        <label className="text-sm font-medium">Fehlerbehandlung</label>
+                        <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+                          Was soll bei SQL-Fehlern passieren?
+                        </p>
+                        <select
+                          value={sqlErrorHandling}
+                          onChange={(e) => setSqlErrorHandling(e.target.value as 'auto_retry' | 'show_error')}
+                          className="mt-1 block w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
+                        >
+                          <option value="auto_retry">KI korrigieren lassen (empfohlen)</option>
+                          <option value="show_error">Nur Fehler anzeigen</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {sqlErrorHandling === 'auto_retry' && 'Die KI versucht, fehlerhafte Abfragen automatisch zu korrigieren.'}
+                          {sqlErrorHandling === 'show_error' && 'Fehler werden angezeigt, ohne automatische Korrektur.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </>
               )}
-            </div>
-          )}
-
-          {/* User Queries Section */}
-          {activeSection === 'queries' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold mb-1">Eigene Abfragen</h2>
-                <p className="text-sm text-muted-foreground">
-                  Definiere benutzerdefinierte SQL-Abfragen für den ChatBot
-                </p>
-              </div>
-              <UserTemplatesSettings />
             </div>
           )}
 

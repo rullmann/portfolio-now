@@ -23,6 +23,11 @@ fn uses_responses_api(model: &str) -> bool {
     model.starts_with("gpt-5")
 }
 
+/// Check if model is a reasoning model (o3, o4) which requires max_completion_tokens
+fn is_reasoning_model(model: &str) -> bool {
+    model.starts_with("o3") || model.starts_with("o4")
+}
+
 /// Extract text from Responses API response
 fn extract_responses_text(response: &ResponsesApiResponse) -> String {
     response
@@ -40,9 +45,21 @@ fn extract_responses_text(response: &ResponsesApiResponse) -> String {
 #[derive(Serialize)]
 struct ChatCompletionRequest {
     model: String,
-    /// Chat Completions API uses max_tokens (max_completion_tokens is for newer APIs)
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    /// Reasoning models (o3, o4) require max_completion_tokens instead of max_tokens
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     messages: Vec<ChatMessage>,
+}
+
+/// Returns (max_tokens, max_completion_tokens) based on model type
+fn token_limits(model: &str, tokens: u32) -> (Option<u32>, Option<u32>) {
+    if is_reasoning_model(model) {
+        (None, Some(tokens))
+    } else {
+        (Some(tokens), None)
+    }
 }
 
 #[derive(Serialize)]
@@ -177,7 +194,7 @@ fn parse_error(status: u16, body: &str, model: &str) -> AiError {
         500..=599 => AiError::server_error("OpenAI", model, &format!("HTTP {}", status)),
         _ => AiError::other("OpenAI", model, &format!("HTTP {}: {}",
             status,
-            if body.len() > 200 { &body[..200] } else { body }
+            if body.len() > 200 { &body[..body.char_indices().nth(200).map(|(i, _)| i).unwrap_or(body.len())] } else { body }
         )),
     }
 }
@@ -210,9 +227,11 @@ pub async fn analyze(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
+    let (mt, mct) = token_limits(model, MAX_TOKENS);
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_tokens: MAX_TOKENS,
+        max_tokens: mt,
+        max_completion_tokens: mct,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -314,9 +333,11 @@ pub async fn analyze_with_custom_prompt(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
+    let (mt, mct) = token_limits(model, MAX_TOKENS);
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_tokens: MAX_TOKENS,
+        max_tokens: mt,
+        max_completion_tokens: mct,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -412,9 +433,11 @@ pub async fn analyze_with_annotations(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
+    let (mt, mct) = token_limits(model, MAX_TOKENS);
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_tokens: MAX_TOKENS,
+        max_tokens: mt,
+        max_completion_tokens: mct,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -516,9 +539,11 @@ pub async fn analyze_enhanced(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
+    let (mt, mct) = token_limits(model, MAX_TOKENS);
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        max_tokens: MAX_TOKENS,
+        max_tokens: mt,
+        max_completion_tokens: mct,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -607,37 +632,17 @@ pub async fn analyze_enhanced(
 #[derive(Serialize)]
 struct TextChatCompletionRequest {
     model: String,
-    max_tokens: u32,
-    messages: Vec<TextChatMessage>,
-}
-
-/// Request body for chat completion with web search tool (o3, o4-mini)
-#[derive(Serialize)]
-struct TextChatWithToolsRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<TextChatMessage>,
-    tools: Vec<WebSearchTool>,
-}
-
-/// Web search tool configuration
-#[derive(Serialize)]
-struct WebSearchTool {
-    #[serde(rename = "type")]
-    tool_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    search_context_size: Option<String>,
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    messages: Vec<TextChatMessage>,
 }
 
 #[derive(Serialize, Clone)]
 struct TextChatMessage {
     role: String,
     content: String,
-}
-
-/// Check if model supports web search
-fn supports_web_search(model: &str) -> bool {
-    model.starts_with("o3") || model.starts_with("o4")
 }
 
 /// Analyze portfolio with OpenAI (text-only, no image)
@@ -725,9 +730,11 @@ pub async fn analyze_portfolio(
         }
 
         // GPT-4.x and older use Chat Completions API
+        let (mt, mct) = token_limits(model, MAX_TOKENS_INSIGHTS);
         let request_body = TextChatCompletionRequest {
             model: model.to_string(),
-            max_tokens: MAX_TOKENS_INSIGHTS,
+            max_tokens: mt,
+            max_completion_tokens: mct,
             messages: vec![TextChatMessage {
                 role: "user".to_string(),
                 content: prompt.clone(),
@@ -872,9 +879,11 @@ pub async fn analyze_opportunities(
         }
 
         // GPT-4.x and older use Chat Completions API
+        let (mt, mct) = token_limits(model, MAX_TOKENS_INSIGHTS);
         let request_body = TextChatCompletionRequest {
             model: model.to_string(),
-            max_tokens: MAX_TOKENS_INSIGHTS,
+            max_tokens: mt,
+            max_completion_tokens: mct,
             messages: vec![TextChatMessage {
                 role: "user".to_string(),
                 content: prompt.clone(),
@@ -945,7 +954,10 @@ struct MultimodalChatMessage {
 #[derive(Serialize)]
 struct MultimodalChatCompletionRequest {
     model: String,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     messages: Vec<MultimodalChatMessage>,
 }
 
@@ -973,11 +985,9 @@ pub async fn chat(
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
     let system_prompt = build_chat_system_prompt(context);
-    let use_responses_api = uses_responses_api(model);
-    let use_web_search = supports_web_search(model);
-
-    // Check if any message has image attachments
+    // GPT-5 uses Responses API, but only for text-only — images fall back to Chat Completions
     let has_images = messages.iter().any(|m| !m.attachments.is_empty());
+    let use_responses_api = uses_responses_api(model) && !has_images;
 
     let mut last_error = AiError::other("OpenAI", model, "No attempts made");
 
@@ -986,7 +996,7 @@ pub async fn chat(
             tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
         }
 
-        // GPT-5 uses Responses API (text-only for now)
+        // GPT-5 uses Responses API (text-only; images fall through to Chat Completions)
         if use_responses_api {
             // Build messages for Responses API
             let responses_messages: Vec<ResponsesMessage> = messages
@@ -1041,16 +1051,27 @@ pub async fn chat(
 
             let response_text = extract_responses_text(&data);
 
+            if response_text.trim().is_empty() {
+                log::warn!("Empty chat response from OpenAI Responses API (attempt {})", attempt + 1);
+                last_error = AiError::other("OpenAI", model, "Leere Antwort vom Modell");
+                if attempt < MAX_RETRIES {
+                    continue;
+                }
+                return Err(last_error);
+            }
+
             return Ok(PortfolioChatResponse {
                 response: response_text,
                 provider: "OpenAI".to_string(),
                 model: model.to_string(),
                 tokens_used: data.usage.map(|u| u.total_tokens),
                 suggestions: Vec::new(),
+                pending_queries: Vec::new(),
             });
         }
 
-        // GPT-4.x and older use Chat Completions API
+        // Chat Completions API (GPT-4.x, o3, o4, and GPT-5 with images)
+        let (mt, mct) = token_limits(model, MAX_TOKENS_CHAT);
         let response = if has_images {
             // Build multimodal messages with images
             let mut openai_messages: Vec<MultimodalChatMessage> = vec![
@@ -1085,7 +1106,8 @@ pub async fn chat(
 
             let request_body = MultimodalChatCompletionRequest {
                 model: model.to_string(),
-                max_tokens: MAX_TOKENS_CHAT,
+                max_tokens: mt,
+                max_completion_tokens: mct,
                 messages: openai_messages,
             };
 
@@ -1104,26 +1126,13 @@ pub async fn chat(
                 });
             }
 
-            // Send request with or without web search tool
-            if use_web_search {
-                let request_body = TextChatWithToolsRequest {
-                    model: model.to_string(),
-                    max_tokens: MAX_TOKENS_CHAT,
-                    messages: openai_messages.clone(),
-                    tools: vec![WebSearchTool {
-                        tool_type: "web_search_preview".to_string(),
-                        search_context_size: Some("medium".to_string()),
-                    }],
-                };
-                client.post(CHAT_API_URL).json(&request_body).send().await
-            } else {
-                let request_body = TextChatCompletionRequest {
-                    model: model.to_string(),
-                    max_tokens: MAX_TOKENS_CHAT,
-                    messages: openai_messages.clone(),
-                };
-                client.post(CHAT_API_URL).json(&request_body).send().await
-            }
+            let request_body = TextChatCompletionRequest {
+                model: model.to_string(),
+                max_tokens: mt,
+                max_completion_tokens: mct,
+                messages: openai_messages.clone(),
+            };
+            client.post(CHAT_API_URL).json(&request_body).send().await
         };
 
         let response = match response {
@@ -1166,12 +1175,22 @@ pub async fn chat(
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();
 
+        if response_text.trim().is_empty() {
+            log::warn!("Empty chat response from OpenAI (attempt {})", attempt + 1);
+            last_error = AiError::other("OpenAI", model, "Leere Antwort vom Modell");
+            if attempt < MAX_RETRIES {
+                continue;
+            }
+            return Err(last_error);
+        }
+
         return Ok(PortfolioChatResponse {
             response: response_text,
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
             suggestions: Vec::new(),
+            pending_queries: Vec::new(),
         });
     }
 
@@ -1254,9 +1273,11 @@ pub async fn complete_text(
         }
 
         // GPT-4.x and older use Chat Completions API
+        let (mt, mct) = token_limits(model, MAX_TOKENS_INSIGHTS);
         let request_body = TextChatCompletionRequest {
             model: model.to_string(),
-            max_tokens: MAX_TOKENS_INSIGHTS,
+            max_tokens: mt,
+            max_completion_tokens: mct,
             messages: vec![TextChatMessage {
                 role: "user".to_string(),
                 content: prompt.to_string(),

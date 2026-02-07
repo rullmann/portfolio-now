@@ -161,83 +161,25 @@ fn parse_scanner_quote(symbol: &str, data: &ScannerData) -> Result<LatestQuote> 
 
 /// Fetch historical data from TradingView
 ///
-/// Note: TradingView's historical data requires WebSocket connection for full access.
-/// This implementation uses a simplified approach for recent data.
+/// Note: TradingView's scanner API only provides current quotes. Historical OHLCV data
+/// requires a WebSocket connection which is not implemented. This function fetches
+/// the current quote and returns it as a single-day history as a fallback.
 pub async fn fetch_historical(
     symbol: &str,
-    from: NaiveDate,
-    to: NaiveDate,
+    _from: NaiveDate,
+    _to: NaiveDate,
 ) -> Result<Vec<Quote>> {
-    let client = create_client()?;
-    let tv_symbol = normalize_symbol(symbol);
+    // TradingView historical data requires WebSocket (not HTTP). The scanner API
+    // only provides current quotes. Return current quote as single-day fallback.
+    log::debug!("TradingView historical requested for {} — returning current quote only (WebSocket not implemented)", symbol);
 
-    log::debug!("Fetching TradingView historical for {} from {} to {}", tv_symbol, from, to);
-
-    // TradingView's chart API endpoint
-    let url = format!(
-        "https://tvc6.investing.com/57acf75c51e54c65f18a73a3c9d8d999/{}/1/1/8/history?symbol={}&resolution=D&from={}&to={}",
-        Utc::now().timestamp(),
-        urlencoding::encode(&tv_symbol),
-        from.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0),
-        to.and_hms_opt(23, 59, 59).map(|dt| dt.and_utc().timestamp()).unwrap_or(0)
-    );
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow!("TradingView history request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        // Fall back to current quote only if historical fails
-        log::warn!("TradingView historical API unavailable, returning empty history");
-        return Ok(vec![]);
-    }
-
-    let data: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
-    parse_historical_response(&data)
-}
-
-/// Parse historical response
-fn parse_historical_response(data: &serde_json::Value) -> Result<Vec<Quote>> {
-    let mut quotes = Vec::new();
-
-    // Response format: { t: [timestamps], o: [opens], h: [highs], l: [lows], c: [closes], v: [volumes] }
-    let timestamps = data.get("t").and_then(|v| v.as_array());
-    let opens = data.get("o").and_then(|v| v.as_array());
-    let highs = data.get("h").and_then(|v| v.as_array());
-    let lows = data.get("l").and_then(|v| v.as_array());
-    let closes = data.get("c").and_then(|v| v.as_array());
-    let volumes = data.get("v").and_then(|v| v.as_array());
-
-    if let (Some(ts), Some(c)) = (timestamps, closes) {
-        for i in 0..ts.len() {
-            let timestamp = ts.get(i).and_then(|v| v.as_i64()).unwrap_or(0);
-            let close = c.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-            if timestamp == 0 || close == 0.0 {
-                continue;
-            }
-
-            let date = chrono::DateTime::from_timestamp(timestamp, 0)
-                .map(|dt| dt.date_naive())
-                .unwrap_or_else(|| Utc::now().date_naive());
-
-            quotes.push(Quote {
-                date,
-                close,
-                open: opens.and_then(|arr| arr.get(i)).and_then(|v| v.as_f64()),
-                high: highs.and_then(|arr| arr.get(i)).and_then(|v| v.as_f64()),
-                low: lows.and_then(|arr| arr.get(i)).and_then(|v| v.as_f64()),
-                volume: volumes.and_then(|arr| arr.get(i)).and_then(|v| v.as_i64()),
-            });
+    match fetch_quote(symbol).await {
+        Ok(latest) => Ok(vec![latest.quote]),
+        Err(e) => {
+            log::warn!("TradingView historical fallback failed for {}: {}", symbol, e);
+            Ok(vec![])
         }
     }
-
-    // Sort by date ascending
-    quotes.sort_by(|a, b| a.date.cmp(&b.date));
-
-    Ok(quotes)
 }
 
 /// Search for symbols on TradingView

@@ -93,7 +93,7 @@ fn parse_error(status: u16, body: &str, model: &str) -> AiError {
         404 => AiError::model_not_found("Gemini", model, fallback),
         500..=599 => AiError::server_error("Gemini", model, &format!("HTTP {}", status)),
         _ => AiError::other("Gemini", model, &format!("HTTP {}: {}", status,
-            if body.len() > 200 { &body[..200] } else { body }
+            if body.len() > 200 { &body[..body.char_indices().nth(200).map(|(i, _)| i).unwrap_or(body.len())] } else { body }
         )),
     }
 }
@@ -957,12 +957,22 @@ pub async fn chat(
             .and_then(|p| p.text)
             .unwrap_or_default();
 
+        if response_text.trim().is_empty() {
+            log::warn!("Empty chat response from Gemini (attempt {})", attempt + 1);
+            last_error = AiError::other("Gemini", model, "Leere Antwort vom Modell");
+            if attempt < MAX_RETRIES {
+                continue;
+            }
+            return Err(last_error);
+        }
+
         return Ok(PortfolioChatResponse {
             response: response_text,
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
             suggestions: Vec::new(),
+            pending_queries: Vec::new(),
         });
     }
 

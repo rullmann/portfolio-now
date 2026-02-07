@@ -76,7 +76,7 @@ fn parse_error(status: u16, body: &str, model: &str) -> AiError {
     match status {
         429 => {
             if body_lower.contains("quota") || body_lower.contains("billing") ||
-               body_lower.contains("exceeded") || body_lower.contains("limit") {
+               body_lower.contains("exceeded") || body_lower.contains("credits") {
                 AiError::quota_exceeded("Perplexity", model, fallback)
             } else {
                 let retry_after = parse_retry_delay(body);
@@ -95,7 +95,7 @@ fn parse_error(status: u16, body: &str, model: &str) -> AiError {
         500..=599 => AiError::server_error("Perplexity", model, &format!("HTTP {}", status)),
         _ => AiError::other("Perplexity", model, &format!("HTTP {}: {}",
             status,
-            if body.len() > 200 { &body[..200] } else { body }
+            if body.len() > 200 { &body[..body.char_indices().nth(200).map(|(i, _)| i).unwrap_or(body.len())] } else { body }
         )),
     }
 }
@@ -913,12 +913,22 @@ pub async fn chat(
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();
 
+        if response_text.trim().is_empty() {
+            log::warn!("Empty chat response from Perplexity (attempt {})", attempt + 1);
+            last_error = AiError::other("Perplexity", model, "Leere Antwort vom Modell");
+            if attempt < MAX_RETRIES {
+                continue;
+            }
+            return Err(last_error);
+        }
+
         return Ok(PortfolioChatResponse {
             response: response_text,
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
             suggestions: Vec::new(),
+            pending_queries: Vec::new(),
         });
     }
 

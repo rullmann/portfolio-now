@@ -496,7 +496,7 @@ export function TransactionsView() {
                             <div className="flex items-center gap-1">
                               <button
                                 onClick={() => handleEdit(tx)}
-                                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-muted rounded-md transition-all"
+                                className="p-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted rounded-md transition-all"
                                 title="Bearbeiten"
                               >
                                 <Pencil size={14} className="text-muted-foreground" />
@@ -504,7 +504,7 @@ export function TransactionsView() {
                               <button
                                 onClick={() => handleDelete(tx)}
                                 disabled={deletingId === tx.id}
-                                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 rounded-md transition-all disabled:opacity-50"
+                                className="p-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-destructive/10 rounded-md transition-all disabled:opacity-50"
                                 title="Löschen"
                               >
                                 <Trash2

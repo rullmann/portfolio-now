@@ -44,7 +44,8 @@ impl From<&VisionModel> for ModelInfo {
 ///
 /// IMPORTANT: Only include models with confirmed vision/image input support!
 /// - Claude Opus 4.5 has NO vision in API (as of Jan 2026)
-/// - OpenAI o-series (o1, o3, o4) have NO vision
+/// - OpenAI o1 has NO vision (deprecated)
+/// - o3 and o4-mini have vision + web search
 /// - GPT-4.1 is coding-focused, no vision
 pub const VISION_MODELS: &[VisionModel] = &[
     // -------------------------------------------------------------------------
@@ -84,12 +85,6 @@ pub const VISION_MODELS: &[VisionModel] = &[
         id: "gpt-5-mini",
         name: "GPT-5 Mini",
         description: "Neuestes GPT-5, schnell & günstig",
-        provider: "openai",
-    },
-    VisionModel {
-        id: "gpt-4.1",
-        name: "GPT-4.1",
-        description: "Coding-fokussiert, 1M Kontext",
         provider: "openai",
     },
     VisionModel {
@@ -166,15 +161,12 @@ pub const DEPRECATED_MODELS: &[(&str, &str)] = &[
     ("claude-3-7-sonnet", "claude-sonnet-4-5-20250514"),
     ("claude-2.1", "claude-sonnet-4-5-20250514"),
 
-    // OpenAI - o-series has no vision, old models deprecated
-    ("o3", "gpt-4.1"),
-    ("o3-pro", "gpt-4.1"),
-    ("o4-mini", "gpt-4o-mini"),
+    // OpenAI - o1 has no vision, old models deprecated
     ("o1", "gpt-4o"),
     ("o1-preview", "gpt-4o"),
     ("o1-mini", "gpt-4o-mini"),
     ("gpt-4-vision-preview", "gpt-4o"),
-    ("gpt-4-turbo", "gpt-4.1"),
+    ("gpt-4-turbo", "gpt-4o"),
     ("gpt-4-turbo-preview", "gpt-4o"),
 
     // Gemini - old/invalid model names
@@ -200,7 +192,7 @@ pub const DEPRECATED_MODELS: &[(&str, &str)] = &[
 /// Fallback chain per provider (in order of preference)
 pub const FALLBACK_CHAINS: &[(&str, &[&str])] = &[
     ("claude", &["claude-sonnet-4-5-20250514", "claude-haiku-4-5-20251015"]),
-    ("openai", &["gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"]),
+    ("openai", &["gpt-5-mini", "o3", "gpt-4o", "gpt-4o-mini"]),
     ("gemini", &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"]),
     ("perplexity", &["sonar-pro", "sonar"]),
 ];
@@ -312,7 +304,7 @@ mod tests {
     #[test]
     fn test_fallback_chain() {
         assert_eq!(
-            get_fallback("openai", "gpt-4.1"),
+            get_fallback("openai", "o3"),
             Some("gpt-4o")
         );
         assert_eq!(
@@ -331,8 +323,9 @@ mod tests {
 
     #[test]
     fn test_is_valid_model() {
-        assert!(is_valid_model("gpt-4.1"));
+        assert!(is_valid_model("o3"));
         assert!(is_valid_model("claude-sonnet-4-5-20250514"));
+        assert!(!is_valid_model("gpt-4.1")); // coding-focused, no vision
         assert!(!is_valid_model("o1")); // deprecated (no vision)
         assert!(!is_valid_model("nonexistent"));
     }

@@ -46,8 +46,10 @@ pub fn parse_portfolio_file(path: &Path) -> Result<Client> {
     }
 
     // Additional protection: Use take() to limit actual bytes read
+    // Cap pre-allocation to avoid trusting the ZIP header size (could be spoofed)
+    let alloc_hint = (uncompressed_size as usize).min(16 * 1024 * 1024); // max 16 MB pre-alloc
     let mut limited_reader = data_file.take(MAX_UNCOMPRESSED_SIZE);
-    let mut data = Vec::with_capacity(uncompressed_size as usize);
+    let mut data = Vec::with_capacity(alloc_hint);
     limited_reader
         .read_to_end(&mut data)
         .context("Failed to read data.portfolio")?;

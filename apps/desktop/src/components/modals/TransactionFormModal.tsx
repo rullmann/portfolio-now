@@ -57,6 +57,17 @@ interface TransactionFormModalProps {
   transaction?: TransactionData;
 }
 
+/** Safely parse a decimal string and scale to integer.
+ *  Returns null if the value is empty or not a valid number.
+ *  Uses toPrecision(15) to avoid IEEE 754 rounding errors (e.g. 1.255*100=125.5, not 125.49...) */
+function safeScaleToInt(value: string, scale: number): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const num = Number(trimmed);
+  if (isNaN(num) || !isFinite(num)) return null;
+  return Math.round(Number((num * scale).toPrecision(15)));
+}
+
 export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecurityId, transaction }: TransactionFormModalProps) {
   const isEditMode = !!transaction;
   const { deliveryMode } = useSettingsStore();
@@ -146,12 +157,12 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
           // Transfer fields
           otherAccountId: transaction.otherAccountId ? String(transaction.otherAccountId) : '',
           otherPortfolioId: transaction.otherPortfolioId ? String(transaction.otherPortfolioId) : '',
-          // Forex fields (if available)
-          forexAmount: '',
-          forexCurrency: '',
-          exchangeRate: '',
+          // Forex fields - not yet loaded from DB (hasForex flag indicates presence)
+          forexAmount: transaction.forexAmount ? String(transaction.forexAmount) : '',
+          forexCurrency: transaction.forexCurrency || '',
+          exchangeRate: transaction.exchangeRate ? String(transaction.exchangeRate) : '',
         });
-        setForexExpanded(false);
+        setForexExpanded(!!transaction.hasForex);
       } else {
         // Create mode: reset form
         setFormData({
@@ -237,19 +248,29 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
     setIsSubmitting(true);
 
     try {
-      // Prepare request data
-      const amountCents = Math.round(parseFloat(formData.amount) * 100);
+      // Prepare request data with safe numeric parsing
+      const amountCents = safeScaleToInt(formData.amount, 100);
+      if (amountCents == null) {
+        setError('Ungültiger Betrag');
+        setIsSubmitting(false);
+        return;
+      }
       const sharesScaled = formData.shares
-        ? Math.round(parseFloat(formData.shares) * 100_000_000)
+        ? safeScaleToInt(formData.shares, 100_000_000)
         : undefined;
+      if (formData.shares && sharesScaled == null) {
+        setError('Ungültige Stückzahl');
+        setIsSubmitting(false);
+        return;
+      }
 
       if (isEditMode && transaction) {
         // Update existing transaction - send all fields
-        const feeAmountCents = formData.feeAmount && parseFloat(formData.feeAmount) > 0
-          ? Math.round(parseFloat(formData.feeAmount) * 100)
+        const feeAmountCents = formData.feeAmount
+          ? safeScaleToInt(formData.feeAmount, 100) ?? undefined
           : undefined;
-        const taxAmountCents = formData.taxAmount && parseFloat(formData.taxAmount) > 0
-          ? Math.round(parseFloat(formData.taxAmount) * 100)
+        const taxAmountCents = formData.taxAmount
+          ? safeScaleToInt(formData.taxAmount, 100) ?? undefined
           : undefined;
 
         await updateTransaction(transaction.id, {
@@ -285,34 +306,36 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
         };
 
         // Add fee unit if specified
-        if (formData.feeAmount && parseFloat(formData.feeAmount) > 0) {
+        const feeCents = formData.feeAmount ? safeScaleToInt(formData.feeAmount, 100) : null;
+        if (feeCents != null && feeCents > 0) {
           data.units!.push({
             unitType: 'FEE',
-            amount: Math.round(parseFloat(formData.feeAmount) * 100),
+            amount: feeCents,
             currency: formData.currency || selectedOwnerCurrency,
           });
         }
 
         // Add tax unit if specified
-        if (formData.taxAmount && parseFloat(formData.taxAmount) > 0) {
+        const taxCents = formData.taxAmount ? safeScaleToInt(formData.taxAmount, 100) : null;
+        if (taxCents != null && taxCents > 0) {
           data.units!.push({
             unitType: 'TAX',
-            amount: Math.round(parseFloat(formData.taxAmount) * 100),
+            amount: taxCents,
             currency: formData.currency || selectedOwnerCurrency,
           });
         }
 
         // Add forex unit if specified
-        if (formData.forexAmount && parseFloat(formData.forexAmount) > 0 && formData.forexCurrency) {
-          const forexAmountCents = Math.round(parseFloat(formData.forexAmount) * 100);
+        const forexCents = formData.forexAmount ? safeScaleToInt(formData.forexAmount, 100) : null;
+        if (forexCents != null && forexCents > 0 && formData.forexCurrency) {
           const exchangeRateScaled = formData.exchangeRate
-            ? Math.round(parseFloat(formData.exchangeRate) * 100_000_000)
+            ? safeScaleToInt(formData.exchangeRate, 100_000_000) ?? undefined
             : undefined;
           data.units!.push({
             unitType: 'FOREX',
-            amount: forexAmountCents,
+            amount: forexCents,
             currency: formData.currency || selectedOwnerCurrency,
-            forexAmount: forexAmountCents,
+            forexAmount: forexCents,
             forexCurrency: formData.forexCurrency,
             exchangeRate: exchangeRateScaled,
           });
@@ -338,12 +361,13 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative bg-card border border-border rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div role="dialog" aria-modal="true" className="relative bg-card border border-border rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border sticky top-0 bg-card">
           <h2 className="text-lg font-semibold">{isEditMode ? 'Buchung bearbeiten' : 'Neue Buchung'}</h2>
           <button
             onClick={onClose}
+            aria-label="Schließen"
             className="p-1 hover:bg-muted rounded-md transition-colors"
           >
             <X size={20} />

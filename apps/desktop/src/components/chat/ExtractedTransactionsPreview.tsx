@@ -678,7 +678,7 @@ export function ExtractedTransactionsPreview({
                   {/* Exchange rate */}
                   {hasForeignCurrency(txn) && txn.exchangeRate && (
                     <span>
-                      Kurs: 1 {txn.grossCurrency} = {formatNumber(txn.exchangeRate, 4)} {txn.currency}
+                      Kurs: 1 {txn.currency} = {formatNumber(txn.exchangeRate, 4)} {txn.grossCurrency}
                     </span>
                   )}
 

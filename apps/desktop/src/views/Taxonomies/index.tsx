@@ -210,7 +210,7 @@ export function TaxonomiesView() {
             </span>
           )}
 
-          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -318,7 +318,7 @@ export function TaxonomiesView() {
                 >
                   <div className="flex items-center justify-between">
                     <div className="font-medium text-sm">{taxonomy.name}</div>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

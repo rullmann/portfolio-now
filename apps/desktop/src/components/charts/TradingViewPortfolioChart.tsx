@@ -156,10 +156,14 @@ export function TradingViewPortfolioChart({
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    // Use ResizeObserver for container-based resize detection (catches sidebar toggle, panel resizes)
+    const resizeObserver = new ResizeObserver(handleResize);
+    if (chartContainerRef.current) {
+      resizeObserver.observe(chartContainerRef.current);
+    }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;

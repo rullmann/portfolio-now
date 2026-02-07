@@ -352,8 +352,8 @@ fn move_lots_between_portfolios(
 
         // Calculate proportional cost for moved shares
         let proportion = shares_from_lot as f64 / lot.original_shares as f64;
-        let moved_gross = (lot.gross_amount as f64 * proportion) as i64;
-        let moved_net = (lot.net_amount as f64 * proportion) as i64;
+        let moved_gross = (lot.gross_amount as f64 * proportion).round() as i64;
+        let moved_net = (lot.net_amount as f64 * proportion).round() as i64;
 
         // Create new lot in destination portfolio
         let new_lot = FifoLot {

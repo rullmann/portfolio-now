@@ -1271,6 +1271,20 @@ pub fn create_transaction(
         }
     }
 
+    // Validate date format
+    let date_part = data.date.split('T').next().unwrap_or(&data.date);
+    if chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").is_err() {
+        return Err(format!("Invalid date format: '{}' (expected YYYY-MM-DD)", data.date));
+    }
+
+    // Validate transaction type
+    let valid_portfolio_types = ["BUY", "SELL", "TRANSFER_IN", "TRANSFER_OUT", "DELIVERY_INBOUND", "DELIVERY_OUTBOUND"];
+    let valid_account_types = ["DEPOSIT", "REMOVAL", "INTEREST", "INTEREST_CHARGE", "DIVIDENDS", "FEES", "FEES_REFUND", "TAXES", "TAX_REFUND", "BUY", "SELL", "TRANSFER_IN", "TRANSFER_OUT"];
+    let valid_types = if data.owner_type == "portfolio" { &valid_portfolio_types[..] } else { &valid_account_types[..] };
+    if !valid_types.contains(&data.txn_type.as_str()) {
+        return Err(format!("Invalid transaction type '{}' for {}", data.txn_type, data.owner_type));
+    }
+
     let uuid = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -1920,7 +1934,7 @@ pub fn update_transaction(
             .ok();
 
         if let Some(other_id) = other_txn_id {
-            // Update the linked transaction with same date and amount
+            // Update the linked transaction with same date, amount, and other changed fields
             let mut other_updates = Vec::new();
             let mut other_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -1931,6 +1945,28 @@ pub fn update_transaction(
             if let Some(amount) = data.amount {
                 other_updates.push("amount = ?");
                 other_params.push(Box::new(amount));
+            }
+            if let Some(currency) = &data.currency {
+                other_updates.push("currency = ?");
+                other_params.push(Box::new(currency.clone()));
+            }
+            if let Some(shares) = data.shares {
+                other_updates.push("shares = ?");
+                other_params.push(Box::new(shares));
+            }
+            if let Some(security_id) = data.security_id {
+                other_updates.push("security_id = ?");
+                other_params.push(Box::new(security_id));
+            }
+            if let Some(txn_type) = &data.txn_type {
+                // Map portfolio txn_type to account txn_type for the linked side
+                let account_txn_type = match txn_type.as_str() {
+                    "BUY" => "BUY",
+                    "SELL" => "SELL",
+                    _ => txn_type.as_str(),
+                };
+                other_updates.push("txn_type = ?");
+                other_params.push(Box::new(account_txn_type.to_string()));
             }
             other_updates.push("updated_at = datetime('now')");
 

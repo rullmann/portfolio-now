@@ -251,6 +251,7 @@ pub struct PortfolioChatRequest {
     pub api_key: String,
     pub base_currency: String,
     pub user_name: Option<String>,
+    pub language: Option<String>,
 }
 
 /// Chat with portfolio assistant
@@ -284,7 +285,8 @@ pub async fn chat_with_portfolio_assistant(
 
     // Load portfolio context from database with user name
     // For chat, we always include technical signals (no progress events needed)
-    let context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
+    let mut context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
+    context.language = request.language.clone();
 
     // Call the appropriate provider
     let result = match request.provider.as_str() {
@@ -298,7 +300,8 @@ pub async fn chat_with_portfolio_assistant(
     // Process the result using the secure suggestion-based command parser
     // SECURITY: This uses parse_response_with_suggestions which:
     // - Returns watchlist modifications as SUGGESTIONS (not executed)
-    // - Only executes read-only queries (transactions, portfolio value)
+    // - Returns unapproved queries as PENDING_QUERIES (not executed)
+    // - Only executes read-only queries that have been approved
     match result {
         Ok(mut response) => {
             // Parse response and extract suggestions (watchlist commands NOT executed)
@@ -307,7 +310,7 @@ pub async fn chat_with_portfolio_assistant(
             // Update response with cleaned text
             response.response = parsed.cleaned_response;
 
-            // Append query results if any (read-only queries are safe to execute)
+            // Append query results if any (only approved queries are executed)
             if !parsed.query_results.is_empty() {
                 if response.response.trim().is_empty() || response.response.len() < 10 {
                     response.response = parsed.query_results.join("\n\n");
@@ -326,6 +329,38 @@ pub async fn chat_with_portfolio_assistant(
                     payload: s.payload,
                 })
                 .collect();
+
+            // Add pending queries that need user approval
+            // SECURITY: These queries haven't been approved yet
+            response.pending_queries = parsed.pending_queries;
+
+            // If cleaned response is empty but we have pending queries, set informative text
+            if response.response.trim().is_empty() && !response.pending_queries.is_empty() {
+                response.response = "Für diese Anfrage ist eine Abfrage nötig. Bitte bestätige unten.".to_string();
+            }
+
+            // FIX: If response is empty but we have suggestions (e.g., extracted transactions, watchlist),
+            // generate a helpful message so user doesn't see empty bubble
+            if response.response.trim().is_empty() && !response.suggestions.is_empty() {
+                let suggestion_types: Vec<&str> = response.suggestions.iter()
+                    .map(|s| s.action_type.as_str())
+                    .collect();
+
+                if suggestion_types.contains(&"extracted_transactions") {
+                    response.response = "Ich habe Transaktionen im Bild erkannt. Bitte prüfe und bestätige unten.".to_string();
+                } else if suggestion_types.contains(&"transaction_create") {
+                    response.response = "Ich habe eine Transaktion vorbereitet. Bitte prüfe und bestätige unten.".to_string();
+                } else if suggestion_types.iter().any(|t| t.starts_with("watchlist")) {
+                    response.response = "Ich habe eine Watchlist-Änderung vorbereitet. Bitte bestätige unten.".to_string();
+                } else {
+                    response.response = "Ich habe Aktionen vorbereitet. Bitte prüfe und bestätige unten.".to_string();
+                }
+            }
+
+            // FIX: If response is STILL empty and images were attached, provide feedback
+            if response.response.trim().is_empty() && has_images {
+                response.response = "Ich konnte keine Transaktionen im Bild erkennen. Bitte stelle sicher, dass das Bild eine Broker-Abrechnung, einen Kontoauszug oder eine Transaktionsübersicht zeigt. Du kannst auch beschreiben, was importiert werden soll.".to_string();
+            }
 
             Ok(response)
         }
@@ -448,6 +483,17 @@ pub fn execute_confirmed_portfolio_transfer(
     let cmd: PortfolioTransferCommand = serde_json::from_str(&payload)
         .map_err(|e| format!("Invalid transfer payload: {}", e))?;
 
+    // Look up the security's currency from the database
+    let security_currency = {
+        let conn_guard = crate::db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or_else(|| "Database not initialized".to_string())?;
+        conn.query_row(
+            "SELECT currency FROM pp_security WHERE id = ?1",
+            [cmd.security_id],
+            |row| row.get::<_, String>(0),
+        ).unwrap_or_else(|_| "EUR".to_string())
+    };
+
     // Create DELIVERY_OUTBOUND from source portfolio
     let outbound_request = CreateTransactionRequest {
         owner_type: "portfolio".to_string(),
@@ -455,7 +501,7 @@ pub fn execute_confirmed_portfolio_transfer(
         txn_type: "DELIVERY_OUTBOUND".to_string(),
         date: cmd.date.clone(),
         amount: 0, // Deliveries don't have an amount
-        currency: "EUR".to_string(), // Will be updated by the system
+        currency: security_currency.clone(),
         shares: Some(cmd.shares),
         security_id: Some(cmd.security_id),
         note: cmd.note.clone(),
@@ -473,7 +519,7 @@ pub fn execute_confirmed_portfolio_transfer(
         txn_type: "DELIVERY_INBOUND".to_string(),
         date: cmd.date.clone(),
         amount: 0,
-        currency: "EUR".to_string(),
+        currency: security_currency,
         shares: Some(cmd.shares),
         security_id: Some(cmd.security_id),
         note: cmd.note.clone(),

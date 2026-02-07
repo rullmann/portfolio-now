@@ -131,7 +131,7 @@ pub async fn fetch_quote(symbol: &str, api_key: &str) -> Result<LatestQuote> {
     Ok(LatestQuote {
         symbol: symbol.to_string(),
         name: None, // Finnhub Quote API doesn't return name
-        currency: Some("USD".to_string()), // Finnhub primarily returns USD prices
+        currency: None, // Let the security's configured currency be used (Finnhub supports international stocks)
         quote: Quote {
             date,
             close: data.c,

@@ -419,25 +419,58 @@ pub fn extract_pdf_text(pdf_path: &str) -> Result<String, String> {
 
     let extractor_path = find_pdf_extractor()?;
 
-    let output = Command::new(&extractor_path)
+    let mut child = Command::new(&extractor_path)
         .arg(pdf_path)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("PDF-Extractor konnte nicht gestartet werden: {}", e))?;
 
-    match output.status.code() {
-        Some(0) => {
-            let text = String::from_utf8_lossy(&output.stdout).to_string();
-            log::info!("PDF Extract: Success, extracted {} chars", text.len());
-            Ok(text)
-        }
-        Some(code) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("PDF Extract: Exit code {}, stderr: {}", code, stderr);
-            Err(format!("PDF-Extraktion fehlgeschlagen (Code {}): {}", code, stderr.trim()))
-        }
-        None => {
-            log::error!("PDF Extract: Process was killed");
-            Err("PDF-Verarbeitung abgebrochen".to_string())
+    // Wait with timeout (60 seconds max for PDF extraction)
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child.stdout.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                let stderr = child.stderr.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+
+                match status.code() {
+                    Some(0) => {
+                        let text = String::from_utf8_lossy(&stdout).to_string();
+                        log::info!("PDF Extract: Success, extracted {} chars", text.len());
+                        return Ok(text);
+                    }
+                    Some(code) => {
+                        let err = String::from_utf8_lossy(&stderr);
+                        log::error!("PDF Extract: Exit code {}, stderr: {}", code, err);
+                        return Err(format!("PDF-Extraktion fehlgeschlagen (Code {}): {}", code, err.trim()));
+                    }
+                    None => {
+                        log::error!("PDF Extract: Process was killed");
+                        return Err("PDF-Verarbeitung abgebrochen".to_string());
+                    }
+                }
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    log::error!("PDF Extract: Timeout after {:?}", timeout);
+                    return Err("PDF-Extraktion Zeitüberschreitung (>60s)".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(format!("PDF-Extractor Fehler: {}", e));
+            }
         }
     }
 }

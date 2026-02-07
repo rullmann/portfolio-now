@@ -425,7 +425,7 @@ export function DividendsView() {
               <span className="text-muted-foreground">...</span>
             ) : (
               formatCurrency(
-                (currentYearData?.totalNet || 0) / (new Date().getMonth() + 1),
+                (currentYearData?.totalNet || 0) / (selectedYear === new Date().getFullYear() ? new Date().getMonth() + 1 : 12),
                 currentYearData?.currency || 'EUR'
               )
             )}

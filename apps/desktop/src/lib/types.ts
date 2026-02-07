@@ -134,6 +134,9 @@ export interface TransactionData {
   fees: number;
   taxes: number;
   hasForex: boolean;
+  forexAmount?: number;
+  forexCurrency?: string;
+  exchangeRate?: number;
   source?: string;
   updatedAt?: string;
   // Transfer tracking (PP fields)
@@ -2148,51 +2151,7 @@ export interface QuoteAssistantResponse {
   tokensUsed?: number;
 }
 
-// ============================================================================
-// User-defined Query Template Types
-// ============================================================================
-
-/** Parameter definition for a user template */
-export interface UserTemplateParam {
-  id?: number;
-  paramName: string;
-  paramType: 'string' | 'number' | 'date' | 'year';
-  required: boolean;
-  description: string;
-  defaultValue?: string;
-}
-
-/** User-defined query template */
-export interface UserTemplate {
-  id: number;
-  templateId: string;
-  name: string;
-  description: string;
-  sqlQuery: string;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
-  parameters: UserTemplateParam[];
-}
-
-/** Input for creating/updating a user template */
-export interface UserTemplateInput {
-  name: string;
-  description: string;
-  sqlQuery: string;
-  enabled?: boolean;
-  parameters: UserTemplateParam[];
-}
-
-/** Result of testing a user template */
-export interface UserTemplateTestResult {
-  success: boolean;
-  rowCount: number;
-  columns: string[];
-  previewRows: Record<string, unknown>[];
-  formattedMarkdown: string;
-  error?: string;
-}
+// NOTE: User-defined Query Template Types removed - replaced by dynamic SQL system
 
 /**
  * Security with quote issue for the assistant
@@ -2208,4 +2167,64 @@ export interface ProblematicSecurity {
   problemType: 'no_provider' | 'fetch_error' | 'stale';
   problemDescription: string;
   lastQuoteDate?: string;
+}
+
+// ============================================================================
+// Query Approval Types (Security Feature)
+// ============================================================================
+
+/**
+ * Type of database query that requires user approval
+ */
+export type QueryType = 'sql_query' | 'transaction_query' | 'portfolio_value_query' | 'database_query' | 'structured_query';
+
+/**
+ * A pending query that requires user approval before execution
+ * SECURITY: These queries haven't been approved yet
+ */
+export interface PendingQuery {
+  queryType: QueryType;
+  description: string;
+  payload: string;
+  templateId?: string;
+}
+
+/**
+ * Get a human-readable label for a query type
+ */
+export function getQueryTypeLabel(queryType: QueryType): string {
+  switch (queryType) {
+    case 'sql_query':
+      return 'SQL-Abfrage';
+    case 'transaction_query':
+      return 'Transaktionsabfrage';
+    case 'portfolio_value_query':
+      return 'Depotwert-Abfrage';
+    case 'database_query':
+      return 'Datenbank-Abfrage';
+    case 'structured_query':
+      return 'Datenbank-Abfrage';
+    default:
+      return 'Unbekannte Abfrage';
+  }
+}
+
+/**
+ * Get a description for what a query type does
+ */
+export function getQueryTypeDescription(queryType: QueryType): string {
+  switch (queryType) {
+    case 'sql_query':
+      return 'Datenbankabfrage per SQL (nur Lesen)';
+    case 'transaction_query':
+      return 'Zugriff auf Transaktionsdaten (Käufe, Verkäufe, Dividenden)';
+    case 'portfolio_value_query':
+      return 'Abfrage historischer Depotwerte';
+    case 'database_query':
+      return 'Erweiterte Datenbankabfragen';
+    case 'structured_query':
+      return 'Erweiterte Datenbankabfragen';
+    default:
+      return 'Unbekannter Abfragetyp';
+  }
 }

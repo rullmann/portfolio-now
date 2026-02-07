@@ -304,6 +304,9 @@ pub struct TransactionData {
     pub fees: f64,
     pub taxes: f64,
     pub has_forex: bool,
+    pub forex_amount: Option<f64>,
+    pub forex_currency: Option<String>,
+    pub exchange_rate: Option<f64>,
 }
 
 /// Get transactions with optional filters
@@ -327,7 +330,10 @@ pub fn get_transactions(
                 t.security_id, s.name as security_name, s.uuid as security_uuid, t.note,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'FEE'), 0) as fees,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes,
-                EXISTS(SELECT 1 FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL) as has_forex
+                EXISTS(SELECT 1 FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL) as has_forex,
+                (SELECT forex_amount FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL LIMIT 1) as forex_amount,
+                (SELECT forex_currency FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL LIMIT 1) as forex_currency,
+                (SELECT exchange_rate FROM pp_txn_unit WHERE txn_id = t.id AND forex_amount IS NOT NULL LIMIT 1) as exchange_rate
          FROM pp_txn t
          LEFT JOIN pp_account a ON t.owner_type = 'account' AND a.id = t.owner_id
          LEFT JOIN pp_portfolio p ON t.owner_type = 'portfolio' AND p.id = t.owner_id
@@ -378,6 +384,8 @@ pub fn get_transactions(
             let shares_raw: Option<i64> = row.get(9)?;
             let fees_cents: i64 = row.get(14)?;
             let taxes_cents: i64 = row.get(15)?;
+            let forex_amount_cents: Option<i64> = row.get(17)?;
+            let exchange_rate_raw: Option<i64> = row.get(19)?;
 
             Ok(TransactionData {
                 id: row.get(0)?,
@@ -397,6 +405,9 @@ pub fn get_transactions(
                 fees: fees_cents as f64 / 100.0,
                 taxes: taxes_cents as f64 / 100.0,
                 has_forex: row.get::<_, i32>(16)? != 0,
+                forex_amount: forex_amount_cents.map(|c| c as f64 / 100.0),
+                forex_currency: row.get(18)?,
+                exchange_rate: exchange_rate_raw.map(|r| r as f64 / 100_000_000.0),
             })
         })
         .filter_map(|r| r.ok())

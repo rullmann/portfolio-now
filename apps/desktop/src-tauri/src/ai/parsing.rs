@@ -45,7 +45,7 @@ pub fn parse_annotation_response(raw: &str) -> Result<AnnotationAnalysisJson> {
         .trim();
 
     serde_json::from_str(cleaned)
-        .map_err(|e| anyhow!("Failed to parse AI JSON response: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
+        .map_err(|e| anyhow!("Failed to parse AI JSON response: {}. Raw: {}", e, raw.chars().take(200).collect::<String>()))
 }
 
 /// Parse enhanced JSON response from AI into structured annotations with alerts and risk/reward.
@@ -59,7 +59,7 @@ pub fn parse_enhanced_annotation_response(raw: &str) -> Result<EnhancedAnnotatio
         .trim();
 
     serde_json::from_str(cleaned)
-        .map_err(|e| anyhow!("Failed to parse enhanced AI JSON response: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
+        .map_err(|e| anyhow!("Failed to parse enhanced AI JSON response: {}. Raw: {}", e, raw.chars().take(200).collect::<String>()))
 }
 
 /// Calculate exponential backoff delay
