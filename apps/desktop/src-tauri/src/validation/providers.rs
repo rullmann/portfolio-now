@@ -328,12 +328,15 @@ fn calculate_name_similarity(name1: &str, name2: &str) -> f64 {
     let name1_lower = name1.to_lowercase();
     let name2_lower = name2.to_lowercase();
 
-    let words1: std::collections::HashSet<&str> = name1_lower
+    // Strip trailing punctuation (e.g., "inc." → "inc") for fair comparison
+    let words1: Vec<String> = name1_lower
         .split_whitespace()
+        .map(|w| w.trim_end_matches(|c: char| c.is_ascii_punctuation()).to_string())
         .filter(|w| w.len() > 2)
         .collect();
-    let words2: std::collections::HashSet<&str> = name2_lower
+    let words2: Vec<String> = name2_lower
         .split_whitespace()
+        .map(|w| w.trim_end_matches(|c: char| c.is_ascii_punctuation()).to_string())
         .filter(|w| w.len() > 2)
         .collect();
 
@@ -341,13 +344,22 @@ fn calculate_name_similarity(name1: &str, name2: &str) -> f64 {
         return 0.0;
     }
 
-    let intersection = words1.intersection(&words2).count();
-    let union = words1.union(&words2).count();
+    // Count matches: exact match or one is a prefix of the other (e.g., "corp" ⊂ "corporation")
+    let mut matches = 0;
+    for w1 in &words1 {
+        for w2 in &words2 {
+            if w1 == w2 || w1.starts_with(w2.as_str()) || w2.starts_with(w1.as_str()) {
+                matches += 1;
+                break;
+            }
+        }
+    }
 
-    if union == 0 {
+    let max_words = words1.len().max(words2.len());
+    if max_words == 0 {
         0.0
     } else {
-        intersection as f64 / union as f64
+        matches as f64 / max_words as f64
     }
 }
 

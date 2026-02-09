@@ -376,11 +376,11 @@ fn validate_and_correct_date(date_str: &str) -> Option<String> {
 /// Check if a date is plausible (not too far in future, not too old)
 fn validate_date_plausibility(date: NaiveDate) -> Option<String> {
     let today = Local::now().date_naive();
-    let min_date = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    let min_date = NaiveDate::from_ymd_opt(1970, 1, 1)?;
     let max_date = today + chrono::Duration::days(30); // Allow up to 30 days in future for settlements
 
     if date < min_date {
-        log::warn!("Date {} is too old (before 2000), likely AI misread", date);
+        log::warn!("Date {} is too old (before 1970), likely AI misread", date);
         return None;
     }
 
@@ -393,7 +393,7 @@ fn validate_date_plausibility(date: NaiveDate) -> Option<String> {
 }
 
 /// Validate extracted transaction and fix common issues
-fn normalize_extracted_txn_type(raw: &str) -> String {
+pub fn normalize_extracted_txn_type(raw: &str) -> String {
     let normalized = raw.trim().to_uppercase();
     let normalized = normalized.replace(' ', "_").replace('-', "_");
 

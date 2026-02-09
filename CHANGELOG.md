@@ -34,6 +34,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Frontend: `sanitizeCommandTags()` in `SafeMarkdown.tsx`
 - **Version Sync**: `tauri.conf.json` auf 0.1.8 aktualisiert (war auf 0.1.6 stehen geblieben)
 
+### Security & Stability Audit (2026-02-09)
+
+#### CRITICAL Fixes
+- **IRR Doppelzählung**: DELIVERY-Cashflows wurden in `get_cash_flows_with_fallback()` doppelt gezählt (bereits in `get_cash_flows()` enthalten)
+- **Debug-Datei entfernt**: `/tmp/irr-debug-output.txt` wurde im Release-Build geschrieben (`performance/mod.rs`)
+- **SQL-Injection Härtung**: Comment-Stripping (`-- / /* */`), Semicolon-Schutz, CTE-Blocking, neue verbotene Keywords (`LOAD_EXTENSION`, `SAVEPOINT`, `RELEASE`) in `sql_executor.rs`
+- **DB Mutex Absturz**: `DB.lock().unwrap()` → sicheres Error-Handling in `db/mod.rs`
+
+#### HIGH Fixes
+- **Rate Limiting aktiviert**: `check_rate_limit()` jetzt aktiv für `sync_all_prices`, `analyze_chart_with_ai`, `chat_with_portfolio_assistant`
+- **FIFO Error-Logging**: Stille `.filter_map(|r| r.ok())` durch explizites `log::warn!` ersetzt
+- **FIFO Rundungsfehler**: Letzter Lot-Verbrauch nutzt Rest statt erneute Rundung (verhindert Cent-Differenzen)
+- **Performance unwrap()**: `.first().unwrap()` / `.last().unwrap()` durch Pattern-Matching ersetzt
+- **TTWROR Fallback-Warnung**: Warnt wenn Cashflows bei einfacher Berechnung ignoriert werden
+
+#### MEDIUM Fixes
+- **CSP gehärtet**: `connect-src` von `https:` auf 15 explizite API-Domains eingeschränkt
+- **Input-Sanitization aktiviert**: `sanitize_string()` jetzt in `create_security` und `create_account` aktiv
+- **TRANSFER_IN Fallback**: Nutzt Transaktionsbetrag statt 0 für Cost Basis
+- **Stale Exchange Rates**: Wechselkurse > 180 Tage werden abgelehnt
+- **SQL format!() dokumentiert**: Tech-Debt-Kommentar für i64-sichere Werte
+
+#### LOW Fixes
+- **Profilbild MIME-Validierung**: Nur `data:image/` wird akzeptiert in ChatMessage
+- **Externe Links**: Via Tauri Shell API statt `target="_blank"` (SafeMarkdown, DivvyDiaryExportModal)
+- **userName Limit**: Eingabe auf 50 Zeichen begrenzt in Settings
+
+#### ChatBot Fixes
+- **Fees/Taxes verloren**: `execute_confirmed_transaction` erstellt jetzt FEE/TAX-Units
+- **Wechselkurs-Richtung**: `compute_dividend_gross_amount` und `normalize_extracted_fees` korrigiert (`gross / rate` statt `gross * rate`)
+- **SSOT**: Doppelte `normalize_extracted_txn_type` entfernt (jetzt nur in `command_parser.rs`)
+- **Input-Wiederherstellung**: Chat-Input wird bei Fehler wiederhergestellt (nicht nur Retry-Button)
+- **Suggestions bei DB-Fehler**: Werden trotzdem in der UI angezeigt
+- **Context-Logging**: `load_portfolio_context` loggt jetzt DB-Fehler statt sie zu schlucken
+- **Datum-Validierung**: Minimum von 2000 auf 1970 geändert (historische Transaktionen)
+
+#### Test Fixes
+- **AiQuoteSuggestion**: `#[serde(alias = "feed_url")]` — akzeptiert jetzt snake_case und camelCase
+- **Name-Similarity**: Trailing-Punctuation-Stripping + Prefix-Matching für Abkürzungen (z.B. "Corp" ↔ "Corporation")
+- 6 neue SQL-Validierungs-Tests in `sql_executor.rs`
+- **Ergebnis**: 313 Tests bestanden, 0 Fehler (vorher 311 bestanden, 2 Fehler)
+
 ## [0.1.7] - 2026-01-29
 
 > **Hinweis:** Manifest-Versionen (`Cargo.toml`, `package.json`) wurden bei diesem Release versehentlich nicht aktualisiert (blieben auf 0.1.6). Ab 0.1.8 gelten strikte Automatisierungsregeln (siehe CLAUDE.md).

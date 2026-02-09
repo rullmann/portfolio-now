@@ -472,7 +472,7 @@ pub fn init_database(path: &Path) -> Result<()> {
     // Run migrations for existing databases
     run_migrations(&conn)?;
 
-    *DB.lock().unwrap() = Some(conn);
+    *DB.lock().map_err(|e| anyhow::anyhow!("Failed to lock database mutex: {}", e))? = Some(conn);
     Ok(())
 }
 

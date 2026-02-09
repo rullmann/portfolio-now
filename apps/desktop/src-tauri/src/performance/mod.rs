@@ -321,9 +321,10 @@ fn calculate_ttwror_from_data(
     valuations: &[(NaiveDate, f64)],
     cash_flows: &[CashFlow],
 ) -> (f64, Vec<PeriodReturn>) {
-    if valuations.len() < 2 {
-        return (0.0, vec![]);
-    }
+    let (first_val, last_val) = match (valuations.first(), valuations.last()) {
+        (Some(f), Some(l)) if valuations.len() >= 2 => (f, l),
+        _ => return (0.0, vec![]),
+    };
 
     let mut periods = Vec::new();
     let mut cumulative_return = 1.0;
@@ -333,14 +334,14 @@ fn calculate_ttwror_from_data(
 
     // If no cash flows, just calculate simple return over entire period
     if cf_dates.is_empty() {
-        let start_value = valuations.first().unwrap().1;
-        let end_value = valuations.last().unwrap().1;
+        let start_value = first_val.1;
+        let end_value = last_val.1;
 
         if start_value > 0.0 {
             let period_return = end_value / start_value - 1.0;
             periods.push(PeriodReturn {
-                start_date: valuations.first().unwrap().0,
-                end_date: valuations.last().unwrap().0,
+                start_date: first_val.0,
+                end_date: last_val.0,
                 start_value,
                 end_value,
                 cash_flow: 0.0,
@@ -355,8 +356,8 @@ fn calculate_ttwror_from_data(
     cf_dates.sort();
 
     // Process sub-periods between cash flows
-    let first_val_date = valuations.first().unwrap().0;
-    let last_val_date = valuations.last().unwrap().0;
+    let first_val_date = first_val.0;
+    let last_val_date = last_val.0;
 
     // Build sub-periods: start → cf1 → cf2 → ... → end
     let mut period_boundaries: Vec<NaiveDate> = vec![first_val_date];
@@ -477,7 +478,10 @@ fn find_value_at_or_near(valuations: &[(NaiveDate, f64)], target_date: NaiveDate
 
 /// Fallback to simple return when not enough valuation data
 ///
-/// Fix: Now uses portfolio value at end_date (not always today) for historical periods
+/// WARNING: This is a simple (value - cost) / cost calculation that does NOT
+/// account for external cash flows (deposits/withdrawals). Results may be
+/// significantly inaccurate for portfolios with many cash flows.
+/// Used only when fewer than 2 valuation data points are available.
 fn calculate_ttwror_simple_fallback(
     conn: &Connection,
     portfolio_id: Option<i64>,
@@ -490,6 +494,16 @@ fn calculate_ttwror_simple_fallback(
 
     // Get cost basis at start_date
     let cost_basis = get_total_cost_basis_with_currency(conn, portfolio_id)?;
+
+    // Check for cash flows to warn about inaccuracy
+    let cash_flows = get_cash_flows(conn, portfolio_id, start_date, end_date)?;
+    if !cash_flows.is_empty() {
+        log::warn!(
+            "TTWROR fallback: {} cash flows exist but are IGNORED in simple calculation. \
+             Result may be inaccurate. Need more price data for accurate TTWROR.",
+            cash_flows.len()
+        );
+    }
 
     log::info!(
         "TTWROR fallback: EndValue={:.2} (at {}), CostBasis={:.2}",
@@ -951,7 +965,10 @@ pub fn calculate_irr(cash_flows: &[CashFlow], final_value: f64, final_date: Naiv
         });
     }
 
-    let first_date = cash_flows.first().unwrap().date;
+    let first_date = match cash_flows.first() {
+        Some(cf) => cf.date,
+        None => return Ok(IrrResult { irr: 0.0, converged: true, iterations: 0 }),
+    };
 
     // Create cash flow series with final value
     let mut cf_series: Vec<(f64, f64)> = cash_flows
@@ -1361,11 +1378,8 @@ pub fn get_cash_flows_with_fallback(
     let mut cash_flows = get_cash_flows(conn, portfolio_id, start_date, end_date)?;
     let deposit_removal_count = cash_flows.len();
 
-    // ALWAYS add DELIVERY_INBOUND/OUTBOUND - these are external asset flows with monetary value
-    // (like receiving/sending securities from/to another broker)
-    let delivery_flows = get_delivery_cash_flows(conn, portfolio_id, start_date, end_date)?;
-    let delivery_count = delivery_flows.len();
-    cash_flows.extend(delivery_flows);
+    // NOTE: DELIVERY_INBOUND/OUTBOUND are already included by get_cash_flows() above.
+    // Do NOT add them again here to avoid double-counting.
 
     // FALLBACK: If still no cash flows, use BUY/SELL as proxy for invested capital
     if cash_flows.is_empty() {
@@ -1376,8 +1390,8 @@ pub fn get_cash_flows_with_fallback(
     // Sort by date after merging
     cash_flows.sort_by(|a, b| a.date.cmp(&b.date));
 
-    log::info!("IRR: Found {} cash flows ({} DEPOSIT/REMOVAL + {} DELIVERY)",
-               cash_flows.len(), deposit_removal_count, delivery_count);
+    log::info!("IRR: Found {} cash flows ({} DEPOSIT/REMOVAL + DELIVERY from get_cash_flows)",
+               cash_flows.len(), deposit_removal_count);
 
     Ok(cash_flows)
 }
@@ -1573,36 +1587,17 @@ pub fn calculate_portfolio_performance(
     // Get current portfolio value (now includes cash + currency conversion)
     let current_value = get_current_portfolio_value(conn, portfolio_id)?;
 
-    // DEBUG: Write detailed cash flow information to file
-    let total_cf: f64 = cash_flows.iter().map(|cf| cf.amount).sum();
-    {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::File::create("/tmp/irr-debug-output.txt") {
-            let _ = writeln!(file, "IRR DEBUG: {} cash flows, total={:.2}, current_value={:.2}, start={}, end={}",
-                cash_flows.len(), total_cf, current_value, start_date, today);
-            for (i, cf) in cash_flows.iter().take(20).enumerate() {
-                let _ = writeln!(file, "  CF[{}]: date={}, amount={:.2}", i, cf.date, cf.amount);
-            }
-            if cash_flows.len() > 20 {
-                let _ = writeln!(file, "  ... and {} more cash flows", cash_flows.len() - 20);
-            }
-        }
-    }
-
     // IRR final date = today (not last transaction date)
     let irr = calculate_irr(&cash_flows, current_value, today)?;
 
-    // Append IRR result to debug file
-    {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open("/tmp/irr-debug-output.txt") {
-            let _ = writeln!(file, "\nPortfolio performance: TTWROR={:.2}%, IRR={:.2}% (converged={}), Value={:.2}",
-                ttwror.total_return * 100.0,
-                irr.irr * 100.0,
-                irr.converged,
-                current_value);
-        }
-    }
+    log::debug!(
+        "Portfolio performance: TTWROR={:.2}%, IRR={:.2}% (converged={}), Value={:.2}, CashFlows={}",
+        ttwror.total_return * 100.0,
+        irr.irr * 100.0,
+        irr.converged,
+        current_value,
+        cash_flows.len()
+    );
 
     Ok((ttwror, irr))
 }

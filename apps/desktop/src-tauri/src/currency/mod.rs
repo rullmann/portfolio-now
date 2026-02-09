@@ -131,9 +131,19 @@ fn lookup_rate(
     match result {
         Some((rate_str, rate_date_str)) => {
             let rate = rate_str.parse::<f64>().ok();
-            // Warn if using a stale rate (>30 days old)
+            if rate.is_none() {
+                log::warn!("Failed to parse exchange rate '{}' for {}/{}", rate_str, base, target);
+            }
+            // Reject rates older than 180 days as unreliable
             if let Ok(rate_date) = NaiveDate::parse_from_str(&rate_date_str, "%Y-%m-%d") {
                 let age_days = (date - rate_date).num_days();
+                if age_days > 180 {
+                    log::warn!(
+                        "Rejecting stale exchange rate {}/{}: {} days old (rate date: {}, requested: {}). Sync exchange rates.",
+                        base, target, age_days, rate_date_str, date
+                    );
+                    return Ok(None);
+                }
                 if age_days > 30 {
                     log::warn!(
                         "Using stale exchange rate {}/{}: {} days old (rate date: {}, requested: {})",

@@ -41,11 +41,12 @@ const ALLOWED_TABLES: &[&str] = &[
     "pp_portfolio_history",
 ];
 
-/// Forbidden SQL keywords (anything that modifies data)
+/// Forbidden SQL keywords (anything that modifies data or accesses dangerous features)
 const FORBIDDEN_KEYWORDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
     "TRUNCATE", "GRANT", "REVOKE", "ATTACH", "DETACH", "VACUUM",
     "REINDEX", "PRAGMA", "REPLACE", "UPSERT",
+    "LOAD_EXTENSION", "SAVEPOINT", "RELEASE",
 ];
 
 /// Session-approved SQL patterns (hash of normalized SQL)
@@ -115,16 +116,43 @@ pub fn remove_sql_blocks(response: &str) -> String {
 // SQL Validation
 // ============================================================================
 
+/// Strips SQL comments (block /* */ and line --) to prevent validation bypass
+fn strip_sql_comments(sql: &str) -> String {
+    // Remove block comments /* ... */
+    static RE_BLOCK_COMMENT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"/\*[\s\S]*?\*/").unwrap()
+    });
+    let result = RE_BLOCK_COMMENT.replace_all(sql, " ").to_string();
+
+    // Remove line comments -- ...
+    static RE_LINE_COMMENT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"--[^\n]*").unwrap()
+    });
+    RE_LINE_COMMENT.replace_all(&result, " ").to_string()
+}
+
 /// Validates SQL query for safety
 /// Returns validated (and possibly modified) SQL or an error
 pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
-    let sql_upper = sql.to_uppercase();
-    let sql_trimmed = sql.trim();
+    // 0. Strip comments BEFORE any validation to prevent bypass
+    let sql_clean = strip_sql_comments(sql);
+    let sql_upper = sql_clean.to_uppercase();
+    let sql_trimmed = sql_clean.trim();
 
-    // 1. Must start with SELECT
+    // 0b. Reject multiple statements (semicolons)
+    // Allow trailing semicolon but reject embedded ones
+    let sql_no_trailing = sql_trimmed.trim_end_matches(';').trim();
+    if sql_no_trailing.contains(';') {
+        return Err(SqlValidationError {
+            message: "Mehrere SQL-Statements sind nicht erlaubt.".to_string(),
+            suggestion: Some("Sende nur eine einzelne SELECT-Abfrage.".to_string()),
+        });
+    }
+
+    // 1. Must start with SELECT (also rejects WITH/CTE as entry point)
     if !sql_upper.trim_start().starts_with("SELECT") {
         return Err(SqlValidationError {
-            message: "Nur SELECT-Abfragen sind erlaubt.".to_string(),
+            message: "Nur SELECT-Abfragen sind erlaubt (kein WITH/CTE).".to_string(),
             suggestion: Some("Beginne die Query mit SELECT.".to_string()),
         });
     }
@@ -143,12 +171,12 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
         }
     }
 
-    // 3. Check for allowed tables only
+    // 3. Check for allowed tables only (operates on comment-stripped SQL)
     static RE_TABLE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)\bFROM\s+(\w+)|\bJOIN\s+(\w+)").unwrap()
     });
 
-    for caps in RE_TABLE.captures_iter(sql) {
+    for caps in RE_TABLE.captures_iter(&sql_clean) {
         let table = caps.get(1).or(caps.get(2)).unwrap().as_str().to_lowercase();
         if !ALLOWED_TABLES.contains(&table.as_str()) {
             return Err(SqlValidationError {
@@ -161,10 +189,7 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
         }
     }
 
-    // 4. Check for subqueries in FROM clause (could access other tables)
-    // Allow subqueries but they will be validated recursively
-
-    // 5. Add LIMIT if missing
+    // 4. Add LIMIT if missing
     let mut validated_sql = sql_trimmed.to_string();
     if !sql_upper.contains("LIMIT") {
         // Remove trailing semicolon if present
@@ -698,5 +723,53 @@ SELECT * FROM pp_txn WHERE txn_type = 'DIVIDENDS'
 
         // Different structures should have different normalized patterns
         assert_ne!(pattern1, pattern2);
+    }
+
+    #[test]
+    fn test_validate_sql_strips_block_comments() {
+        // Attempt to hide forbidden table in block comment
+        let sql = "SELECT * FROM pp_security WHERE id IN (SELECT 1 FROM /* pp_security */ sqlite_master)";
+        let result = validate_sql(sql);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("sqlite_master"));
+    }
+
+    #[test]
+    fn test_validate_sql_strips_line_comments() {
+        // Attempt to hide table after line comment
+        let sql = "SELECT * FROM pp_security -- UNION SELECT * FROM sqlite_master";
+        let result = validate_sql(sql);
+        // Should succeed because the comment hides the forbidden part
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_sql_rejects_multiple_statements() {
+        let sql = "SELECT 1 FROM pp_security; DELETE FROM pp_security";
+        let result = validate_sql(sql);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Mehrere"));
+    }
+
+    #[test]
+    fn test_validate_sql_rejects_load_extension() {
+        let sql = "SELECT LOAD_EXTENSION('evil.so') FROM pp_security";
+        let result = validate_sql(sql);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_sql_rejects_cte_with() {
+        let sql = "WITH cte AS (SELECT * FROM sqlite_master) SELECT * FROM cte";
+        let result = validate_sql(sql);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("SELECT"));
+    }
+
+    #[test]
+    fn test_validate_sql_allows_trailing_semicolon() {
+        let sql = "SELECT * FROM pp_security;";
+        let result = validate_sql(sql);
+        assert!(result.is_ok());
     }
 }

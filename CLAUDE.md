@@ -147,6 +147,7 @@ cd apps/desktop/src-tauri && cargo test --release  # Rust Tests
 | **Portfolio-Wert** | `performance/mod.rs` | `get_portfolio_value_at_date_with_currency()` | latest_price ohne FX/Cash |
 | **Datumsformatierung** | `lib/types.ts` | `formatDate()`, `formatDateTime()`, `formatDateShort()` | Eigene Date-Formatierung |
 | **ChatBot DB-Abfragen** | `ai/sql_executor.rs` | `execute_sql()`, `validate_sql()` | Hardcodierte SQL im ChatBot |
+| **Txn-Type-Normalisierung** | `ai/command_parser.rs` | `normalize_extracted_txn_type()` | Eigene Txn-Type-Mappings |
 
 **Neue Funktion?** 1. Prüfen ob SSOT existiert → 2. Falls ja: verwenden → 3. Falls nein: Im passenden Modul hinzufügen
 
@@ -369,7 +370,10 @@ Dashboard, WidgetDashboard, Portfolio, Securities, Accounts, Transactions, Holdi
 | **AI-Commands** | `ai/command_parser.rs` | Nur Suggestions, User-Bestätigung erforderlich |
 | **PDF-OCR Consent** | `PdfImportModal.tsx` | Explizite Zustimmung für KI-Upload |
 | **ZIP-Bomb-Schutz** | `protobuf/parser.rs` | `MAX_UNCOMPRESSED_SIZE` (500 MB) |
-| **Rate Limiting** | `security/mod.rs` | `check_rate_limit()` |
+| **Rate Limiting** | `security/mod.rs` | `check_rate_limit()` — aktiv für Quotes, AI-Chat, Chart-Analyse |
+| **SQL-Härtung** | `ai/sql_executor.rs` | Comment-Stripping, Semicolon-Schutz, CTE-Blocking |
+| **Input-Sanitization** | `commands/crud.rs` | `sanitize_string()` für Security/Account-Namen |
+| **Stale-Rate-Schutz** | `currency/mod.rs` | Wechselkurse > 180 Tage werden abgelehnt |
 | **API-Keys** | `secureStorage.ts` | `tauri-plugin-store`, nie localStorage |
 | **D&D Schutz** | `App.tsx` | `preventDefault()` verhindert Browser-Default |
 
@@ -414,6 +418,8 @@ await setApiKey('anthropic', 'sk-ant-...');
 17. **PDF Parser** - `strict_mode: true` Default, `parse_date_strict()` verwenden
 18. **Wechselkurse X/EUR** - NIEMALS direkte X/EUR Kurse (z.B. USD/EUR) in `pp_exchange_rate` speichern! EZB liefert nur EUR/X Kurse. Der Code invertiert automatisch: `get_exchange_rate()` sucht erst direkt, dann invers (1/rate). Falsche direkte Einträge (z.B. USD/EUR=1.16 statt 0.85) führen zu massiv falschen Portfoliowerten!
 19. **ChatBot Bild-Erkennung** - 🚧 OFFEN: LLM ignoriert `[[EXTRACTED_TRANSACTIONS:...]]` Command-Anweisung im System-Prompt (`prompts.rs`). Gibt nur Text-Zusammenfassung aus statt Command → keine Transaktion-Vorschau erscheint. **Lösungsansätze:** (a) Prompt aggressiver formulieren, (b) Few-shot Examples, (c) Post-Processing: Text→Command extrahieren, (d) Function Calling/Tool Use statt Text-Commands, (e) Anderes LLM-Modell testen
+20. **Wechselkurs-Richtung (ChatBot)** - `exchangeRate` = EUR/Foreign (z.B. 1.1939 = 1 EUR = 1.1939 USD). Umrechnung Foreign→EUR: `amount_eur = foreign_amount / rate`. NIEMALS `* rate`!
+21. **AiQuoteSuggestion JSON** - Struct nutzt `camelCase`, aber AI-Prompt gibt `feed_url` (snake_case) aus → `#[serde(alias = "feed_url")]` nötig
 
 ---
 

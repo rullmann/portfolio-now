@@ -155,26 +155,20 @@ pub fn get_app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// Sanitize a string to prevent injection attacks
 ///
-/// Removes or escapes potentially dangerous characters
-#[allow(dead_code)] // Planned API: For input sanitization in future commands
-pub fn sanitize_string(input: &str) -> String {
+/// Removes control characters and null bytes while preserving
+/// Unicode letters (Umlauts, accented chars), digits, and common punctuation.
+/// Truncates to max_len characters.
+pub fn sanitize_string(input: &str, max_len: usize) -> String {
     input
         .chars()
-        .filter(|c| {
-            c.is_alphanumeric()
-                || *c == ' '
-                || *c == '-'
-                || *c == '_'
-                || *c == '.'
-                || *c == ','
-                || *c == '('
-                || *c == ')'
-        })
-        .collect()
+        .filter(|c| !c.is_control() && *c != '\0')
+        .take(max_len)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// Sanitize a filename to be safe for filesystem operations
-#[allow(dead_code)] // Planned API: For safe filename creation in future exports
 pub fn sanitize_filename(filename: &str) -> String {
     let sanitized: String = filename
         .chars()
@@ -203,12 +197,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Global rate limiter state
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 static RATE_LIMITERS: once_cell::sync::Lazy<Mutex<HashMap<String, RateLimiterState>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// State for a single rate limiter
-#[allow(dead_code)] // Planned API: Used by check_rate_limit
 struct RateLimiterState {
     last_request: Instant,
     request_count: u32,
@@ -216,7 +208,6 @@ struct RateLimiterState {
 }
 
 /// Rate limiter configuration
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 pub struct RateLimitConfig {
     /// Minimum time between requests
     pub min_interval: Duration,
@@ -245,7 +236,6 @@ impl Default for RateLimitConfig {
 /// # Returns
 /// * `Ok(())` - Request is allowed
 /// * `Err(String)` - Request is rate limited with error message
-#[allow(dead_code)] // Planned API: Documented in CLAUDE.md security section
 pub fn check_rate_limit(key: &str, config: &RateLimitConfig) -> Result<(), String> {
     let mut limiters = RATE_LIMITERS.lock().map_err(|e| format!("Rate limiter lock error: {}", e))?;
 
@@ -290,7 +280,6 @@ pub fn check_rate_limit(key: &str, config: &RateLimitConfig) -> Result<(), Strin
 }
 
 /// Pre-configured rate limits for common operations
-#[allow(dead_code)] // Planned API: Rate limit presets for commands
 pub mod limits {
     use super::*;
 
@@ -396,9 +385,16 @@ mod tests {
 
     #[test]
     fn test_sanitize_string() {
-        assert_eq!(sanitize_string("Hello World!"), "Hello World");
-        assert_eq!(sanitize_string("test<script>"), "testscript");
-        assert_eq!(sanitize_string("file.txt"), "file.txt");
+        // Preserves normal text including Unicode
+        assert_eq!(sanitize_string("Hello World!", 500), "Hello World!");
+        assert_eq!(sanitize_string("LVMH Moët & Co.", 500), "LVMH Moët & Co.");
+        // Removes control characters
+        assert_eq!(sanitize_string("test\0evil", 500), "testevil");
+        assert_eq!(sanitize_string("ok\x07beep", 500), "okbeep");
+        // Truncates to max_len
+        assert_eq!(sanitize_string("abcdefgh", 5), "abcde");
+        // Trims whitespace
+        assert_eq!(sanitize_string("  hello  ", 500), "hello");
     }
 
     #[test]

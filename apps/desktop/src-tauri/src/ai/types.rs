@@ -871,6 +871,7 @@ pub struct QuoteAssistantContext {
 pub struct AiQuoteSuggestion {
     pub provider: String,
     pub ticker: String,
+    #[serde(alias = "feed_url")]
     pub feed_url: Option<String>,
     pub confidence: f64,
     pub reason: String,

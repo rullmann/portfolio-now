@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { X, Upload, Loader2, CheckCircle, AlertCircle, ExternalLink, Info, KeyRound, Edit2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-shell';
 import { getPortfolios } from '../../lib/api';
 import type { PortfolioData } from '../../lib/types';
 import { useEscapeKey } from '../../lib/hooks';
@@ -249,15 +250,13 @@ export function DivvyDiaryExportModal({ isOpen, onClose }: DivvyDiaryExportModal
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
                   API-Key finden Sie unter{' '}
-                  <a
-                    href="https://divvydiary.com/settings"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    onClick={() => open('https://divvydiary.com/settings')}
                     className="text-primary hover:underline inline-flex items-center gap-1"
                   >
                     DivvyDiary Einstellungen
                     <ExternalLink size={10} />
-                  </a>
+                  </button>
                 </p>
               </>
             )}

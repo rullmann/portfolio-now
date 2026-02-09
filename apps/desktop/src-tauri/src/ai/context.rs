@@ -88,7 +88,10 @@ pub fn load_portfolio_context(
                 row.get::<_, Option<i64>>(6)?,      // latest_price (scaled)
             ))
         })
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => { log::warn!("load_portfolio_context: Failed to read holdings row: {}", e); None }
+        })
         .collect();
 
     // Get cost basis for all securities using SINGLE SOURCE OF TRUTH
@@ -104,14 +107,17 @@ pub fn load_portfolio_context(
         GROUP BY security_id
     "#;
     let mut first_buy_map: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
-    if let Ok(mut stmt) = conn.prepare(first_buy_sql) {
-        if let Ok(rows) = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        }) {
-            for row in rows.flatten() {
-                first_buy_map.insert(row.0, row.1);
+    match conn.prepare(first_buy_sql) {
+        Ok(mut stmt) => {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    first_buy_map.insert(row.0, row.1);
+                }
             }
         }
+        Err(e) => log::warn!("load_portfolio_context: Failed to query first buy dates: {}", e),
     }
 
     // Get fees and taxes per security
@@ -125,19 +131,22 @@ pub fn load_portfolio_context(
         GROUP BY t.security_id
     "#;
     let mut fees_taxes_map: std::collections::HashMap<i64, (f64, f64)> = std::collections::HashMap::new();
-    if let Ok(mut stmt) = conn.prepare(fees_taxes_sql) {
-        if let Ok(rows) = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        }) {
-            for row in rows.flatten() {
-                let (sec_id, fees_cents, taxes_cents) = row;
-                fees_taxes_map.insert(sec_id, (fees_cents as f64 / 100.0, taxes_cents as f64 / 100.0));
+    match conn.prepare(fees_taxes_sql) {
+        Ok(mut stmt) => {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            }) {
+                for row in rows.flatten() {
+                    let (sec_id, fees_cents, taxes_cents) = row;
+                    fees_taxes_map.insert(sec_id, (fees_cents as f64 / 100.0, taxes_cents as f64 / 100.0));
+                }
             }
         }
+        Err(e) => log::warn!("load_portfolio_context: Failed to query fees/taxes: {}", e),
     }
 
     // Load portfolio names for each security

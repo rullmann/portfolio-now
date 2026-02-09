@@ -198,6 +198,8 @@ pub use command_parser::{
     // Types
     WatchlistCommand,
     SuggestedAction, ParsedResponseWithSuggestions,
+    // Transaction type normalization (SSOT – used by commands/ai.rs too)
+    normalize_extracted_txn_type,
     // Security: Query approval types
     QueryType, PendingQuery,
     // Extracted transactions from images (returns suggestions, no auto-execution)

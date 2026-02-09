@@ -10,6 +10,7 @@
 use crate::commands::data;
 use crate::db;
 use crate::quotes::{self, alphavantage, ecb, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
+use crate::security;
 use futures::stream::{self, StreamExt};
 use chrono::NaiveDate;
 use rusqlite::params;
@@ -147,6 +148,8 @@ pub async fn sync_all_prices(
     only_held: Option<bool>,
     api_keys: Option<ApiKeys>,
 ) -> Result<SyncResult, String> {
+    security::check_rate_limit("sync_all_prices", &security::limits::price_sync())?;
+
     let securities = get_all_securities_for_sync(only_held.unwrap_or(true)).map_err(|e| e.to_string())?;
     let keys = api_keys.unwrap_or_default();
 

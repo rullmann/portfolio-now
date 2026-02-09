@@ -16,7 +16,9 @@ use crate::ai::{
     load_portfolio_context,
     // Command parsing from ai/command_parser.rs
     parse_response_with_suggestions,
+    normalize_extracted_txn_type,
 };
+use crate::security;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Emitter};
@@ -29,6 +31,8 @@ use tauri::{command, AppHandle, Emitter};
 pub async fn analyze_chart_with_ai(
     request: ChartAnalysisRequest,
 ) -> Result<ChartAnalysisResponse, String> {
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+
     // Check if the model is deprecated and auto-upgrade
     let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
         log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
@@ -264,6 +268,8 @@ pub async fn chat_with_portfolio_assistant(
     _app: AppHandle,
     request: PortfolioChatRequest,
 ) -> Result<PortfolioChatResponse, String> {
+    security::check_rate_limit("ai_chat", &security::limits::ai_analysis())?;
+
     // Check if any message has image attachments
     let has_images = request.messages.iter().any(|m| !m.attachments.is_empty());
 
@@ -435,6 +441,33 @@ pub fn execute_confirmed_transaction(
     // Validate required fields based on transaction type
     validate_transaction_fields(&cmd)?;
 
+    // Build units for fees and taxes (if provided by AI)
+    let mut units: Vec<TransactionUnitData> = Vec::new();
+    if let Some(fees) = cmd.fees {
+        if fees > 0 {
+            units.push(TransactionUnitData {
+                unit_type: "FEE".to_string(),
+                amount: fees,
+                currency: cmd.currency.clone(),
+                forex_amount: None,
+                forex_currency: None,
+                exchange_rate: None,
+            });
+        }
+    }
+    if let Some(taxes) = cmd.taxes {
+        if taxes > 0 {
+            units.push(TransactionUnitData {
+                unit_type: "TAX".to_string(),
+                amount: taxes,
+                currency: cmd.currency.clone(),
+                forex_amount: None,
+                forex_currency: None,
+                exchange_rate: None,
+            });
+        }
+    }
+
     // Build CreateTransactionRequest
     let request = CreateTransactionRequest {
         owner_type: owner_type.clone(),
@@ -446,8 +479,8 @@ pub fn execute_confirmed_transaction(
         shares: cmd.shares,
         security_id: cmd.security_id,
         note: cmd.note.clone(),
-        units: None, // No units from AI commands
-        reference_account_id: None, // Could be extended later
+        units: if units.is_empty() { None } else { Some(units) },
+        reference_account_id: None,
     };
 
     // Create the transaction
@@ -750,29 +783,6 @@ fn get_duplicate_check_types_for_string(txn_type: &str) -> Vec<&'static str> {
     }
 }
 
-fn normalize_extracted_txn_type(raw: &str) -> String {
-    let normalized = raw.trim().to_uppercase();
-    let normalized = normalized.replace(' ', "_").replace('-', "_");
-
-    match normalized.as_str() {
-        "DIVIDEND" | "DIVIDENDS" | "DIVIDENDE" | "DIVIDENDEN" |
-        "AUSSCHÜTTUNG" | "AUSSCHUETTUNG" | "ERTRAG" | "ERTRAGSGUTSCHRIFT" |
-        "DIVIDENDENGUTSCHRIFT" => "DIVIDENDS".to_string(),
-        "BUY" | "KAUF" => "BUY".to_string(),
-        "SELL" | "VERKAUF" => "SELL".to_string(),
-        "DELIVERY_INBOUND" | "EINLIEFERUNG" => "DELIVERY_INBOUND".to_string(),
-        "DELIVERY_OUTBOUND" | "AUSLIEFERUNG" => "DELIVERY_OUTBOUND".to_string(),
-        "TRANSFER_IN" | "UMBUCHUNG_EIN" | "UMBUCHUNG_EINGANG" => "TRANSFER_IN".to_string(),
-        "TRANSFER_OUT" | "UMBUCHUNG_AUS" | "UMBUCHUNG_AUSGANG" => "TRANSFER_OUT".to_string(),
-        "DEPOSIT" | "EINZAHLUNG" | "EINLAGE" => "DEPOSIT".to_string(),
-        "REMOVAL" | "AUSZAHLUNG" | "ENTNAHME" => "REMOVAL".to_string(),
-        "INTEREST" | "ZINS" | "ZINSEN" => "INTEREST".to_string(),
-        "FEES" | "FEE" | "GEBUEHREN" | "GEBÜHREN" => "FEES".to_string(),
-        "TAXES" | "TAX" | "STEUERN" => "TAXES".to_string(),
-        _ => normalized,
-    }
-}
-
 /// Convert transaction type based on delivery mode (same logic as PDF import - SSOT)
 /// Always normalizes to uppercase for consistency.
 fn apply_delivery_mode(txn_type: &str, delivery_mode: bool) -> String {
@@ -1068,7 +1078,10 @@ fn normalize_extracted_fees(txn: &ExtractedTransactionInput) -> Option<f64> {
                     total += foreign;
                 } else if let Some(rate) = txn.exchange_rate {
                     // Different currency -> convert with exchange rate
-                    total += foreign * rate;
+                    // exchangeRate = EUR/Foreign, so foreign_to_eur = foreign / rate
+                    if rate > 0.0 {
+                        total += foreign / rate;
+                    }
                 }
             } else {
                 // NO fees_foreign_currency specified
@@ -1076,8 +1089,11 @@ fn normalize_extracted_fees(txn: &ExtractedTransactionInput) -> Option<f64> {
                 if let Some(gross_currency) = txn.gross_currency.as_ref() {
                     if !gross_currency.eq_ignore_ascii_case(&txn.currency) {
                         // Transaction has foreign currency -> fees_foreign is in that currency
+                        // exchangeRate = EUR/Foreign, so foreign_to_eur = foreign / rate
                         if let Some(rate) = txn.exchange_rate {
-                            total += foreign * rate;
+                            if rate > 0.0 {
+                                total += foreign / rate;
+                            }
                         }
                     } else {
                         // gross_currency == txn.currency -> fees_foreign is already in base currency
@@ -1105,8 +1121,12 @@ fn compute_dividend_gross_amount(txn: &ExtractedTransactionInput) -> Option<f64>
             if gross_currency.eq_ignore_ascii_case(&txn.currency) {
                 return Some(gross);
             }
+            // exchangeRate is defined as EUR/Foreign (e.g., 1.1939 = 1 EUR = 1.1939 USD)
+            // So to convert from foreign to EUR: amount_eur = gross_foreign / rate
             if let Some(rate) = txn.exchange_rate {
-                return Some(gross * rate);
+                if rate > 0.0 {
+                    return Some(gross / rate);
+                }
             }
         } else {
             return Some(gross);

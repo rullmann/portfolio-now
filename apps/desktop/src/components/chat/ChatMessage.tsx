@@ -65,7 +65,7 @@ export function ChatMessage({ message, onDelete }: ChatMessageProps) {
       )}
 
       {/* Avatar */}
-      {isUser && profilePicture ? (
+      {isUser && profilePicture && profilePicture.startsWith('data:image/') ? (
         <img
           src={profilePicture}
           alt="Du"

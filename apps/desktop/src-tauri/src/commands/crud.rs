@@ -3,6 +3,7 @@
 use crate::db;
 use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::quotes::{self, yahoo, ProviderType};
+use crate::security as sec;
 use chrono::{Datelike, NaiveDate};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -122,7 +123,11 @@ fn validate_isin(isin: &str) -> bool {
 
 /// Create a new security
 #[command]
-pub fn create_security(data: CreateSecurityRequest) -> Result<SecurityResult, String> {
+pub fn create_security(mut data: CreateSecurityRequest) -> Result<SecurityResult, String> {
+    // Sanitize user input
+    data.name = sec::sanitize_string(&data.name, 500);
+    data.note = data.note.map(|n| sec::sanitize_string(&n, 5000));
+
     // Validate ISIN if provided
     if let Some(ref isin) = data.isin {
         if !isin.is_empty() && !validate_isin(isin) {
@@ -842,7 +847,10 @@ pub struct AccountResult {
 
 /// Create a new account
 #[command]
-pub fn create_account(data: CreateAccountRequest) -> Result<AccountResult, String> {
+pub fn create_account(mut data: CreateAccountRequest) -> Result<AccountResult, String> {
+    data.name = sec::sanitize_string(&data.name, 500);
+    data.note = data.note.map(|n| sec::sanitize_string(&n, 5000));
+
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()

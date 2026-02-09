@@ -9,6 +9,7 @@
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
+import { open } from '@tauri-apps/plugin-shell';
 
 interface SafeMarkdownProps {
   children: string;
@@ -100,6 +101,21 @@ export function SafeMarkdown({ children, className }: SafeMarkdownProps) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+      components={{
+        a: ({ href, children }) => (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              if (href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:'))) {
+                open(href);
+              }
+            }}
+            className="text-primary hover:underline cursor-pointer"
+          >
+            {children}
+          </button>
+        ),
+      }}
     >
       {sanitizedContent}
     </ReactMarkdown>

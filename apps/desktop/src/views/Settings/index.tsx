@@ -493,7 +493,8 @@ export function SettingsView() {
                     <input
                       type="text"
                       value={userName}
-                      onChange={(e) => setUserName(e.target.value)}
+                      onChange={(e) => setUserName(e.target.value.slice(0, 50))}
+                      maxLength={50}
                       placeholder="z.B. Max"
                       className="w-full max-w-xs rounded-md border border-input bg-background px-3 py-2"
                     />

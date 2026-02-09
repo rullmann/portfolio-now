@@ -129,7 +129,10 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
                 taxes: row.get(10)?,
             })
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => { log::warn!("FIFO: Failed to read transaction row: {}", e); None }
+        })
         .collect();
 
     // Build cross-entry map to find source portfolio for transfers
@@ -186,10 +189,26 @@ pub fn build_fifo_lots(conn: &Connection, security_id: i64) -> Result<()> {
                     let consumed = std::cmp::min(lot.remaining_shares, shares_to_consume);
 
                     // Calculate proportional cost basis for consumed shares
-                    // PP CostCalculation.java: proportion = consumed / original_shares
-                    let proportion = consumed as f64 / lot.original_shares as f64;
-                    let consumed_gross = (lot.gross_amount as f64 * proportion).round() as i64;
-                    let consumed_net = (lot.net_amount as f64 * proportion).round() as i64;
+                    // If consuming the entire remaining lot, use remainder to avoid rounding errors
+                    let (consumed_gross, consumed_net) = if consumed == lot.remaining_shares {
+                        // Last consumption of this lot: take the remaining cost basis
+                        // This avoids cumulative rounding errors from multiple partial sells
+                        let already_consumed_gross: i64 = consumptions.iter()
+                            .filter(|c| c.lot_id == lot.id)
+                            .map(|c| c.gross_amount)
+                            .sum();
+                        let already_consumed_net: i64 = consumptions.iter()
+                            .filter(|c| c.lot_id == lot.id)
+                            .map(|c| c.net_amount)
+                            .sum();
+                        (lot.gross_amount - already_consumed_gross, lot.net_amount - already_consumed_net)
+                    } else {
+                        // Partial consumption: use proportional calculation
+                        let proportion = consumed as f64 / lot.original_shares as f64;
+                        let gross = (lot.gross_amount as f64 * proportion).round() as i64;
+                        let net = (lot.net_amount as f64 * proportion).round() as i64;
+                        (gross, net)
+                    };
 
                     // Record the consumption for realized gains tracking
                     consumptions.push(FifoConsumption {
@@ -390,8 +409,20 @@ fn move_lots_between_portfolios(
             purchase_date: txn.date.clone(),
             original_shares: shares_remaining,
             remaining_shares: shares_remaining,
-            gross_amount: 0, // Unknown cost
-            net_amount: 0,
+            // Use transaction amount as fallback cost basis if available, otherwise 0
+            gross_amount: if txn.amount > 0 {
+                // Scale proportionally if only partial shares are missing
+                let proportion = shares_remaining as f64 / txn.shares as f64;
+                (txn.amount as f64 * proportion).round() as i64
+            } else {
+                0
+            },
+            net_amount: if txn.amount > 0 {
+                let proportion = shares_remaining as f64 / txn.shares as f64;
+                (txn.amount as f64 * proportion).round() as i64
+            } else {
+                0
+            },
             currency: txn.currency.clone(),
         };
         *next_lot_id += 1;
@@ -440,7 +471,10 @@ pub fn build_all_fifo_lots(conn: &Connection) -> Result<()> {
     let security_ids: Vec<i64> = conn
         .prepare("SELECT DISTINCT id FROM pp_security")?
         .query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => { log::warn!("FIFO: Failed to read security_id: {}", e); None }
+        })
         .collect();
 
     for security_id in security_ids {

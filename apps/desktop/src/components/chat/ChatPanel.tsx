@@ -1389,6 +1389,12 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
             });
           } catch (err) {
             console.error('Failed to save suggestion:', err);
+            // Still show the suggestion in UI even if DB save failed
+            savedSuggestions.push({
+              ...suggestion,
+              messageId: Number(assistantMsgId),
+              status: 'pending',
+            });
           }
         }
         setSuggestions((prev) => [...prev, ...savedSuggestions]);
@@ -1446,6 +1452,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       toast.error(displayError);
       setError(displayError);
       setLastFailedInput(trimmedContent);
+      // Restore input so user can edit and retry (not just blind-retry)
+      setInput(trimmedContent);
     } finally {
       setIsLoading(false);
     }
