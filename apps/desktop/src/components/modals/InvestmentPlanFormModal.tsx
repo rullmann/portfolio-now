@@ -263,7 +263,7 @@ export function InvestmentPlanFormModal({
                 }}
                 onFocus={() => setShowSecurityDropdown(true)}
                 disabled={isLoadingData}
-                className="w-full pl-9 pr-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                className="w-full pl-9 pr-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Nach Wertpapier suchen..."
               />
             </div>
@@ -309,7 +309,7 @@ export function InvestmentPlanFormModal({
                 onChange={handleChange}
                 required
                 disabled={isLoadingData}
-                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="">Auswählen...</option>
                 {portfolios
@@ -331,7 +331,7 @@ export function InvestmentPlanFormModal({
                 onChange={handleChange}
                 required
                 disabled={isLoadingData}
-                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="">Auswählen...</option>
                 {accounts

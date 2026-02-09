@@ -26,6 +26,7 @@ import {
   useAppStore,
   useSettingsStore,
   getViewLabel,
+  toast,
 } from '../../store';
 import { DropdownMenu, DropdownItem } from '../common';
 import { TransactionFormModal } from '../modals/TransactionFormModal';
@@ -35,6 +36,7 @@ import { PdfExportModal } from '../modals/PdfExportModal';
 import { DivvyDiaryExportModal } from '../modals/DivvyDiaryExportModal';
 import { DivvyDiaryLogo } from '../common/DivvyDiaryLogo';
 import { PortfolioInsightsModal } from '../modals/PortfolioInsightsModal';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 
 interface HeaderProps {
   onImportPP: () => void;
@@ -74,6 +76,9 @@ export function Header({
     profilePicture,
     userName,
   } = useSettingsStore();
+
+  const { keys: secureKeys } = useSecureApiKeys();
+  const divvyDiaryApiKey = secureKeys.divvyDiaryApiKey;
 
   const [showTransactionModal, setShowTransactionModal] = useState(false);
   const [showCsvImportModal, setShowCsvImportModal] = useState(false);
@@ -287,7 +292,15 @@ export function Header({
               PDF Bericht...
             </DropdownItem>
             <DropdownItem
-              onClick={() => setShowDivvyDiaryModal(true)}
+              onClick={() => {
+                if (!divvyDiaryApiKey) {
+                  setCurrentView('settings');
+                  useUIStore.getState().setScrollTarget('services');
+                  toast.info('Bitte hinterlege zuerst deinen DivvyDiary API-Key.');
+                } else {
+                  setShowDivvyDiaryModal(true);
+                }
+              }}
               disabled={isLoading}
               icon={<DivvyDiaryLogo size={16} />}
             >
@@ -299,7 +312,7 @@ export function Header({
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-input rounded-md hover:bg-accent transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-input rounded-md hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Daten aktualisieren"
             aria-label="Daten aktualisieren"
           >
@@ -313,7 +326,7 @@ export function Header({
           <button
             onClick={() => setShowTransactionModal(true)}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Neue Buchung erstellen"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />

@@ -24,6 +24,7 @@ import {
   Database,
   Camera,
   X,
+  Share2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore, useUIStore, toast, type ChartTimeRange } from '../../store';
@@ -36,6 +37,7 @@ import { AttributeTypeManager } from '../../components/attributes';
 import { AiFeatureMatrix } from '../../components/settings';
 import type { ValidationStatusSummary, ValidationResponse } from '../../lib/types';
 import { cn } from '../../lib/utils';
+import { useTwitterAuth } from '../../hooks/useTwitterAuth';
 // MessageSquarePlus removed - user templates feature deleted
 
 // Settings sections configuration
@@ -45,6 +47,7 @@ const SETTINGS_SECTIONS = [
   { id: 'quotes', name: 'Kurse', icon: TrendingUp },
   { id: 'ai', name: 'KI-Analyse', icon: Sparkles },
   { id: 'services', name: 'Dienste', icon: Link },
+  { id: 'sharing', name: 'Teilen', icon: Share2 },
   { id: 'data', name: 'Daten', icon: Database },
   { id: 'danger', name: 'Gefahrenzone', icon: AlertTriangle },
 ] as const;
@@ -102,6 +105,12 @@ export function SettingsView() {
     setSqlApprovalMode,
     sqlErrorHandling,
     setSqlErrorHandling,
+    twitterDefaultHashtags,
+    setTwitterDefaultHashtags,
+    twitterIncludeThread,
+    setTwitterIncludeThread,
+    twitterIncludeWatermark,
+    setTwitterIncludeWatermark,
   } = useSettingsStore();
 
   // SECURITY: Use secure storage for API keys
@@ -123,6 +132,7 @@ export function SettingsView() {
   const effectiveGeminiApiKey = secureStorageAvailable ? secureKeys.geminiApiKey : geminiApiKey;
   const effectivePerplexityApiKey = secureStorageAvailable ? secureKeys.perplexityApiKey : perplexityApiKey;
   const effectiveDivvyDiaryApiKey = secureStorageAvailable ? secureKeys.divvyDiaryApiKey : divvyDiaryApiKey;
+  const effectiveTwitterClientId = secureStorageAvailable ? secureKeys.twitterClientId : '';
 
   // Secure key setters that store in both secure storage and Zustand
   const handleSetApiKey = useCallback(async (keyType: ApiKeyType, value: string) => {
@@ -148,6 +158,7 @@ export function SettingsView() {
   const [showAlphaVantageKey, setShowAlphaVantageKey] = useState(false);
   const [showTwelveDataKey, setShowTwelveDataKey] = useState(false);
   const [showAiKeys, setShowAiKeys] = useState<Record<string, boolean>>({});
+  const [showDivvyDiaryKey, setShowDivvyDiaryKey] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -160,6 +171,8 @@ export function SettingsView() {
   const [validationResult, setValidationResult] = useState<ValidationResponse | null>(null);
   const [forceValidation, setForceValidation] = useState(false);
   const [isUploadingPicture, setIsUploadingPicture] = useState(false);
+  const [showTwitterClientId, setShowTwitterClientId] = useState(false);
+  const twitterAuth = useTwitterAuth();
 
   const { scrollTarget, setScrollTarget } = useUIStore();
 
@@ -231,6 +244,7 @@ export function SettingsView() {
         'quotes': 'quotes',
         'transactions': 'transactions',
         'services': 'services',
+        'sharing': 'sharing',
         'data': 'data',
         'danger': 'danger',
       };
@@ -424,7 +438,7 @@ export function SettingsView() {
                   </h3>
                   <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
                     API-Schlüssel werden im Browser-Speicher (localStorage) abgelegt. Dies ist weniger sicher als die normale Tauri-Speicherung.
-                    Bei Sicherheitsbedenken können Sie die Schlüssel nur für die aktuelle Sitzung eingeben und danach wieder löschen.
+                    Bei Sicherheitsbedenken kannst du die Schlüssel nur für die aktuelle Sitzung eingeben und danach wieder löschen.
                   </p>
                   <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
                     Mögliche Ursachen: Ausführung im Browser statt als Desktop-App, fehlende Dateiberechtigungen.
@@ -477,7 +491,7 @@ export function SettingsView() {
                     <button
                       onClick={handleUploadProfilePicture}
                       disabled={isUploadingPicture}
-                      className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Camera size={14} />
                       {isUploadingPicture ? 'Hochladen...' : profilePicture ? 'Ändern' : 'Bild hochladen'}
@@ -582,7 +596,7 @@ export function SettingsView() {
                       Dividenden werden mit einer automatischen Ausbuchung vom Referenzkonto verknüpft, sodass der Kontostand unverändert bleibt.
                     </p>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Nützlich wenn Sie Ihr Portfolio nur zur Bestandsverfolgung nutzen und die Geldbewegungen bei Ihrer Bank verwalten.
+                      Nützlich wenn du dein Portfolio nur zur Bestandsverfolgung nutzt und die Geldbewegungen bei deiner Bank verwaltest.
                     </p>
                   </div>
                   <button
@@ -667,7 +681,7 @@ export function SettingsView() {
                       type={showFinnhubKey ? 'text' : 'password'}
                       value={effectiveFinnhubApiKey}
                       onChange={(e) => handleSetApiKey('finnhub', e.target.value)}
-                      placeholder="Ihr Finnhub API Key"
+                      placeholder="Dein Finnhub API Key"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                     />
                     <button
@@ -747,7 +761,7 @@ export function SettingsView() {
                       type={showAlphaVantageKey ? 'text' : 'password'}
                       value={effectiveAlphaVantageApiKey}
                       onChange={(e) => handleSetApiKey('alphaVantage', e.target.value)}
-                      placeholder="Ihr Alpha Vantage API Key"
+                      placeholder="Dein Alpha Vantage API Key"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                     />
                     <button
@@ -785,7 +799,7 @@ export function SettingsView() {
                       type={showTwelveDataKey ? 'text' : 'password'}
                       value={effectiveTwelveDataApiKey}
                       onChange={(e) => handleSetApiKey('twelveData', e.target.value)}
-                      placeholder="Ihr Twelve Data API Key"
+                      placeholder="Dein Twelve Data API Key"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                     />
                     <button
@@ -1056,7 +1070,7 @@ export function SettingsView() {
                         </select>
                         <p className="text-xs text-muted-foreground mt-1">
                           {sqlApprovalMode === 'always' && 'Jede Abfrage erfordert eine Bestätigung.'}
-                          {sqlApprovalMode === 'session' && 'Ähnliche Abfragen werden nach einmaliger Bestätigung automatisch ausgeführt.'}
+                          {sqlApprovalMode === 'session' && 'Nach einmaliger Bestätigung werden alle weiteren Abfragen automatisch ausgeführt (bis App-Neustart).'}
                           {sqlApprovalMode === 'never' && (
                             <span className="text-amber-600">Alle Abfragen werden ohne Rückfrage ausgeführt (nur SELECT erlaubt).</span>
                           )}
@@ -1103,7 +1117,7 @@ export function SettingsView() {
                   <label className="text-sm font-medium">DivvyDiary API-Key</label>
                 </div>
                 <p className="text-sm text-muted-foreground mt-0.5 mb-2">
-                  Ermöglicht den Export Ihres Portfolios zu DivvyDiary (Dividenden-Kalender).{' '}
+                  Ermöglicht den Export deines Portfolios zu DivvyDiary (Dividenden-Kalender).{' '}
                   <button
                     type="button"
                     onClick={() => open('https://divvydiary.com/settings')}
@@ -1115,17 +1129,24 @@ export function SettingsView() {
                 </p>
                 <div className="relative max-w-md">
                   <input
-                    type="password"
+                    type={showDivvyDiaryKey ? 'text' : 'password'}
                     value={effectiveDivvyDiaryApiKey}
                     onChange={(e) => handleSetApiKey('divvyDiary', e.target.value)}
-                    placeholder="Ihr DivvyDiary API-Key"
+                    placeholder="Dein DivvyDiary API-Key"
                     className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowDivvyDiaryKey(!showDivvyDiaryKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    {showDivvyDiaryKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
                 </div>
                 {effectiveDivvyDiaryApiKey && (
                   <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                     {secureStorageAvailable && <Shield size={12} />}
-                    API-Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Sie können jetzt Portfolios zu DivvyDiary exportieren.
+                    API-Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Du kannst jetzt Portfolios zu DivvyDiary exportieren.
                   </p>
                 )}
               </div>
@@ -1151,7 +1172,7 @@ export function SettingsView() {
                       type={showBrandfetchKey ? 'text' : 'password'}
                       value={effectiveBrandfetchApiKey}
                       onChange={(e) => handleSetApiKey('brandfetch', e.target.value)}
-                      placeholder="Ihre Brandfetch Client ID"
+                      placeholder="Deine Brandfetch Client ID"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
                     />
                     <button
@@ -1179,7 +1200,7 @@ export function SettingsView() {
                     type="button"
                     onClick={handleClearCache}
                     disabled={isClearing}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Trash2 size={16} />
                     {isClearing ? 'Lösche...' : 'Cache leeren'}
@@ -1193,6 +1214,156 @@ export function SettingsView() {
                       {cacheResult}
                     </p>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sharing Section */}
+          {activeSection === 'sharing' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold mb-1">Teilen</h2>
+                <p className="text-sm text-muted-foreground">Chart-Analysen auf X (Twitter) teilen</p>
+              </div>
+
+              {/* X Connection Status */}
+              <div className="bg-card rounded-lg border border-border p-6 space-y-4">
+                <h3 className="text-lg font-semibold">X (Twitter) Verbindung</h3>
+                <div className="flex items-center justify-between">
+                  <div>
+                    {twitterAuth.isConnected ? (
+                      <p className="text-sm flex items-center gap-2">
+                        <CheckCircle2 size={16} className="text-green-500" />
+                        Verbunden als <span className="font-semibold">@{twitterAuth.username}</span>
+                      </p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Nicht verbunden</p>
+                    )}
+                  </div>
+                  {twitterAuth.isConnected ? (
+                    <button
+                      type="button"
+                      onClick={() => { twitterAuth.disconnect(); toast.success('X-Verbindung getrennt'); }}
+                      className="px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors text-destructive"
+                    >
+                      Trennen
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await twitterAuth.connect();
+                          toast.success('Mit X verbunden!');
+                        } catch (err) {
+                          toast.error(String(err));
+                        }
+                      }}
+                      disabled={twitterAuth.isConnecting || !effectiveTwitterClientId}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {twitterAuth.isConnecting ? (
+                        <>
+                          <RefreshCw size={14} className="animate-spin" />
+                          Verbinde...
+                        </>
+                      ) : (
+                        'Mit X verbinden'
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Client ID */}
+              <div className="bg-card rounded-lg border border-border p-6 space-y-4">
+                <h3 className="text-lg font-semibold">X Developer App</h3>
+                <div>
+                  <label className="text-sm font-medium">Client ID</label>
+                  <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+                    Erstelle eine X Developer App mit OAuth 2.0 (Native App / Public Client).{' '}
+                    <button
+                      type="button"
+                      onClick={() => open('https://developer.twitter.com/en/portal/dashboard')}
+                      className="text-primary hover:underline inline-flex items-center gap-1"
+                    >
+                      X Developer Portal
+                      <ExternalLink size={12} />
+                    </button>
+                  </p>
+                  <div className="relative max-w-md">
+                    <input
+                      type={showTwitterClientId ? 'text' : 'password'}
+                      value={effectiveTwitterClientId}
+                      onChange={(e) => handleSetApiKey('twitterClientId', e.target.value)}
+                      placeholder="Client ID aus dem X Developer Portal"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTwitterClientId(!showTwitterClientId)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                    >
+                      {showTwitterClientId ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                  {effectiveTwitterClientId && (
+                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                      {secureStorageAvailable && <Shield size={12} />}
+                      Client ID {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Redirect URI: <code className="bg-muted px-1 py-0.5 rounded text-xs">http://127.0.0.1/callback</code>
+                  </p>
+                </div>
+              </div>
+
+              {/* Tweet Settings */}
+              <div className="bg-card rounded-lg border border-border p-6 space-y-4">
+                <h3 className="text-lg font-semibold">Tweet-Einstellungen</h3>
+
+                <div>
+                  <label className="text-sm font-medium">Standard-Hashtags</label>
+                  <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+                    Werden automatisch an jeden Tweet angehängt.
+                  </p>
+                  <input
+                    type="text"
+                    value={twitterDefaultHashtags}
+                    onChange={(e) => setTwitterDefaultHashtags(e.target.value)}
+                    placeholder="#PortfolioNow #Trading"
+                    className="w-full max-w-md rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={twitterIncludeThread}
+                      onChange={(e) => setTwitterIncludeThread(e.target.checked)}
+                      className="rounded border-border"
+                    />
+                    <div>
+                      <span className="text-sm font-medium">Thread-Modus</span>
+                      <p className="text-xs text-muted-foreground">Volle KI-Analyse als Thread (Antwort-Tweets) posten</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={twitterIncludeWatermark}
+                      onChange={(e) => setTwitterIncludeWatermark(e.target.checked)}
+                      className="rounded border-border"
+                    />
+                    <div>
+                      <span className="text-sm font-medium">Watermark</span>
+                      <p className="text-xs text-muted-foreground">"Portfolio Now" Wasserzeichen auf Chart-Bildern anzeigen</p>
+                    </div>
+                  </label>
                 </div>
               </div>
             </div>
@@ -1359,7 +1530,7 @@ export function SettingsView() {
                       type="button"
                       onClick={handleRunValidation}
                       disabled={isValidating}
-                      className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Search size={16} className={isValidating ? 'animate-pulse' : ''} />
                       {isValidating ? 'Validiere...' : 'Jetzt validieren'}
@@ -1395,7 +1566,7 @@ export function SettingsView() {
                   type="button"
                   onClick={handleRebuildFifo}
                   disabled={isRebuilding}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <RefreshCw size={16} className={isRebuilding ? 'animate-spin' : ''} />
                   {isRebuilding ? 'Berechne neu...' : 'FIFO neu berechnen'}

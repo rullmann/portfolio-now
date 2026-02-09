@@ -260,7 +260,7 @@ export function PortfolioFormModal({ isOpen, onClose, onSuccess, portfolio }: Po
               value={formData.referenceAccountId}
               onChange={handleChange}
               disabled={isLoadingAccounts}
-              className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+              className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="">Kein Referenzkonto</option>
               {accounts

@@ -1252,7 +1252,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
               <p className="text-lg font-medium">
                 {ocrStatus || 'Transaktionen werden importiert...'}
               </p>
-              <p className="text-sm text-muted-foreground mt-2">Bitte warten Sie einen Moment.</p>
+              <p className="text-sm text-muted-foreground mt-2">Bitte warte einen Moment.</p>
             </div>
           )}
 
@@ -1321,7 +1321,7 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
             <button
               onClick={handleImport}
               disabled={!previews.every((_, idx) => portfolioPerFile[idx]) || !selectedAccount}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Import starten
             </button>
@@ -1361,11 +1361,11 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
 
             <div className="space-y-3 text-sm text-muted-foreground mb-6">
               <p>
-                Bei Aktivierung der OCR-Funktion werden Ihre PDF-Dokumente an einen
+                Bei Aktivierung der OCR-Funktion werden deine PDF-Dokumente an einen
                 <strong className="text-foreground"> externen KI-Dienst ({aiProvider === 'claude' ? 'Anthropic' : aiProvider === 'openai' ? 'OpenAI' : aiProvider === 'gemini' ? 'Google' : 'Perplexity'})</strong> übermittelt.
               </p>
               <p>
-                Ihre PDFs können <strong className="text-foreground">sensible Finanzdaten</strong> enthalten wie:
+                Deine PDFs können <strong className="text-foreground">sensible Finanzdaten</strong> enthalten wie:
               </p>
               <ul className="list-disc list-inside pl-2 space-y-1">
                 <li>Kontonummern und Depotnummern</li>

@@ -175,7 +175,7 @@ function AttributeInput({ attribute, securityId, onSaved }: AttributeInputProps)
             type="button"
             onClick={handleSave}
             disabled={isSaving}
-            className="p-1.5 text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 rounded disabled:opacity-50"
+            className="p-1.5 text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
             title="Speichern"
           >
             {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
@@ -186,7 +186,7 @@ function AttributeInput({ attribute, securityId, onSaved }: AttributeInputProps)
             type="button"
             onClick={handleClear}
             disabled={isSaving}
-            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-muted rounded opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-muted rounded opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
             title="Wert löschen"
           >
             <X size={14} />

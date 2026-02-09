@@ -110,7 +110,7 @@ export function WidgetDashboardView({
           </div>
           <h2 className="text-xl font-light mb-2">Mein Dashboard</h2>
           <p className="text-sm text-muted-foreground mb-6">
-            Gestalten Sie Ihr persönliches Dashboard mit den Widgets, die Sie am meisten interessieren.
+            Gestalte dein persönliches Dashboard mit den Widgets, die dich am meisten interessieren.
           </p>
           <button
             onClick={() => setIsEditing(true)}

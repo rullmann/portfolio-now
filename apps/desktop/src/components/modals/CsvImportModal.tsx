@@ -494,7 +494,7 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
                       <button
                         onClick={handleAiAnalysis}
                         disabled={isAiAnalyzing}
-                        className="flex items-center gap-2 px-3 py-1 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 shrink-0"
+                        className="flex items-center gap-2 px-3 py-1 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                       >
                         {isAiAnalyzing ? (
                           <>
@@ -631,7 +631,7 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
               <div className="text-center py-12">
                 <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
                 <p className="text-lg font-medium">Transaktionen werden importiert...</p>
-                <p className="text-sm text-muted-foreground mt-2">Bitte warten Sie einen Moment.</p>
+                <p className="text-sm text-muted-foreground mt-2">Bitte warte einen Moment.</p>
               </div>
             )}
 
@@ -697,7 +697,7 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
             <button
               onClick={handleImport}
               disabled={!hasRequiredMappings() || !selectedPortfolio}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Import starten
               <ChevronRight size={16} />

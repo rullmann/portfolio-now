@@ -129,7 +129,7 @@ function AttributeTypeRow({ attribute, onUpdate, onDelete }: AttributeTypeRowPro
             type="button"
             onClick={handleSave}
             disabled={isSaving || !editForm.name.trim()}
-            className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1"
+            className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
           >
             <Save size={14} />
             Speichern
@@ -171,7 +171,7 @@ function AttributeTypeRow({ attribute, onUpdate, onDelete }: AttributeTypeRowPro
           type="button"
           onClick={handleDelete}
           disabled={isDeleting}
-          className="p-1.5 text-muted-foreground hover:text-destructive rounded hover:bg-muted disabled:opacity-50"
+          className="p-1.5 text-muted-foreground hover:text-destructive rounded hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
           title="Löschen"
         >
           <Trash2 size={14} />
@@ -371,7 +371,7 @@ export function AttributeTypeManager({ expanded = false, onToggleExpand }: Attri
                       type="button"
                       onClick={handleCreate}
                       disabled={isCreating || !createForm.name.trim()}
-                      className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
+                      className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isCreating ? 'Erstelle...' : 'Erstellen'}
                     </button>

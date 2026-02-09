@@ -354,7 +354,7 @@ export function SecuritiesView() {
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
-      setError('Bitte wählen Sie eine Bilddatei aus.');
+      setError('Bitte wähle eine Bilddatei aus.');
       return;
     }
 
@@ -558,7 +558,7 @@ export function SecuritiesView() {
           <button
             onClick={() => setIsHistoricalQuotesModalOpen(true)}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Historische Kurse von Kursquellen laden"
           >
             <History size={16} />
@@ -567,7 +567,7 @@ export function SecuritiesView() {
           <button
             onClick={handleSyncPrices}
             disabled={isSyncing || isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Kurse für alle Wertpapiere mit Kursquelle abrufen"
           >
             <Download size={16} className={isSyncing ? 'animate-pulse' : ''} />
@@ -576,7 +576,7 @@ export function SecuritiesView() {
           <button
             onClick={loadSecurities}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             Aktualisieren
@@ -944,7 +944,7 @@ export function SecuritiesView() {
                             handleSyncSingleSecurity(security.id);
                           }}
                           disabled={syncingSecurityId === security.id || !security.feed}
-                          className="p-1.5 hover:bg-muted rounded-md transition-colors disabled:opacity-50"
+                          className="p-1.5 hover:bg-muted rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           title={security.feed ? 'Kurs abrufen' : 'Keine Kursquelle konfiguriert'}
                         >
                           <RefreshCw
@@ -972,7 +972,7 @@ export function SecuritiesView() {
                             handleDelete(security);
                           }}
                           disabled={deletingId === security.id}
-                          className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50"
+                          className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Löschen"
                         >
                           <Trash2
@@ -993,7 +993,7 @@ export function SecuritiesView() {
           </div>
         ) : (
           <div className="p-6 text-center text-muted-foreground">
-            Keine Wertpapiere vorhanden. Importieren Sie eine .portfolio Datei oder erstellen Sie ein neues Wertpapier.
+            Keine Wertpapiere vorhanden. Importiere eine .portfolio Datei oder erstelle ein neues Wertpapier.
           </div>
         )}
       </div>
@@ -1121,7 +1121,7 @@ export function SecuritiesView() {
                                 handleDeleteTransaction(txn);
                               }}
                               disabled={deletingTxnId === txn.id}
-                              className="p-1 hover:bg-destructive/10 rounded transition-colors disabled:opacity-50"
+                              className="p-1 hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Löschen"
                             >
                               <Trash2

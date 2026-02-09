@@ -12,3 +12,6 @@ export type { ComparisonSecurity } from './ComparisonChart';
 export { DrawingTools } from './DrawingTools';
 export type { Drawing, DrawingTool } from './DrawingTools';
 export { PatternStatisticsPanel } from './PatternStatisticsPanel';
+export { ShareToXButton } from './ShareToXButton';
+export type { ShareSecurityInfo } from './ShareToXButton';
+export { ShareToXModal } from './ShareToXModal';

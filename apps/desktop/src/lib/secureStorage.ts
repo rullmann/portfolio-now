@@ -48,7 +48,8 @@ export type ApiKeyType =
   | 'openai'
   | 'gemini'
   | 'perplexity'
-  | 'divvyDiary';
+  | 'divvyDiary'
+  | 'twitterClientId';
 
 /**
  * Store an API key securely
@@ -117,6 +118,7 @@ export async function getAllApiKeys(): Promise<Record<ApiKeyType, string>> {
     'gemini',
     'perplexity',
     'divvyDiary',
+    'twitterClientId',
   ];
 
   const result: Record<ApiKeyType, string> = {
@@ -130,6 +132,7 @@ export async function getAllApiKeys(): Promise<Record<ApiKeyType, string>> {
     gemini: '',
     perplexity: '',
     divvyDiary: '',
+    twitterClientId: '',
   };
 
   for (const key of keys) {

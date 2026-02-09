@@ -29,5 +29,6 @@ pub mod quotes;
 pub mod rebalancing;
 pub mod reports;
 pub mod taxonomy;
+pub mod twitter;
 pub mod validation;
 pub mod watchlist;

@@ -123,7 +123,7 @@ export function WatchlistWidget({ config }: WatchlistWidgetProps) {
               Keine Watchlist vorhanden
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Erstellen Sie eine Watchlist, um Werte zu beobachten
+              Erstelle eine Watchlist, um Werte zu beobachten
             </p>
           </div>
         </div>

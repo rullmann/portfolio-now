@@ -182,7 +182,7 @@ function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting
             <button
               onClick={onConfirm}
               disabled={isExecuting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isExecuting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -194,7 +194,7 @@ function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting
             <button
               onClick={onDecline}
               disabled={isExecuting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <XCircle className="h-3.5 w-3.5" />
               Abbrechen
@@ -251,7 +251,7 @@ function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting
             <button
               onClick={onConfirm}
               disabled={isExecuting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isExecuting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -263,7 +263,7 @@ function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting
             <button
               onClick={onDecline}
               disabled={isExecuting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <XCircle className="h-3.5 w-3.5" />
               Abbrechen
@@ -339,6 +339,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     userName,
     chatContextSize,
     deliveryMode,
+    sqlApprovalMode,
+    sqlErrorHandling,
   } = useSettingsStore();
 
   const { keys } = useSecureApiKeys();
@@ -1231,6 +1233,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           baseCurrency: baseCurrency || 'EUR',
           userName: userName || null,
           language: language || 'de',
+          sqlApprovalMode: sqlApprovalMode || 'session',
         },
       });
 
@@ -1428,6 +1431,19 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           }
         }
         setPendingQueries((prev) => [...prev, ...savedQueries]);
+      }
+
+      // Auto-retry SQL errors: when sqlErrorHandling is 'auto_retry' and the response
+      // contains SQL errors, automatically send a follow-up to let the AI correct itself
+      const hasSqlError = response.response.includes('SQL-Fehler:');
+      if (hasSqlError && sqlErrorHandling === 'auto_retry') {
+        // Extract the error for context
+        const errorMatch = response.response.match(/SQL-Fehler:\s*(.+)/);
+        const errorDetail = errorMatch ? errorMatch[1].trim() : 'unbekannter Fehler';
+        // Schedule a follow-up message (non-blocking, after current render)
+        setTimeout(() => {
+          sendMessage(`Die SQL-Abfrage hatte einen Fehler: "${errorDetail}". Bitte korrigiere die Abfrage und versuche es erneut.`);
+        }, 500);
       }
 
       // UX: Warn user if image was sent but no transactions were extracted
@@ -2062,7 +2078,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                     key={question}
                     onClick={() => sendMessage(question)}
                     disabled={isLoading || !hasApiKey()}
-                    className="block w-full text-left px-3 py-2 text-sm rounded-lg bg-muted/50 hover:bg-muted transition-colors disabled:opacity-50"
+                    className="block w-full text-left px-3 py-2 text-sm rounded-lg bg-muted/50 hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {question}
                   </button>
@@ -2124,7 +2140,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                                   <button
                                     onClick={() => executeSuggestion(suggestion)}
                                     disabled={executingSuggestion !== null}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   >
                                     {executingSuggestion === suggestion.payload ? (
                                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2136,7 +2152,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                                   <button
                                     onClick={() => declineSuggestion(suggestion)}
                                     disabled={executingSuggestion !== null}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   >
                                     <XCircle className="h-3.5 w-3.5" />
                                     Abbrechen
@@ -2215,7 +2231,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                                 <button
                                   onClick={() => executeSuggestion(suggestion)}
                                   disabled={executingSuggestion !== null}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                 >
                                   {executingSuggestion === suggestion.payload ? (
                                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2227,7 +2243,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                                 <button
                                   onClick={() => declineSuggestion(suggestion)}
                                   disabled={executingSuggestion !== null}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                 >
                                   <XCircle className="h-3.5 w-3.5" />
                                   Abbrechen
@@ -2258,6 +2274,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                       onDecline={() => handleDeclineQuery(query)}
                       isExecuting={executingQuery === query.payload}
                       disabled={executingQuery !== null}
+                      sqlApprovalMode={sqlApprovalMode}
                     />
                   ))}
                 </div>

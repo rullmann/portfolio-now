@@ -53,6 +53,11 @@ const FORBIDDEN_KEYWORDS: &[&str] = &[
 static APPROVED_SQL_PATTERNS: Lazy<Mutex<HashSet<u64>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Global session approval flag: when true, ALL SQL queries are auto-approved
+/// Set when user clicks "Für Sitzung erlauben" in session mode
+static SESSION_GLOBALLY_APPROVED: Lazy<Mutex<bool>> =
+    Lazy::new(|| Mutex::new(false));
+
 /// SQL query extracted from AI response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqlQuery {
@@ -329,6 +334,14 @@ pub fn format_as_markdown(result: &SqlResult) -> String {
 
 /// Checks if a similar SQL pattern has been approved for this session
 pub fn is_sql_pattern_approved(sql: &str) -> bool {
+    // Check global session approval first
+    if SESSION_GLOBALLY_APPROVED
+        .lock()
+        .map(|guard| *guard)
+        .unwrap_or(false)
+    {
+        return true;
+    }
     let pattern_hash = hash_sql_pattern(sql);
     APPROVED_SQL_PATTERNS
         .lock()
@@ -336,8 +349,13 @@ pub fn is_sql_pattern_approved(sql: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Approves an SQL pattern for this session
+/// Approves an SQL pattern for this session and enables global session approval
 pub fn approve_sql_pattern(sql: &str) {
+    // Set global session approval so ALL future queries are auto-approved
+    if let Ok(mut guard) = SESSION_GLOBALLY_APPROVED.lock() {
+        *guard = true;
+        log::info!("Global SQL session approval enabled");
+    }
     let pattern_hash = hash_sql_pattern(sql);
     if let Ok(mut guard) = APPROVED_SQL_PATTERNS.lock() {
         guard.insert(pattern_hash);
@@ -347,9 +365,12 @@ pub fn approve_sql_pattern(sql: &str) {
 
 /// Clears all session approvals
 pub fn clear_sql_approvals() {
+    if let Ok(mut guard) = SESSION_GLOBALLY_APPROVED.lock() {
+        *guard = false;
+    }
     if let Ok(mut guard) = APPROVED_SQL_PATTERNS.lock() {
         guard.clear();
-        log::info!("Cleared all SQL pattern approvals");
+        log::info!("Cleared all SQL pattern approvals (global flag reset)");
     }
 }
 

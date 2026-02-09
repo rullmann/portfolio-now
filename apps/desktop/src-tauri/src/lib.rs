@@ -394,6 +394,14 @@ pub fn run() {
             // User Profile
             commands::profile::set_user_profile_picture,
             commands::profile::get_user_profile_picture,
+            // Twitter/X Sharing
+            commands::twitter::twitter_start_auth,
+            commands::twitter::twitter_await_callback,
+            commands::twitter::twitter_exchange_token,
+            commands::twitter::twitter_refresh_token,
+            commands::twitter::twitter_get_user_info,
+            commands::twitter::twitter_upload_media,
+            commands::twitter::twitter_post_tweet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

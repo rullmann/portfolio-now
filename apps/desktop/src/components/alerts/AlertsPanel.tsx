@@ -255,7 +255,7 @@ export function AlertsPanel({ portfolioId, onAddTarget, className = '' }: Alerts
               <Settings2 className="h-12 w-12 text-muted-foreground mb-4" />
               <h3 className="font-medium">Keine Zielgewichtungen</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Definieren Sie Zielgewichtungen für Securities oder Klassifikationen
+                Definiere Zielgewichtungen für Securities oder Klassifikationen
               </p>
               {onAddTarget && (
                 <button

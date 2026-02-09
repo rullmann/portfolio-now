@@ -83,7 +83,7 @@ export function AccountsView() {
           <button
             onClick={loadAccounts}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             Aktualisieren
@@ -147,7 +147,7 @@ export function AccountsView() {
                   <button
                     onClick={() => handleDelete(account)}
                     disabled={deletingId === account.id}
-                    className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50"
+                    className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Löschen"
                   >
                     <Trash2
@@ -186,7 +186,7 @@ export function AccountsView() {
         </div>
       ) : (
         <div className="bg-card rounded-lg border border-border p-6 text-center text-muted-foreground">
-          Keine Konten vorhanden. Importieren Sie eine .portfolio Datei oder erstellen Sie ein neues Konto.
+          Keine Konten vorhanden. Importiere eine .portfolio Datei oder erstelle ein neues Konto.
         </div>
       )}
 

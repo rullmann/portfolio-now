@@ -261,7 +261,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
         <PieChartIcon className="w-16 h-16 text-muted-foreground mb-4" />
         <h2 className="text-2xl font-semibold mb-2">Keine Bestände vorhanden</h2>
         <p className="text-muted-foreground">
-          Importieren Sie eine .portfolio Datei, um Ihre Bestände zu sehen.
+          Importiere eine .portfolio Datei, um deine Bestände zu sehen.
         </p>
       </div>
     );

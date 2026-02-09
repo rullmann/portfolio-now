@@ -293,7 +293,7 @@ export function DividendsView() {
             <button
               onClick={loadData}
               disabled={isLoading}
-              className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-2 border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
               Aktualisieren

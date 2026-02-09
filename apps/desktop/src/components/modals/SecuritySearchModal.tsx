@@ -367,7 +367,7 @@ export function SecuritySearchModal({
                     className={`ml-4 px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors ${
                       addedSymbols.has(result.symbol)
                         ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                        : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50'
+                        : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
                   >
                     {addingSymbol === result.symbol ? (

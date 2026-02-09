@@ -155,7 +155,7 @@ export function BenchmarkView() {
           <button
             onClick={loadComparison}
             disabled={!selectedBenchmark || isLoading}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Vergleichen
           </button>
@@ -274,7 +274,7 @@ export function BenchmarkView() {
           <div className="text-center text-muted-foreground py-4">
             <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
             <p>Keine Benchmarks definiert.</p>
-            <p className="text-sm mt-1">Fügen Sie einen Benchmark hinzu, um Ihre Performance zu vergleichen.</p>
+            <p className="text-sm mt-1">Füge einen Benchmark hinzu, um deine Performance zu vergleichen.</p>
           </div>
         )}
       </div>

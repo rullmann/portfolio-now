@@ -221,7 +221,7 @@ export function ComparisonChart({
         className="flex items-center justify-center text-muted-foreground"
         style={{ height }}
       >
-        Wählen Sie Wertpapiere zum Vergleichen aus
+        Wähle Wertpapiere zum Vergleichen aus
       </div>
     );
   }

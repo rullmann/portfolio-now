@@ -626,9 +626,9 @@ export function DashboardView({
           {/* Portfolio Value - Hero */}
           <div
             className="glass-card p-4 flex-1 min-w-[280px] cursor-help"
-            title="Gesamtwert Ihres Portfolios
+            title="Gesamtwert deines Portfolios
 
-Der aktuelle Marktwert aller Ihrer Wertpapiere basierend auf den letzten verfügbaren Kursen.
+Der aktuelle Marktwert aller deiner Wertpapiere basierend auf den letzten verfügbaren Kursen.
 
 Berechnung:
 • Summe aller Positionen × aktuelle Kurse
@@ -692,7 +692,7 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
             className="glass-card p-3 min-w-[100px] cursor-help"
             title="Tagesperformance
 
-Zeigt die Wertänderung Ihres Portfolios seit dem letzten Handelstag.
+Zeigt die Wertänderung deines Portfolios seit dem letzten Handelstag.
 
 Berechnung:
 • Aktueller Wert minus Wert am Vortag
@@ -726,11 +726,11 @@ Hinweis: Berücksichtigt nur Kursänderungen, keine Ein-/Auszahlungen am selben 
 Misst die reine Anlageperformance unabhängig von Ein- und Auszahlungen.
 
 Gut geeignet um:
-• Ihre Anlageentscheidungen zu bewerten
+• Deine Anlageentscheidungen zu bewerten
 • Mit Benchmarks (z.B. MSCI World) zu vergleichen
 • Fondsmanager zu vergleichen
 
-Beispiel: Wenn Sie 1.000€ investieren und der Markt um 10% steigt, ist der TTWROR +10% - egal wann Sie das Geld eingezahlt haben."
+Beispiel: Wenn du 1.000€ investierst und der Markt um 10% steigt, ist der TTWROR +10% - egal wann du das Geld eingezahlt hast."
           >
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               TTWROR
@@ -751,14 +751,14 @@ Beispiel: Wenn Sie 1.000€ investieren und der Markt um 10% steigt, ist der TTW
             className="glass-card p-3 min-w-[100px] cursor-help"
             title="IRR (Internal Rate of Return / Interner Zinsfuß)
 
-Misst Ihre persönliche Rendite unter Berücksichtigung WANN Sie Geld ein- oder ausgezahlt haben.
+Misst deine persönliche Rendite unter Berücksichtigung WANN du Geld ein- oder ausgezahlt hast.
 
 Gut geeignet um:
-• Ihre tatsächliche Vermögensentwicklung zu sehen
+• Deine tatsächliche Vermögensentwicklung zu sehen
 • Mit Festgeld/Tagesgeld zu vergleichen
 • Den Effekt von Market Timing zu erkennen
 
-Beispiel: Wenn Sie vor einem Crash mehr investiert haben, ist Ihr IRR niedriger als der TTWROR - und umgekehrt bei gutem Timing."
+Beispiel: Wenn du vor einem Crash mehr investiert hast, ist dein IRR niedriger als der TTWROR - und umgekehrt bei gutem Timing."
           >
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               IRR
@@ -779,7 +779,7 @@ Beispiel: Wenn Sie vor einem Crash mehr investiert haben, ist Ihr IRR niedriger 
             className="glass-card p-3 min-w-[100px] cursor-help"
             title="Einstand (Cost Basis)
 
-Ihre gesamten Anschaffungskosten nach der FIFO-Methode (First In, First Out).
+Deine gesamten Anschaffungskosten nach der FIFO-Methode (First In, First Out).
 
 Beinhaltet:
 • Kaufpreise aller Positionen
@@ -852,7 +852,7 @@ Berechnung:
             className="glass-card p-3 flex flex-col justify-between min-w-[110px] cursor-help"
             title="Automatische Kursaktualisierung
 
-Lädt aktuelle Kurse für Ihre Wertpapiere automatisch im gewählten Intervall.
+Lädt aktuelle Kurse für deine Wertpapiere automatisch im gewählten Intervall.
 
 Quellen:
 • Yahoo Finance (kostenlos)
@@ -1043,7 +1043,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
         </div>
         <h2 className="text-xl font-light mb-2">Portfolio Now</h2>
         <p className="text-sm text-muted-foreground mb-8">
-          Importieren Sie Ihre Portfolio Performance Datei, um zu starten
+          Importiere deine Portfolio Performance Datei, um zu starten
         </p>
         <button
           onClick={onImportPP}

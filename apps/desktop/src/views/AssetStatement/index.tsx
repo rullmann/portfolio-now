@@ -480,7 +480,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
         <Table2 className="w-16 h-16 text-muted-foreground mb-4" />
         <h2 className="text-2xl font-semibold mb-2">Keine Bestände vorhanden</h2>
         <p className="text-muted-foreground">
-          Importieren Sie eine .portfolio Datei, um die Vermögensaufstellung zu sehen.
+          Importiere eine .portfolio Datei, um die Vermögensaufstellung zu sehen.
         </p>
       </div>
     );
@@ -865,7 +865,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                 <LineChartIcon className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
                 <p className="text-muted-foreground">Keine historischen Daten verfügbar.</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Aktualisieren Sie die Kurse, um den Verlauf zu sehen.
+                  Aktualisiere die Kurse, um den Verlauf zu sehen.
                 </p>
               </div>
             </div>

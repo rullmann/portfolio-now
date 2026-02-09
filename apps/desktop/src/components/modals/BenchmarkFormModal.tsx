@@ -240,7 +240,7 @@ export function BenchmarkFormModal({
                   setSelectedExternal(null);
                 }}
                 disabled={isLoadingInternal}
-                className="w-full pl-9 pr-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                className="w-full pl-9 pr-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder={
                   searchMode === 'internal'
                     ? 'z.B. MSCI World, S&P 500...'
@@ -273,7 +273,7 @@ export function BenchmarkFormModal({
                   ))
                 ) : (
                   <div className="px-3 py-4 text-sm text-muted-foreground text-center">
-                    Keine Ergebnisse. Versuchen Sie die Yahoo-Suche.
+                    Keine Ergebnisse. Versuche die Yahoo-Suche.
                   </div>
                 )
               ) : externalResults.length > 0 ? (
@@ -351,7 +351,7 @@ export function BenchmarkFormModal({
               className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Ab diesem Datum wird der Benchmark mit Ihrem Portfolio verglichen.
+              Ab diesem Datum wird der Benchmark mit deinem Portfolio verglichen.
             </p>
           </div>
 

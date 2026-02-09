@@ -9,6 +9,7 @@ interface QueryApprovalCardProps {
   onDecline: () => void;
   isExecuting?: boolean;
   disabled?: boolean;
+  sqlApprovalMode?: 'always' | 'session' | 'never';
 }
 
 /**
@@ -47,6 +48,7 @@ export function QueryApprovalCard({
   onDecline,
   isExecuting = false,
   disabled = false,
+  sqlApprovalMode = 'session',
 }: QueryApprovalCardProps) {
   const Icon = getQueryTypeIcon(query.queryType);
   const label = getQueryTypeLabel(query.queryType);
@@ -87,18 +89,20 @@ export function QueryApprovalCard({
               Einmal erlauben
             </button>
 
-            <button
-              onClick={onApproveSession}
-              disabled={disabled || isExecuting}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-                'bg-primary text-primary-foreground hover:bg-primary/90',
-                'disabled:opacity-50 disabled:cursor-not-allowed'
-              )}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Für Sitzung erlauben
-            </button>
+            {sqlApprovalMode !== 'always' && (
+              <button
+                onClick={onApproveSession}
+                disabled={disabled || isExecuting}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                  'bg-primary text-primary-foreground hover:bg-primary/90',
+                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                )}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Für Sitzung erlauben
+              </button>
+            )}
 
             <button
               onClick={onDecline}

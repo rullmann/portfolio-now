@@ -231,7 +231,7 @@ export function RebalancingView() {
             <button
               onClick={handleAiSuggest}
               disabled={isLoadingAi || holdings.length === 0}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               title={`KI-Vorschlag mit ${aiProvider}`}
             >
               <Sparkles size={16} className={isLoadingAi ? 'animate-pulse' : ''} />
@@ -498,11 +498,11 @@ export function RebalancingView() {
         <div className="bg-muted/50 rounded-lg border border-border p-4 text-sm text-muted-foreground">
           <p className="font-medium text-foreground mb-1">So funktioniert es:</p>
           <ol className="list-decimal list-inside space-y-1">
-            <li>Klicken Sie auf "KI-Vorschlag" für eine automatische Analyse</li>
+            <li>Klicke auf "KI-Vorschlag" für eine automatische Analyse</li>
             <li>Die KI schlägt optimale Zielgewichtungen vor</li>
-            <li>Passen Sie die Zielwerte manuell an, falls gewünscht</li>
-            <li>Klicken Sie auf "Ziel", um Warnungen bei Abweichungen zu erhalten</li>
-            <li>Führen Sie die Käufe/Verkäufe manuell in Ihrem Depot aus</li>
+            <li>Passe die Zielwerte manuell an, falls gewünscht</li>
+            <li>Klicke auf "Ziel", um Warnungen bei Abweichungen zu erhalten</li>
+            <li>Führe die Käufe/Verkäufe manuell in deinem Depot aus</li>
           </ol>
         </div>
       )}

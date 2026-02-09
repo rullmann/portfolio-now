@@ -34,7 +34,7 @@ import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
 import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SignalsPanel } from '../../components/charts/SignalsPanel';
 import { AlertsPanel } from '../../components/charts/AlertsPanel';
-import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel } from '../../components/charts';
+import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel, ShareToXButton } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
 import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
@@ -52,6 +52,7 @@ import {
   type ChartDrawingResponse,
 } from '../../lib/api';
 import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
+import { getAllSignals } from '../../lib/signals';
 import type { AggregatedHolding } from '../types';
 
 // ============================================================================
@@ -492,6 +493,12 @@ export function ChartsView() {
     return useHeikinAshi ? convertToHeikinAshi(data) : data;
   }, [priceData, useHeikinAshi]);
 
+  // Compute signals for Share button (same as SignalsPanel)
+  const chartSignals = useMemo(() => {
+    if (ohlcData.length < 30) return [];
+    return getAllSignals(ohlcData);
+  }, [ohlcData]);
+
   // Handle search modal security added
   const handleSecurityAdded = (securityId: number) => {
     setWatchlistSecurityIds(prev => new Set([...prev, securityId]));
@@ -740,7 +747,7 @@ export function ChartsView() {
           <button
             onClick={loadPriceData}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
             Aktualisieren
@@ -955,6 +962,17 @@ export function ChartsView() {
                     <Pencil size={14} />
                     Zeichnen
                   </button>
+                )}
+
+                {/* Share to X Button */}
+                {!isComparisonMode && selectedSecurity && (
+                  <ShareToXButton
+                    variant="icon"
+                    chartRef={chartContainerRef}
+                    security={selectedSecurity}
+                    currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
+                    signals={chartSignals}
+                  />
                 )}
 
                 {isComparisonMode ? (

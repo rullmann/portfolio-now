@@ -32,6 +32,7 @@ import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { AiProvider } from '../../store';
 import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
 import { saveAnnotations, getAnnotations } from '../../lib/api';
+import { ShareToXButton } from './ShareToXButton';
 
 // Local SecurityData type (simplified version used in ChartsView)
 interface SecurityData {
@@ -1149,12 +1150,25 @@ export function AIAnalysisPanel({
             <span className="text-xs text-muted-foreground">
               Dies ist keine Anlageberatung. Analysen können fehlerhaft sein.
             </span>
-            {analysisInfo && (
-              <span className="text-xs text-muted-foreground">
-                {analysisInfo.model}
-                {analysisInfo.tokens && ` | ${analysisInfo.tokens.toLocaleString()} Tokens`}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {analysis && security && (
+                <ShareToXButton
+                  variant="button"
+                  chartRef={chartRef}
+                  security={security}
+                  currentPrice={currentPrice}
+                  analysis={analysis}
+                  trendInfo={trendInfo ?? undefined}
+                  riskReward={riskReward ?? undefined}
+                />
+              )}
+              {analysisInfo && (
+                <span className="text-xs text-muted-foreground">
+                  {analysisInfo.model}
+                  {analysisInfo.tokens && ` | ${analysisInfo.tokens.toLocaleString()} Tokens`}
+                </span>
+              )}
+            </div>
           </div>
         </>
       )}

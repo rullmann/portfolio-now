@@ -192,7 +192,7 @@ export function PatternStatisticsPanel({ securityId: _securityId }: PatternStati
             <button
               onClick={handleEvaluate}
               disabled={isEvaluating}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw size={14} className={isEvaluating ? 'animate-spin' : ''} />
               {isEvaluating ? 'Auswertung...' : 'Patterns auswerten'}

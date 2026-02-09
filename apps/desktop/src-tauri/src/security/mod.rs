@@ -318,6 +318,24 @@ pub mod limits {
             window_duration: Duration::from_secs(60),
         }
     }
+
+    /// Rate limit for Twitter media uploads (1 per 10 seconds, max 10 per 5 minutes)
+    pub fn twitter_upload() -> RateLimitConfig {
+        RateLimitConfig {
+            min_interval: Duration::from_secs(10),
+            max_requests_per_window: 10,
+            window_duration: Duration::from_secs(300),
+        }
+    }
+
+    /// Rate limit for Twitter tweet posting (1 per 30 seconds, max 5 per 5 minutes)
+    pub fn twitter_post() -> RateLimitConfig {
+        RateLimitConfig {
+            min_interval: Duration::from_secs(30),
+            max_requests_per_window: 5,
+            window_duration: Duration::from_secs(300),
+        }
+    }
 }
 
 // ============================================================================

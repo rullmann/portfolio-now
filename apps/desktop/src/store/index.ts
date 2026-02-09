@@ -448,10 +448,18 @@ interface SettingsState {
   setChatContextSize: (size: number) => void;
 
   // ChatBot SQL Settings (Dynamic Query System)
-  sqlApprovalMode: 'always' | 'session' | 'never'; // always=ask every time, session=once per pattern, never=auto-execute
+  sqlApprovalMode: 'always' | 'session' | 'never'; // always=ask every time, session=once globally per app session, never=auto-execute
   setSqlApprovalMode: (mode: 'always' | 'session' | 'never') => void;
   sqlErrorHandling: 'auto_retry' | 'show_error'; // auto_retry=LLM fixes SQL, show_error=show error only
   setSqlErrorHandling: (mode: 'auto_retry' | 'show_error') => void;
+
+  // Twitter/X Sharing Settings
+  twitterDefaultHashtags: string;
+  setTwitterDefaultHashtags: (hashtags: string) => void;
+  twitterIncludeThread: boolean;
+  setTwitterIncludeThread: (include: boolean) => void;
+  twitterIncludeWatermark: boolean;
+  setTwitterIncludeWatermark: (include: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -565,14 +573,22 @@ export const useSettingsStore = create<SettingsState>()(
       setChatContextSize: (size) => set({ chatContextSize: size }),
 
       // ChatBot SQL Settings (Dynamic Query System)
-      sqlApprovalMode: 'session', // Default: approve once per session per pattern
+      sqlApprovalMode: 'session', // Default: approve once globally per app session
       setSqlApprovalMode: (mode) => set({ sqlApprovalMode: mode }),
       sqlErrorHandling: 'auto_retry', // Default: let LLM fix SQL errors
       setSqlErrorHandling: (mode) => set({ sqlErrorHandling: mode }),
+
+      // Twitter/X Sharing Settings
+      twitterDefaultHashtags: '#PortfolioNow #Trading',
+      setTwitterDefaultHashtags: (hashtags) => set({ twitterDefaultHashtags: hashtags }),
+      twitterIncludeThread: true,
+      setTwitterIncludeThread: (include) => set({ twitterIncludeThread: include }),
+      twitterIncludeWatermark: true,
+      setTwitterIncludeWatermark: (include) => set({ twitterIncludeWatermark: include }),
     }),
     {
       name: 'portfolio-settings',
-      version: 9, // v9: Added ChatBot SQL settings (sqlApprovalMode, sqlErrorHandling)
+      version: 10, // v10: Added Twitter/X sharing settings
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -636,8 +652,15 @@ export const useSettingsStore = create<SettingsState>()(
 
         // Migration v9: Add ChatBot SQL settings
         if (version < 9) {
-          state.sqlApprovalMode = 'session'; // Default: approve once per session per pattern
+          state.sqlApprovalMode = 'session'; // Default: approve once globally per app session
           state.sqlErrorHandling = 'auto_retry'; // Default: let LLM fix SQL errors
+        }
+
+        // Migration v10: Add Twitter/X sharing settings
+        if (version < 10) {
+          state.twitterDefaultHashtags = '#PortfolioNow #Trading';
+          state.twitterIncludeThread = true;
+          state.twitterIncludeWatermark = true;
         }
 
         return state as SettingsState;

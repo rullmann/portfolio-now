@@ -79,6 +79,12 @@ pdf-extract = "0.7"
 # PDF generation for reports
 printpdf = "0.7"
 
+# SHA-256 hashing for OAuth PKCE challenge
+sha2 = "0.10"
+
+# Random generation for OAuth PKCE verifier
+rand = "0.8"
+
 
 [dev-dependencies]
 

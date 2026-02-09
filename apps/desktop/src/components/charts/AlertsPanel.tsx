@@ -305,7 +305,7 @@ function CreateAlertForm({
         <button
           type="submit"
           disabled={isLoading || !targetValue}
-          className="flex-1 px-2 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
+          className="flex-1 px-2 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isLoading ? 'Erstelle...' : 'Alert erstellen'}
         </button>
@@ -460,7 +460,7 @@ export function AlertsPanel({ securityId, currentPrice, currency }: AlertsPanelP
               <button
                 onClick={() => setIsCreating(true)}
                 disabled={!securityId}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-muted hover:bg-muted/80 rounded transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-muted hover:bg-muted/80 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus size={12} />
                 Alert hinzufügen

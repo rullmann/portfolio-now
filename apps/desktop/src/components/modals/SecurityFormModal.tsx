@@ -746,7 +746,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
                   type="button"
                   onClick={handleFetchAiSuggestions}
                   disabled={aiLoading}
-                  className="px-3 py-2 border border-border rounded-md bg-background hover:bg-muted transition-colors disabled:opacity-50"
+                  className="px-3 py-2 border border-border rounded-md bg-background hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   title="KI-Assistent für Kursquellen"
                 >
                   {aiLoading ? (

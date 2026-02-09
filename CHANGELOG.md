@@ -5,7 +5,7 @@ All notable changes to Portfolio Now will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.8] - 2026-02-01
+## [0.1.8] - 2026-02-09
 
 ### Changed
 - **Dynamic SQL System**: ChatBot now uses dynamic SQL generation via `sql_executor.rs` instead of fixed templates
@@ -75,6 +75,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Name-Similarity**: Trailing-Punctuation-Stripping + Prefix-Matching für Abkürzungen (z.B. "Corp" ↔ "Corporation")
 - 6 neue SQL-Validierungs-Tests in `sql_executor.rs`
 - **Ergebnis**: 313 Tests bestanden, 0 Fehler (vorher 311 bestanden, 2 Fehler)
+
+### Share to X (Twitter) Feature
+- **OAuth 2.0 PKCE**: Browser-basierte Autorisierung mit lokalem Callback-Server
+- **Tweet mit Chart-Bild**: Screenshot mit Overlay (Header, Signale, R/R, Watermark)
+- **Thread-Modus**: Haupt-Tweet + Reply mit voller KI-Analyse
+- **Token-Refresh**: Automatische Erneuerung nach 2h
+- 7 neue Tauri Commands: `twitter_start_auth`, `twitter_await_callback`, `twitter_exchange_token`, `twitter_refresh_token`, `twitter_get_user_info`, `twitter_upload_media`, `twitter_post_tweet`
+- Share-Button in Chart-Toolbar und AIAnalysisPanel
+- Settings-Bereich "Teilen" mit X-Verbindungsstatus, Hashtags, Thread-/Watermark-Optionen
+
+### UI-Konsistenz-Audit (2026-02-09)
+
+#### Sprachkonsistenz
+- **Sie→du**: 49 Stellen in 27 Dateien von formeller Anrede ("Sie/Ihre") auf informelle du-Form umgestellt
+- Betrifft alle Views (Dashboard, Holdings, Benchmark, Settings, Rebalancing, etc.) und Modals
+
+#### Button-Konsistenz
+- **`disabled:cursor-not-allowed`**: 44 fehlende Stellen in 31 Dateien ergänzt (Views, Components, Modals)
+- Alle 99 Elemente mit `disabled:opacity-50` haben jetzt auch `disabled:cursor-not-allowed`
+
+#### DivvyDiary Export Modal
+- Komplett überarbeitet: API-Key-Eingabe entfernt (nur noch in Settings)
+- Verbindungsstatus-Banner entfernt (implizit durch Portfolio-Laden)
+- Teilweise API-Key-Anzeige (`key.slice()`) entfernt
+- Hardcodierte Farbe `#ff8a4c` durch Theme-Variable `bg-primary` ersetzt
+- Footer an Standard-Modal-Pattern angepasst (wie PdfExportModal)
+
+#### Neue Regeln in CLAUDE.md
+- **Modal-Footer-Pattern**: Verbindlich dokumentiert (Referenz: PdfExportModal)
+- **API-Key-Anzeige**: Niemals in Feature-Dialogen, auch nicht teilweise
+- **Verbindungsstatus-Banner**: Nicht in Feature-Dialogen
+- **Sprache**: Durchgehend informelles Deutsch (du-Form)
+- **scrollTarget-Map**: `'sharing'` ergänzt (war fehlend)
+
+### SQL-Settings Fixes
+- Session-Modus: Beschreibungstext korrigiert ("alle weiteren Abfragen" statt "ähnliche")
+- Store-Kommentare aktualisiert ("globally per session" statt "per pattern")
+- QueryApprovalCard: "Für Sitzung erlauben" im `always`-Modus ausgeblendet
+- `sqlErrorHandling` live geschaltet: `auto_retry` sendet Follow-up an KI bei SQL-Fehlern
 
 ## [0.1.7] - 2026-01-29
 

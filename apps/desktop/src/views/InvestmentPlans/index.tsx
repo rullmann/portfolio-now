@@ -195,7 +195,7 @@ export function InvestmentPlansView() {
                 <button
                   onClick={() => handleExecute(plan)}
                   disabled={executingPlanId === plan.id}
-                  className="flex items-center gap-1 px-3 py-1 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50"
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {executingPlanId === plan.id ? (
                     <>
@@ -356,7 +356,7 @@ export function InvestmentPlansView() {
           <div className="p-8 text-center text-muted-foreground">
             <CalendarClock className="w-12 h-12 mx-auto mb-3 opacity-50" />
             <p>Keine Sparpläne vorhanden.</p>
-            <p className="text-sm mt-1">Erstellen Sie einen neuen Sparplan.</p>
+            <p className="text-sm mt-1">Erstelle einen neuen Sparplan.</p>
           </div>
         )}
       </div>

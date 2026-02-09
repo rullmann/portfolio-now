@@ -357,7 +357,7 @@ export function TaxonomiesView() {
                 <div className="text-sm text-muted-foreground text-center py-4">
                   Keine Taxonomien vorhanden.
                   <br />
-                  Erstellen Sie Standard-Taxonomien.
+                  Erstelle Standard-Taxonomien.
                 </div>
               )}
             </div>
@@ -404,7 +404,7 @@ export function TaxonomiesView() {
             ) : (
               <div className="p-8 text-center text-muted-foreground">
                 <FolderTree className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p>Wählen Sie eine Taxonomie aus.</p>
+                <p>Wähle eine Taxonomie aus.</p>
               </div>
             )}
           </div>

@@ -642,7 +642,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                   <button
                     onClick={handleAnalyze}
                     disabled={isAnalyzing}
-                    className="flex items-center gap-2 px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                    className="flex items-center gap-2 px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {isAnalyzing ? (
                       <>
@@ -709,7 +709,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                   <button
                     onClick={handleForceReload}
                     disabled={isForceReloading}
-                    className="flex items-center gap-1.5 px-2 py-1 text-xs border border-amber-500/50 text-amber-600 rounded hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs border border-amber-500/50 text-amber-600 rounded hover:bg-amber-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Alle Kurse löschen und komplett neu laden"
                   >
                     <RotateCcw size={12} className={isForceReloading ? 'animate-spin' : ''} />

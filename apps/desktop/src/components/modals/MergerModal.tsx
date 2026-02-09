@@ -194,7 +194,7 @@ export function MergerModal({
                   onChange={handleChange}
                   required
                   disabled={isLoadingSecurities}
-                  className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">Auswählen...</option>
                   {availableSecurities.map((s) => (
@@ -219,7 +219,7 @@ export function MergerModal({
                   onChange={handleChange}
                   required
                   disabled={isLoadingSecurities}
-                  className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">Auswählen...</option>
                   {availableSecurities
@@ -231,7 +231,7 @@ export function MergerModal({
                     ))}
                 </select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Das Wertpapier, das Sie erhalten
+                  Das Wertpapier, das du erhältst
                 </p>
               </div>
 
@@ -360,7 +360,7 @@ export function MergerModal({
                 <AlertTriangle className="text-amber-600 mt-0.5" size={20} />
                 <div>
                   <p className="font-medium text-amber-900 dark:text-amber-200">
-                    Bitte überprüfen Sie die Änderungen
+                    Bitte überprüfe die Änderungen
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
                     Diese Aktion erstellt Auslieferungs- und Einlieferungstransaktionen.

@@ -346,13 +346,13 @@ export function WatchlistView() {
                 <div className="p-8 text-center text-muted-foreground">
                   <Eye className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>Diese Watchlist ist leer.</p>
-                  <p className="text-sm mt-1">Fügen Sie Wertpapiere aus der Wertpapier-Ansicht hinzu.</p>
+                  <p className="text-sm mt-1">Füge Wertpapiere aus der Wertpapier-Ansicht hinzu.</p>
                 </div>
               )
             ) : (
               <div className="p-8 text-center text-muted-foreground">
                 <Eye className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p>Wählen Sie eine Watchlist aus oder erstellen Sie eine neue.</p>
+                <p>Wähle eine Watchlist aus oder erstelle eine neue.</p>
               </div>
             )}
           </div>

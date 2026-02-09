@@ -791,7 +791,7 @@ pub struct ParsedResponseWithSuggestions {
 /// - Checks query type approval before executing read-only queries
 /// - Returns unapproved queries as PENDING_QUERIES for user approval
 /// - Returns structured result for frontend to handle
-pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSuggestions {
+pub fn parse_response_with_suggestions(response: String, sql_approval_mode: &str) -> ParsedResponseWithSuggestions {
     // DEBUG: Log incoming response for troubleshooting
     log::info!("=== PARSING AI RESPONSE ===");
     log::info!("Response length: {} chars", response.len());
@@ -907,8 +907,12 @@ pub fn parse_response_with_suggestions(response: String) -> ParsedResponseWithSu
         use crate::ai::sql_executor::is_sql_pattern_approved;
 
         for query in sql_queries {
-            let is_approved = is_sql_pattern_approved(&query.sql);
-            log::info!("SQL query '{}' approved: {}", &query.description, is_approved);
+            let is_approved = match sql_approval_mode {
+                "never" => true,  // Auto-execute all queries without asking
+                "session" => is_sql_pattern_approved(&query.sql),  // Check session pattern cache
+                _ => false,  // "always" or unknown: always ask for approval
+            };
+            log::info!("SQL query '{}' approved: {} (mode: {})", &query.description, is_approved, sql_approval_mode);
 
             if is_approved {
                 // Pattern approved for session - execute directly

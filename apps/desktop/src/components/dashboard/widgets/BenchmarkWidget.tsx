@@ -136,7 +136,7 @@ export function BenchmarkWidget({ config }: BenchmarkWidgetProps) {
               Kein Benchmark definiert
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Erstellen Sie einen Benchmark unter Benchmark
+              Erstelle einen Benchmark unter Benchmark
             </p>
           </div>
         </div>

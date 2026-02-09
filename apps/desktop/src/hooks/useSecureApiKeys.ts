@@ -102,6 +102,8 @@ interface SecureApiKeys {
   perplexityApiKey: string;
   // External services
   divvyDiaryApiKey: string;
+  // Twitter/X
+  twitterClientId: string;
 }
 
 interface UseSecureApiKeysReturn {
@@ -128,6 +130,7 @@ const EMPTY_KEYS: SecureApiKeys = {
   geminiApiKey: '',
   perplexityApiKey: '',
   divvyDiaryApiKey: '',
+  twitterClientId: '',
 };
 
 /**
@@ -180,6 +183,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     gemini: setGeminiApiKey,
     perplexity: setPerplexityApiKey,
     divvyDiary: setDivvyDiaryApiKey,
+    twitterClientId: () => {}, // No Zustand sync needed for twitterClientId
   };
 
   // Helper to update both local state and Zustand store
@@ -239,6 +243,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
           geminiApiKey: legacyKeys.gemini || '',
           perplexityApiKey: legacyKeys.perplexity || '',
           divvyDiaryApiKey: legacyKeys.divvyDiary || '',
+          twitterClientId: '',
         };
 
         // Update local state and Zustand atomically
@@ -278,6 +283,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
         geminiApiKey: secureKeys.gemini,
         perplexityApiKey: secureKeys.perplexity,
         divvyDiaryApiKey: secureKeys.divvyDiary,
+        twitterClientId: secureKeys.twitterClientId,
       };
 
       syncKeysToState(newKeys);
@@ -305,6 +311,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     gemini: 'geminiApiKey',
     perplexity: 'perplexityApiKey',
     divvyDiary: 'divvyDiaryApiKey',
+    twitterClientId: 'twitterClientId',
   };
 
   // Set a single API key (stores in secure storage and updates local state + Zustand)

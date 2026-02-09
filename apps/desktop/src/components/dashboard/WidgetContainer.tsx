@@ -176,7 +176,7 @@ export function WidgetContainer({
           className="col-span-full flex items-center justify-center h-64 border-2 border-dashed rounded-lg"
         >
           <p className="text-muted-foreground">
-            Keine Widgets vorhanden. Klicken Sie auf "Widget hinzufügen" um zu beginnen.
+            Keine Widgets vorhanden. Klicke auf "Widget hinzufügen", um zu beginnen.
           </p>
         </div>
       )}

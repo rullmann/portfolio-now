@@ -181,7 +181,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
           <button
             onClick={loadPortfolios}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             Aktualisieren
@@ -248,7 +248,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
                   <button
                     onClick={() => handleDelete(portfolio)}
                     disabled={deletingId === portfolio.id}
-                    className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50"
+                    className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Löschen"
                   >
                     <Trash2
@@ -369,7 +369,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
         </div>
       ) : (
         <div className="bg-card rounded-lg border border-border p-6 text-center text-muted-foreground">
-          Keine Portfolios vorhanden. Erstellen Sie ein neues Portfolio oder importieren Sie eine PP-Datei.
+          Keine Portfolios vorhanden. Erstelle ein neues Portfolio oder importiere eine PP-Datei.
         </div>
       )}
 

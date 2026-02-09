@@ -539,7 +539,7 @@ export function ScreenerView() {
           <button
             onClick={handleRunScreener}
             disabled={isRunning || activeFilterCount === 0}
-            className="flex items-center gap-2 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isRunning ? (
               <>
@@ -584,7 +584,7 @@ export function ScreenerView() {
           {activeFilterCount === 0 ? (
             <>
               <Filter className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>Fügen Sie Filter hinzu oder wählen Sie ein Preset.</p>
+              <p>Füge Filter hinzu oder wähle ein Preset.</p>
               <p className="text-sm mt-1">
                 Der Screener durchsucht {securities.length} Wertpapiere.
               </p>
@@ -602,7 +602,7 @@ export function ScreenerView() {
               <Search className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>Keine Wertpapiere erfüllen die Filterkriterien.</p>
               <p className="text-sm mt-1">
-                Versuchen Sie weniger restriktive Filter.
+                Versuche weniger restriktive Filter.
               </p>
             </>
           )}
@@ -613,7 +613,7 @@ export function ScreenerView() {
       <div className="text-xs text-muted-foreground p-3 bg-muted/50 rounded-lg">
         <strong>Hinweis:</strong> Der Screener analysiert Kursdaten der letzten 6 Monate.
         Wertpapiere mit weniger als 20 Datenpunkten werden übersprungen.
-        Klicken Sie auf ein Ergebnis, um die detaillierte Chart-Analyse zu öffnen.
+        Klicke auf ein Ergebnis, um die detaillierte Chart-Analyse zu öffnen.
       </div>
     </div>
   );

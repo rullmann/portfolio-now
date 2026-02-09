@@ -256,6 +256,7 @@ pub struct PortfolioChatRequest {
     pub base_currency: String,
     pub user_name: Option<String>,
     pub language: Option<String>,
+    pub sql_approval_mode: Option<String>,
 }
 
 /// Chat with portfolio assistant
@@ -311,7 +312,8 @@ pub async fn chat_with_portfolio_assistant(
     match result {
         Ok(mut response) => {
             // Parse response and extract suggestions (watchlist commands NOT executed)
-            let parsed = parse_response_with_suggestions(response.response.clone());
+            let sql_mode = request.sql_approval_mode.as_deref().unwrap_or("session");
+            let parsed = parse_response_with_suggestions(response.response.clone(), sql_mode);
 
             // Update response with cleaned text
             response.response = parsed.cleaned_response;

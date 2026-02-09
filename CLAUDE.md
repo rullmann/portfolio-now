@@ -377,14 +377,40 @@ Dashboard, WidgetDashboard, Portfolio, Securities, Accounts, Transactions, Holdi
 | **API-Keys** | `secureStorage.ts` | `tauri-plugin-store`, nie localStorage |
 | **D&D Schutz** | `App.tsx` | `preventDefault()` verhindert Browser-Default |
 
-### Secure Storage
+### Secure Storage (KRITISCH!)
 
-API-Keys in `app_data_dir/secure-keys.json` via `tauri-plugin-store`. Hook: `useSecureApiKeys()`
+**ALLE API-Keys MÜSSEN ausschließlich über den sicheren Speicher gespeichert werden. Keine Ausnahme!**
+
+API-Keys liegen in `app_data_dir/secure-keys.json` via `tauri-plugin-store`. Hook: `useSecureApiKeys()`
 
 ```typescript
 const { keys, setApiKey, isSecureStorageAvailable } = useSecureApiKeys();
-await setApiKey('anthropic', 'sk-ant-...');
+await setApiKey('divvyDiary', 'mein-key');  // Speichert in secure-keys.json + synct zu Zustand
 ```
+
+**VERBOTEN:**
+- `useSettingsStore.getState().setXxxApiKey(key)` — Speichert NUR in Zustand (flüchtig!), Key ist nach Neustart weg
+- Zustand `partialize()` schließt bewusst ALLE API-Keys von localStorage aus
+- Einziger korrekter Weg: `useSecureApiKeys().setApiKey(keyType, value)`
+
+**Architektur:**
+1. `secureStorage.ts` → Low-level Read/Write in `secure-keys.json`
+2. `useSecureApiKeys()` → Hook: lädt Keys beim Mount, synct zu Zustand für UI-Zugriff
+3. Zustand Store → Nur Lese-Cache für andere Komponenten, NIE direkt beschreiben!
+
+**Lesen von API-Keys:**
+- Komponenten die Keys NUTZEN (nicht editieren) → `useSecureApiKeys().keys.xxxApiKey`
+- NICHT aus Zustand lesen (`useSettingsStore().xxxApiKey`) — Zustand startet leer, Sync ist async!
+
+**Einheitliches Vorgehen für Features mit API-Keys:**
+- API-Key-Eingabe/Änderung gehört **NUR in Settings** (`views/Settings/index.tsx`)
+- Feature-Dialoge (Export-Modals, etc.) dürfen Keys **nur lesen**, nie editieren
+- Wenn kein Key hinterlegt → auf Einstellungen verweisen (Redirect oder Link)
+- Beispiel: DivvyDiary Export → liest Key aus `useSecureApiKeys()`, bei fehlendem Key → "Zu den Einstellungen"
+- **API-Keys NIEMALS in der UI anzeigen** — auch nicht teilweise (z.B. `key.slice(0,8)...`). Key-Anzeige gehört ausschließlich in Settings (mit Eye-Toggle).
+- **Kein Verbindungsstatus-Banner** in Feature-Dialogen. Verbindung zeigt sich implizit: Daten laden = funktioniert, Fehler = Fehlermeldung. Kein extra "Verbunden"-Badge.
+
+**Aktuell registrierte Key-Typen:** `brandfetch`, `finnhub`, `coingecko`, `alphaVantage`, `twelveData`, `anthropic`, `openai`, `gemini`, `perplexity`, `divvyDiary`, `twitterClientId`
 
 ### Bei neuen Commands IMMER
 
@@ -394,6 +420,7 @@ await setApiKey('anthropic', 'sk-ant-...');
 4. Externe Uploads: Consent-Flag erforderlich
 5. Kein `.unwrap()` bei User-Input
 6. API-Keys nie loggen
+7. **API-Keys: NUR über `useSecureApiKeys().setApiKey()` speichern — niemals direkt über Zustand-Setter!**
 
 ---
 
@@ -420,6 +447,7 @@ await setApiKey('anthropic', 'sk-ant-...');
 19. **ChatBot Bild-Erkennung** - 🚧 OFFEN: LLM ignoriert `[[EXTRACTED_TRANSACTIONS:...]]` Command-Anweisung im System-Prompt (`prompts.rs`). Gibt nur Text-Zusammenfassung aus statt Command → keine Transaktion-Vorschau erscheint. **Lösungsansätze:** (a) Prompt aggressiver formulieren, (b) Few-shot Examples, (c) Post-Processing: Text→Command extrahieren, (d) Function Calling/Tool Use statt Text-Commands, (e) Anderes LLM-Modell testen
 20. **Wechselkurs-Richtung (ChatBot)** - `exchangeRate` = EUR/Foreign (z.B. 1.1939 = 1 EUR = 1.1939 USD). Umrechnung Foreign→EUR: `amount_eur = foreign_amount / rate`. NIEMALS `* rate`!
 21. **AiQuoteSuggestion JSON** - Struct nutzt `camelCase`, aber AI-Prompt gibt `feed_url` (snake_case) aus → `#[serde(alias = "feed_url")]` nötig
+22. **API-Keys NUR über Secure Storage** - NIEMALS `useSettingsStore.getState().setXxxApiKey()` zum Speichern verwenden! Zustand schließt API-Keys von localStorage aus (`partialize`). Immer `useSecureApiKeys().setApiKey(keyType, value)` nutzen, sonst ist der Key nach App-Neustart weg!
 
 ---
 
@@ -458,6 +486,30 @@ Frontend: `listen('data_changed', ...)` → `invalidateAllQueries()` + `loadDbDa
 **Layout:** `p-4` Cards, `space-y-4` Sektionen
 **Farben:** `text-green-600` positiv, `text-red-600` negativ, `text-muted-foreground`
 **Icons:** Lucide React
+**Sprache:** Durchgehend informelles Deutsch ("du"-Form), kein "Sie"
+
+### Modal-Footer-Pattern (VERBINDLICH)
+
+Alle Modals verwenden denselben Footer-Aufbau (Referenz: `PdfExportModal.tsx`):
+
+```tsx
+<div className="flex justify-end gap-2 p-4 border-t border-border">
+  <button className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors">
+    Abbrechen
+  </button>
+  <button className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+    <Icon size={16} />
+    Aktion
+  </button>
+</div>
+```
+
+**Regeln:**
+- `flex justify-end gap-2 p-4 border-t border-border` als Footer-Container
+- Sekundär-Button: `border border-border`, Text "Abbrechen"
+- Primär-Button: `bg-primary text-primary-foreground`, Icon (16px) + kurzer Text
+- Immer `disabled:opacity-50 disabled:cursor-not-allowed` bei disabled-Buttons
+- **Keine hardcodierten Farben** (`#ff8a4c` etc.) — immer Theme-Variablen nutzen
 
 ### ChatBot Bestätigungen (UI-Konsistenz)
 

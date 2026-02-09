@@ -526,7 +526,7 @@ export function SecurityDetailChartModal({
               <div className="text-center">
                 <div className="text-muted-foreground mb-2">Keine Kursdaten verfügbar</div>
                 <div className="text-xs text-muted-foreground">
-                  Synchronisieren Sie die Kurse für dieses Wertpapier
+                  Synchronisiere die Kurse für dieses Wertpapier
                 </div>
               </div>
             </div>
