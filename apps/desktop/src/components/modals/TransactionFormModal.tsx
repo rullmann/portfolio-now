@@ -256,7 +256,7 @@ export function TransactionFormModal({ isOpen, onClose, onSuccess, defaultSecuri
         return;
       }
       const sharesScaled = formData.shares
-        ? safeScaleToInt(formData.shares, 100_000_000)
+        ? safeScaleToInt(formData.shares, 100_000_000) ?? undefined
         : undefined;
       if (formData.shares && sharesScaled == null) {
         setError('Ungültige Stückzahl');
