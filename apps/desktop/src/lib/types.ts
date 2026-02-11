@@ -1320,8 +1320,9 @@ export type AnnotationType =
   | 'stoploss'
   | 'note';
 
-/** Signal direction for annotations */
-export type SignalDirection = 'bullish' | 'bearish' | 'neutral';
+/** Signal direction for annotations — canonical definition in indicators.ts */
+import type { SignalDirection } from './indicators';
+export type { SignalDirection } from './indicators';
 
 /** Trend direction */
 export type TrendDirection = 'bullish' | 'bearish' | 'neutral';

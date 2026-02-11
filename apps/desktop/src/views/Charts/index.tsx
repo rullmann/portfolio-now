@@ -38,7 +38,8 @@ import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingToo
 import { SecuritySearchModal } from '../../components/modals';
 import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
-import { convertToOHLC, convertToHeikinAshi } from '../../lib/indicators';
+import { convertToOHLC } from '../../lib/indicators';
+import { convertToHeikinAshi, getAllSignals as getAllSignalsRust } from '../../lib/indicators-rust';
 import { useSettingsStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
 import {
@@ -52,7 +53,7 @@ import {
   type ChartDrawingResponse,
 } from '../../lib/api';
 import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
-import { getAllSignals } from '../../lib/signals';
+import type { TechnicalSignal } from '../../lib/signals';
 import type { AggregatedHolding } from '../types';
 
 // ============================================================================
@@ -486,17 +487,23 @@ export function ChartsView() {
     return result;
   }, [isComparisonMode, comparisonSecurities, comparisonData, securities]);
 
-  // Convert to OHLC data (with optional Heikin-Ashi)
-  const ohlcData = useMemo<OHLCData[]>(() => {
-    if (priceData.length === 0) return [];
+  // Convert to OHLC data (with optional Heikin-Ashi via Rust)
+  const [ohlcData, setOhlcData] = useState<OHLCData[]>([]);
+  useEffect(() => {
+    if (priceData.length === 0) { setOhlcData([]); return; }
     const data = convertToOHLC(priceData, 1.5);
-    return useHeikinAshi ? convertToHeikinAshi(data) : data;
+    if (useHeikinAshi) {
+      convertToHeikinAshi(data).then(setOhlcData).catch(() => setOhlcData(data));
+    } else {
+      setOhlcData(data);
+    }
   }, [priceData, useHeikinAshi]);
 
-  // Compute signals for Share button (same as SignalsPanel)
-  const chartSignals = useMemo(() => {
-    if (ohlcData.length < 30) return [];
-    return getAllSignals(ohlcData);
+  // Compute signals for Share button via Rust
+  const [chartSignals, setChartSignals] = useState<TechnicalSignal[]>([]);
+  useEffect(() => {
+    if (ohlcData.length < 30) { setChartSignals([]); return; }
+    getAllSignalsRust(ohlcData).then(setChartSignals).catch(() => setChartSignals([]));
   }, [ohlcData]);
 
   // Handle search modal security added

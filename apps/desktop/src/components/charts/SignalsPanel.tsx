@@ -3,7 +3,7 @@
  * Displays detected technical signals, divergences, and candlestick patterns
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -16,8 +16,9 @@ import {
   Filter,
 } from 'lucide-react';
 import type { OHLCData } from '../../lib/indicators';
-import { getAllSignals, type TechnicalSignal, type SignalDirection, type SignalStrength } from '../../lib/signals';
-import { detectCandlestickPatterns, type PatternMatch } from '../../lib/patterns';
+import type { TechnicalSignal, SignalDirection, SignalStrength } from '../../lib/signals';
+import type { PatternMatch } from '../../lib/patterns';
+import { getAllSignals, detectCandlestickPatterns } from '../../lib/indicators-rust';
 import { formatDate } from '../../lib/types';
 
 // ============================================================================
@@ -202,15 +203,18 @@ export function SignalsPanel({ data, onSignalClick }: SignalsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filter, setFilter] = useState<FilterType>('all');
 
-  // Detect signals and patterns
-  const signals = useMemo(() => {
-    if (data.length < 30) return [];
-    return getAllSignals(data);
+  // Detect signals and patterns via Rust backend
+  const [signals, setSignals] = useState<TechnicalSignal[]>([]);
+  const [patterns, setPatterns] = useState<PatternMatch[]>([]);
+
+  useEffect(() => {
+    if (data.length < 30) { setSignals([]); return; }
+    getAllSignals(data).then(setSignals).catch(() => setSignals([]));
   }, [data]);
 
-  const patterns = useMemo(() => {
-    if (data.length < 10) return [];
-    return detectCandlestickPatterns(data);
+  useEffect(() => {
+    if (data.length < 10) { setPatterns([]); return; }
+    detectCandlestickPatterns(data).then(setPatterns).catch(() => setPatterns([]));
   }, [data]);
 
   // Filter signals

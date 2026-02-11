@@ -23,7 +23,6 @@ import {
 } from '../../lib/api';
 import { convertToOHLC } from '../../lib/indicators';
 import {
-  runScreener,
   screenerPresets,
   indicatorLabels,
   conditionLabels,
@@ -36,6 +35,7 @@ import {
   type ScreenerCondition,
   type ScreenerPreset,
 } from '../../lib/screener';
+import { runScreener } from '../../lib/indicators-rust';
 import { SecurityLogo } from '../../components/common';
 import { useCachedLogos, type CachedLogo } from '../../lib/hooks';
 import { useSettingsStore, useUIStore } from '../../store';
@@ -468,15 +468,13 @@ export function ScreenerView() {
       return;
     }
 
-    const screenerResults = runScreener(securitiesData, filters);
-    setResults(screenerResults);
+    runScreener(securitiesData, filters).then(setResults).catch(() => setResults([]));
   }, [securitiesData, filters, loadPriceData]);
 
   // Re-run screener when data is loaded
   useEffect(() => {
     if (securitiesData.length > 0 && filters.some((f) => f.enabled)) {
-      const screenerResults = runScreener(securitiesData, filters);
-      setResults(screenerResults);
+      runScreener(securitiesData, filters).then(setResults).catch(() => setResults([]));
     }
   }, [securitiesData, filters]);
 

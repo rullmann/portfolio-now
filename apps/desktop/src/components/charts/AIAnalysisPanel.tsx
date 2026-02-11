@@ -11,7 +11,7 @@ import { SafeMarkdown } from '../common/SafeMarkdown';
 import { useSettingsStore, useUIStore, toast, getModelCapabilities } from '../../store';
 import { usePortfolioAnalysisStore, type TrendDirection, type TrendStrength } from '../../store/portfolioAnalysis';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
-import { calculateRSI, calculateMACD, calculateSMA, calculateEMA, calculateBollinger, calculateATR } from '../../lib/indicators';
+import { calculateAllIndicators, buildIndicatorRequests } from '../../lib/indicators-rust';
 import type {
   AnnotationAnalysisResponse,
   EnhancedAnnotationAnalysisResponse,
@@ -299,124 +299,113 @@ export function AIAnalysisPanel({
     loadPersistedAnnotations();
   }, [security?.id, onAnnotationsChange]);
 
-  // Build enhanced context with indicator values, OHLC data, and volume analysis
-  const buildEnhancedContext = useCallback((): EnhancedChartContext | null => {
+  // Build enhanced context with indicator values via Rust batch calculation
+  const buildEnhancedContext = useCallback(async (): Promise<EnhancedChartContext | null> => {
     if (!security || !ohlcData || ohlcData.length === 0) return null;
 
     const indicatorValues: IndicatorValue[] = [];
 
-    // Calculate values for each enabled indicator
-    for (const indicator of indicators.filter(i => i.enabled)) {
-      switch (indicator.type) {
-        case 'rsi': {
-          const rsiData = calculateRSI(ohlcData, indicator.params.period || 14);
-          const lastRsi = rsiData[rsiData.length - 1]?.value;
-          const prevRsi = rsiData[rsiData.length - 2]?.value;
-          if (lastRsi !== null && lastRsi !== undefined) {
+    // Batch-calculate all enabled indicators in a single Rust call
+    const enabledIndicators = indicators.filter(i => i.enabled);
+    const requests = buildIndicatorRequests(enabledIndicators);
+
+    if (requests.length > 0) {
+      try {
+        const result = await calculateAllIndicators(ohlcData, requests);
+        const lastClose = ohlcData[ohlcData.length - 1].close;
+
+        if (result.rsi) {
+          const lastRsi = result.rsi[result.rsi.length - 1]?.value;
+          const prevRsi = result.rsi[result.rsi.length - 2]?.value;
+          if (lastRsi != null) {
             let signal: string | undefined;
             if (lastRsi > 70) signal = 'overbought';
             else if (lastRsi < 30) signal = 'oversold';
             else if (lastRsi > 50) signal = 'bullish';
             else signal = 'bearish';
+            const rsiCfg = enabledIndicators.find(i => i.type === 'rsi');
             indicatorValues.push({
-              name: 'RSI',
-              params: `${indicator.params.period || 14}`,
-              currentValue: lastRsi,
-              previousValue: prevRsi ?? undefined,
-              signal,
+              name: 'RSI', params: `${rsiCfg?.params.period || 14}`,
+              currentValue: lastRsi, previousValue: prevRsi ?? undefined, signal,
             });
           }
-          break;
         }
-        case 'macd': {
-          const macdResult = calculateMACD(
-            ohlcData,
-            indicator.params.fast || 12,
-            indicator.params.slow || 26,
-            indicator.params.signal || 9
-          );
-          const lastMacd = macdResult.macd[macdResult.macd.length - 1]?.value;
-          const lastHist = macdResult.histogram[macdResult.histogram.length - 1]?.value;
-          const prevHist = macdResult.histogram[macdResult.histogram.length - 2]?.value;
-          if (lastMacd !== null && lastMacd !== undefined) {
+
+        if (result.macd) {
+          const lastMacd = result.macd.macd[result.macd.macd.length - 1]?.value;
+          const lastHist = result.macd.histogram[result.macd.histogram.length - 1]?.value;
+          const prevHist = result.macd.histogram[result.macd.histogram.length - 2]?.value;
+          if (lastMacd != null) {
             let signal: string | undefined;
-            if (lastHist !== null && prevHist !== null && lastHist !== undefined && prevHist !== undefined) {
+            if (lastHist != null && prevHist != null) {
               if (prevHist < 0 && lastHist > 0) signal = 'bullish_crossover';
               else if (prevHist > 0 && lastHist < 0) signal = 'bearish_crossover';
               else if (lastHist > 0) signal = 'bullish';
               else signal = 'bearish';
             }
+            const macdCfg = enabledIndicators.find(i => i.type === 'macd');
             indicatorValues.push({
               name: 'MACD',
-              params: `${indicator.params.fast || 12},${indicator.params.slow || 26},${indicator.params.signal || 9}`,
-              currentValue: lastMacd,
-              signal,
+              params: `${macdCfg?.params.fast || 12},${macdCfg?.params.slow || 26},${macdCfg?.params.signal || 9}`,
+              currentValue: lastMacd, signal,
             });
           }
-          break;
         }
-        case 'sma': {
-          const smaData = calculateSMA(ohlcData, indicator.params.period || 20);
-          const lastSma = smaData[smaData.length - 1]?.value;
-          if (lastSma !== null && lastSma !== undefined) {
-            const lastClose = ohlcData[ohlcData.length - 1].close;
-            const signal = lastClose > lastSma ? 'price_above' : 'price_below';
+
+        if (result.sma) {
+          const lastSma = result.sma[result.sma.length - 1]?.value;
+          if (lastSma != null) {
+            const smaCfg = enabledIndicators.find(i => i.type === 'sma');
             indicatorValues.push({
-              name: 'SMA',
-              params: `${indicator.params.period || 20}`,
+              name: 'SMA', params: `${smaCfg?.params.period || 20}`,
               currentValue: lastSma,
-              signal,
+              signal: lastClose > lastSma ? 'price_above' : 'price_below',
             });
           }
-          break;
         }
-        case 'ema': {
-          const emaData = calculateEMA(ohlcData, indicator.params.period || 20);
-          const lastEma = emaData[emaData.length - 1]?.value;
-          if (lastEma !== null && lastEma !== undefined) {
-            const lastClose = ohlcData[ohlcData.length - 1].close;
-            const signal = lastClose > lastEma ? 'price_above' : 'price_below';
+
+        if (result.ema) {
+          const lastEma = result.ema[result.ema.length - 1]?.value;
+          if (lastEma != null) {
+            const emaCfg = enabledIndicators.find(i => i.type === 'ema');
             indicatorValues.push({
-              name: 'EMA',
-              params: `${indicator.params.period || 20}`,
+              name: 'EMA', params: `${emaCfg?.params.period || 20}`,
               currentValue: lastEma,
-              signal,
+              signal: lastClose > lastEma ? 'price_above' : 'price_below',
             });
           }
-          break;
         }
-        case 'bollinger': {
-          const bbData = calculateBollinger(ohlcData, indicator.params.period || 20, indicator.params.stdDev || 2);
-          const lastUpper = bbData.upper[bbData.upper.length - 1]?.value;
-          const lastMiddle = bbData.middle[bbData.middle.length - 1]?.value;
-          const lastLower = bbData.lower[bbData.lower.length - 1]?.value;
-          if (lastMiddle !== null && lastMiddle !== undefined) {
-            const lastClose = ohlcData[ohlcData.length - 1].close;
+
+        if (result.bollinger) {
+          const lastUpper = result.bollinger.upper[result.bollinger.upper.length - 1]?.value;
+          const lastMiddle = result.bollinger.middle[result.bollinger.middle.length - 1]?.value;
+          const lastLower = result.bollinger.lower[result.bollinger.lower.length - 1]?.value;
+          if (lastMiddle != null) {
             let signal: string | undefined;
             if (lastUpper && lastClose > lastUpper) signal = 'above_upper';
             else if (lastLower && lastClose < lastLower) signal = 'below_lower';
             else signal = 'within_bands';
+            const bbCfg = enabledIndicators.find(i => i.type === 'bollinger');
             indicatorValues.push({
               name: 'BOLLINGER',
-              params: `${indicator.params.period || 20},${indicator.params.stdDev || 2}`,
-              currentValue: lastMiddle,
-              signal,
+              params: `${bbCfg?.params.period || 20},${bbCfg?.params.stdDev || 2}`,
+              currentValue: lastMiddle, signal,
             });
           }
-          break;
         }
-        case 'atr': {
-          const atrData = calculateATR(ohlcData, indicator.params.period || 14);
-          const lastAtr = atrData[atrData.length - 1]?.value;
-          if (lastAtr !== null && lastAtr !== undefined) {
+
+        if (result.atr) {
+          const lastAtr = result.atr[result.atr.length - 1]?.value;
+          if (lastAtr != null) {
+            const atrCfg = enabledIndicators.find(i => i.type === 'atr');
             indicatorValues.push({
-              name: 'ATR',
-              params: `${indicator.params.period || 14}`,
+              name: 'ATR', params: `${atrCfg?.params.period || 14}`,
               currentValue: lastAtr,
             });
           }
-          break;
         }
+      } catch (err) {
+        console.warn('Rust indicator calculation failed, skipping indicator context:', err);
       }
     }
 
@@ -532,7 +521,7 @@ export function AIAnalysisPanel({
 
       if (useAnnotations) {
         // Check if enhanced analysis is available (with OHLC data)
-        const enhancedContext = useEnhancedAnalysis ? buildEnhancedContext() : null;
+        const enhancedContext = useEnhancedAnalysis ? await buildEnhancedContext() : null;
 
         if (enhancedContext && useEnhancedAnalysis) {
           // Call the enhanced analysis endpoint with indicator values
@@ -860,7 +849,7 @@ export function AIAnalysisPanel({
   }
 
   return (
-    <div ref={panelRef} className="bg-card border border-border rounded-lg overflow-hidden">
+    <div ref={panelRef} className="bg-card border border-border rounded-lg">
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border bg-muted/30">
         <button

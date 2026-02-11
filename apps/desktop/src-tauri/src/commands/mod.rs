@@ -32,3 +32,4 @@ pub mod taxonomy;
 pub mod twitter;
 pub mod validation;
 pub mod watchlist;
+pub mod indicators;

@@ -46,13 +46,14 @@ import {
   calculateMACD,
   calculateBollinger,
   calculateATR,
+  calculateVWAP,
   calculateStochastic,
   calculateOBV,
   calculateADX,
   calculateIchimoku,
   calculatePivotPoints,
   calculateFibonacci,
-} from '../../lib/indicators';
+} from '../../lib/indicators-rust';
 
 // ============================================================================
 // Types
@@ -147,82 +148,75 @@ export function TradingViewChart({
     return { candles, volume };
   }, [data]);
 
-  // Calculate indicator data
-  const indicatorData = useMemo(() => {
-    if (!data || data.length < 2) return {};
+  // Calculate indicator data via individual Rust calls (supports multiple same-type indicators)
+  const [indicatorData, setIndicatorData] = useState<Record<string, unknown>>({});
+  const [isCalculatingIndicators, setIsCalculatingIndicators] = useState(false);
 
-    const result: Record<string, unknown> = {};
-
-    for (const indicator of indicators) {
-      if (!indicator.enabled) continue;
-
-      try {
-        switch (indicator.type) {
-          case 'sma':
-            result[indicator.id] = calculateSMA(data, indicator.params.period);
-            break;
-          case 'ema':
-            result[indicator.id] = calculateEMA(data, indicator.params.period);
-            break;
-          case 'rsi':
-            result[indicator.id] = calculateRSI(data, indicator.params.period);
-            break;
-          case 'macd':
-            result[indicator.id] = calculateMACD(
-              data,
-              indicator.params.fast,
-              indicator.params.slow,
-              indicator.params.signal
-            );
-            break;
-          case 'bollinger':
-            result[indicator.id] = calculateBollinger(
-              data,
-              indicator.params.period,
-              indicator.params.stdDev
-            );
-            break;
-          case 'atr':
-            result[indicator.id] = calculateATR(data, indicator.params.period as number);
-            break;
-          case 'stochastic':
-            result[indicator.id] = calculateStochastic(
-              data,
-              indicator.params.kPeriod as number,
-              indicator.params.kSlowPeriod as number,
-              indicator.params.dPeriod as number
-            );
-            break;
-          case 'obv':
-            result[indicator.id] = calculateOBV(data);
-            break;
-          case 'adx':
-            result[indicator.id] = calculateADX(data, indicator.params.period as number);
-            break;
-          case 'ichimoku':
-            result[indicator.id] = calculateIchimoku(
-              data,
-              indicator.params.tenkan as number,
-              indicator.params.kijun as number,
-              indicator.params.senkouB as number
-            );
-            break;
-          case 'pivot':
-            result[indicator.id] = calculatePivotPoints(
-              data,
-              indicator.pivotType || 'standard'
-            );
-            break;
-          case 'fibonacci':
-            result[indicator.id] = calculateFibonacci(data, indicator.params.lookback as number);
-            break;
-        }
-      } catch (e) {
-        console.warn(`Failed to calculate ${indicator.type}:`, e);
-      }
+  useEffect(() => {
+    if (!data || data.length < 2) {
+      setIndicatorData({});
+      return;
     }
 
-    return result;
+    const enabledIndicators = indicators.filter(i => i.enabled);
+    if (enabledIndicators.length === 0) {
+      setIndicatorData({});
+      return;
+    }
+
+    let cancelled = false;
+    setIsCalculatingIndicators(true);
+
+    const calculateIndicator = async (indicator: IndicatorConfig): Promise<[string, unknown]> => {
+      switch (indicator.type) {
+        case 'sma':
+          return [indicator.id, await calculateSMA(data, indicator.params.period)];
+        case 'ema':
+          return [indicator.id, await calculateEMA(data, indicator.params.period)];
+        case 'rsi':
+          return [indicator.id, await calculateRSI(data, indicator.params.period)];
+        case 'macd':
+          return [indicator.id, await calculateMACD(data, indicator.params.fast, indicator.params.slow, indicator.params.signal)];
+        case 'bollinger':
+          return [indicator.id, await calculateBollinger(data, indicator.params.period, indicator.params.stdDev)];
+        case 'atr':
+          return [indicator.id, await calculateATR(data, indicator.params.period)];
+        case 'vwap':
+          return [indicator.id, await calculateVWAP(data)];
+        case 'stochastic':
+          return [indicator.id, await calculateStochastic(data, indicator.params.kPeriod, indicator.params.kSlowPeriod || indicator.params.kSlow, indicator.params.dPeriod)];
+        case 'obv':
+          return [indicator.id, await calculateOBV(data)];
+        case 'adx':
+          return [indicator.id, await calculateADX(data, indicator.params.period)];
+        case 'ichimoku':
+          return [indicator.id, await calculateIchimoku(data, indicator.params.tenkan, indicator.params.kijun, indicator.params.senkouB)];
+        case 'pivot':
+          return [indicator.id, await calculatePivotPoints(data, indicator.pivotType || 'standard')];
+        case 'fibonacci':
+          return [indicator.id, await calculateFibonacci(data, indicator.params.lookback)];
+        default:
+          return [indicator.id, null];
+      }
+    };
+
+    Promise.all(enabledIndicators.map(ind => calculateIndicator(ind).catch(e => {
+      console.warn(`Failed to calculate ${ind.type}:`, e);
+      return [ind.id, null] as [string, unknown];
+    })))
+      .then(entries => {
+        if (cancelled) return;
+        const result: Record<string, unknown> = {};
+        for (const [id, value] of entries) {
+          if (value != null) result[id as string] = value;
+        }
+        setIndicatorData(result);
+      })
+      .finally(() => {
+        if (!cancelled) setIsCalculatingIndicators(false);
+      });
+
+    return () => { cancelled = true; };
   }, [data, indicators]);
 
   // Create and manage chart
@@ -411,6 +405,17 @@ export function TradingViewChart({
           });
         }
 
+        // VWAP (Volume Weighted Average Price) - overlay on price chart
+        if (indicator.type === 'vwap') {
+          const vwapSeries = chart.addSeries(LineSeries, {
+            color: indicator.color || '#e91e63',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          vwapSeries.setData(convertToLineData(indData as IndicatorLineData[]));
+        }
+
         // Stochastic Oscillator
         if (indicator.type === 'stochastic') {
           const stoch = indData as StochasticResult;
@@ -581,6 +586,15 @@ export function TradingViewChart({
           });
           r2Series.setData(convertToLineData(pivots.r2));
 
+          const r3Series = chart.addSeries(LineSeries, {
+            color: 'rgba(239, 83, 80, 0.4)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          r3Series.setData(convertToLineData(pivots.r3));
+
           // Support lines (S1, S2, S3)
           const s1Series = chart.addSeries(LineSeries, {
             color: 'rgba(38, 166, 154, 0.8)',
@@ -599,6 +613,15 @@ export function TradingViewChart({
             lastValueVisible: false,
           });
           s2Series.setData(convertToLineData(pivots.s2));
+
+          const s3Series = chart.addSeries(LineSeries, {
+            color: 'rgba(38, 166, 154, 0.4)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          s3Series.setData(convertToLineData(pivots.s3));
         }
 
         // Fibonacci Retracements
@@ -747,6 +770,13 @@ export function TradingViewChart({
 
   return (
     <div className="relative w-full h-full">
+      {/* Indicator loading spinner */}
+      {isCalculatingIndicators && (
+        <div className="absolute top-2 right-2 z-10 bg-background/80 backdrop-blur-sm rounded-lg px-2 py-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <div className="w-3 h-3 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+          Indikatoren...
+        </div>
+      )}
       {/* Legend */}
       <div className="absolute top-2 left-2 z-10 bg-background/80 backdrop-blur-sm rounded-lg px-3 py-2 text-xs font-mono">
         {symbol && <span className="font-bold text-foreground mr-4">{symbol}</span>}

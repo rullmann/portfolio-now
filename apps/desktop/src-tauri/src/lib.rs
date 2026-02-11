@@ -15,6 +15,7 @@ pub mod quotes;
 pub mod security;
 pub mod tax;
 pub mod validation;
+pub mod indicators;
 
 use tauri::Manager;
 
@@ -402,6 +403,30 @@ pub fn run() {
             commands::twitter::twitter_get_user_info,
             commands::twitter::twitter_upload_media,
             commands::twitter::twitter_post_tweet,
+            // Technical Indicators (Rust-native)
+            commands::indicators::calculate_sma,
+            commands::indicators::calculate_ema,
+            commands::indicators::calculate_rsi,
+            commands::indicators::calculate_macd,
+            commands::indicators::calculate_bollinger,
+            commands::indicators::calculate_atr,
+            commands::indicators::calculate_vwap,
+            commands::indicators::calculate_stochastic,
+            commands::indicators::calculate_obv,
+            commands::indicators::calculate_adx,
+            commands::indicators::calculate_ichimoku,
+            commands::indicators::calculate_pivot_points,
+            commands::indicators::calculate_fibonacci,
+            commands::indicators::convert_to_heikin_ashi,
+            commands::indicators::calculate_all_indicators,
+            // Pattern Detection (Rust-native)
+            commands::indicators::detect_candlestick_patterns,
+            // Signal Detection (Rust-native)
+            commands::indicators::detect_signals,
+            commands::indicators::get_all_signals,
+            commands::indicators::detect_all_divergences,
+            // Screener (Rust-native)
+            commands::indicators::run_screener,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

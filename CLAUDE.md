@@ -91,9 +91,11 @@ apps/desktop/
 │   │   └── settings/       # Einstellungs-Komponenten
 │   ├── views/              # View-Komponenten pro Route
 │   └── lib/                # API, Types, Hooks
-│       ├── indicators.ts   # Technische Indikatoren (SMA, EMA, RSI, MACD, BB, Stochastic, OBV, ADX, ATR)
-│       ├── patterns.ts     # Candlestick-Pattern-Erkennung (22 Patterns)
-│       └── signals.ts      # Signal-Erkennung und Divergenzen
+│       ├── indicators.ts       # Types, Konstanten, convertToOHLC() (keine Berechnungen!)
+│       ├── indicators-rust.ts  # Async Tauri invoke-Wrapper für Rust-Indikatoren
+│       ├── patterns.ts         # Re-Export von Pattern-Types aus indicators.ts
+│       ├── signals.ts          # Re-Export von Signal-Types aus indicators.ts
+│       └── screener.ts         # Screener-Types, Presets, Labels, Filter-Helpers
 └── src-tauri/              # Rust Backend
     └── src/
         ├── commands/       # Tauri IPC Commands (33 Module)
@@ -109,6 +111,12 @@ apps/desktop/
         ├── performance/    # TTWROR, IRR Berechnungen
         ├── optimization/   # Portfolio-Optimierung (Markowitz, Efficient Frontier)
         ├── tax/            # Steuerberechnungen (DE: Anlage KAP)
+        ├── indicators/     # Technische Analyse (Rust-native, 20-25x schneller als TS)
+        │   ├── calculations.rs  # SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, ADX, Ichimoku, Pivot, Fibonacci
+        │   ├── patterns.rs      # 22 Candlestick-Patterns
+        │   ├── signals.rs       # Signal-Erkennung + Divergenzen
+        │   ├── screener.rs      # Screener-Engine mit allen Filtern
+        │   └── types.rs         # Shared Types
         ├── security/       # Pfadvalidierung, Rate Limiting
         ├── validation/     # Input-Validierung, AI-Fallback
         ├── models/         # Datenstrukturen
@@ -145,6 +153,10 @@ cd apps/desktop/src-tauri && cargo test --release  # Rust Tests
 | **Cashflows (TTWROR/Risk)** | `performance/mod.rs` | `get_cash_flows()` - nur DEPOSIT/REMOVAL | BUY/SELL für TTWROR |
 | **Cashflows (IRR)** | `performance/mod.rs` | `get_cash_flows_with_fallback()` - mit BUY/SELL Fallback | Mischen von BUY/SELL + DEPOSIT/REMOVAL |
 | **Portfolio-Wert** | `performance/mod.rs` | `get_portfolio_value_at_date_with_currency()` | latest_price ohne FX/Cash |
+| **Technische Indikatoren** | `indicators/calculations.rs` | `calculate_sma()`, `calculate_rsi()`, `calculate_macd()` etc. | TS-Berechnungen für Indikatoren |
+| **Candlestick-Muster** | `indicators/patterns.rs` | `detect_candlestick_patterns()` | TS Pattern-Erkennung |
+| **Handelssignale** | `indicators/signals.rs` | `detect_signals()`, `get_all_signals()` | TS Signal-Erkennung |
+| **Screener** | `indicators/screener.rs` | `run_screener()` | TS Screener-Engine |
 | **Datumsformatierung** | `lib/types.ts` | `formatDate()`, `formatDateTime()`, `formatDateShort()` | Eigene Date-Formatierung |
 | **ChatBot DB-Abfragen** | `ai/sql_executor.rs` | `execute_sql()`, `validate_sql()` | Hardcodierte SQL im ChatBot |
 | **Txn-Type-Normalisierung** | `ai/command_parser.rs` | `normalize_extracted_txn_type()` | Eigene Txn-Type-Mappings |
@@ -255,6 +267,9 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 
 ### Chart Drawings & Pattern
 `save/get/delete/clear_chart_drawing(s)`, `save_pattern_detection`, `evaluate_pattern_outcomes`, `get_pattern_statistics`, `get_pattern_history`
+
+### Technical Analysis (Rust-native)
+`calculate_sma`, `calculate_ema`, `calculate_rsi`, `calculate_macd`, `calculate_bollinger`, `calculate_atr`, `calculate_vwap`, `calculate_stochastic`, `calculate_obv`, `calculate_adx`, `calculate_ichimoku`, `calculate_pivot_points`, `calculate_fibonacci`, `convert_to_heikin_ashi`, `calculate_all_indicators`, `detect_candlestick_patterns`, `detect_signals`, `get_all_signals`, `detect_all_divergences`, `run_screener`
 
 ---
 
