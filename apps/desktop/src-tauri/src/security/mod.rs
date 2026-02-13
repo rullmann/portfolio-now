@@ -336,6 +336,15 @@ pub mod limits {
             window_duration: Duration::from_secs(300),
         }
     }
+
+    /// Rate limit for AI news research (1 per 10 seconds, max 10 per minute)
+    pub fn ai_news_research() -> RateLimitConfig {
+        RateLimitConfig {
+            min_interval: Duration::from_secs(10),
+            max_requests_per_window: 10,
+            window_duration: Duration::from_secs(60),
+        }
+    }
 }
 
 // ============================================================================

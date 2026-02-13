@@ -3,12 +3,11 @@
  */
 
 import { useState, useEffect, useCallback, useRef, Component, type ReactNode, type ChangeEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, GitMerge, Split, ChevronDown, History } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, RefreshCw, Download, Building2, Upload, HardDrive, Globe, ChevronUp, ArrowRightLeft, GitMerge, Split, ChevronDown, History, Newspaper } from 'lucide-react';
 import type { SecurityData, TransactionData } from '../../lib/types';
 import {
   getSecurities,
   deleteSecurity,
-  syncAllPrices,
   syncSecurityPrices,
   fetchLogosBatch,
   getCachedLogoData,
@@ -20,7 +19,9 @@ import {
   getQuoteErrors,
   type QuoteError,
 } from '../../lib/api';
+import { useQuoteSync } from '../../hooks/useQuoteSync';
 import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, StockSplitModal, MergerModal, HistoricalQuotesModal } from '../../components/modals';
+import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import { useSettingsStore } from '../../store';
 
@@ -99,6 +100,9 @@ export function SecuritiesView() {
   // Quote errors state
   const [quoteErrors, setQuoteErrors] = useState<Map<number, QuoteError>>(new Map());
 
+  // News research modal state
+  const [newsModalSecurity, setNewsModalSecurity] = useState<SecurityData | null>(null);
+
   // Corporate actions modal state
   const [isStockSplitModalOpen, setIsStockSplitModalOpen] = useState(false);
   const [isMergerModalOpen, setIsMergerModalOpen] = useState(false);
@@ -119,6 +123,7 @@ export function SecuritiesView() {
   }, [logoMenuOpen]);
 
   // Get settings from store
+  const aiEnabled = useSettingsStore((state) => state.aiEnabled);
   const syncOnlyHeldSecurities = useSettingsStore((state) => state.syncOnlyHeldSecurities);
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
@@ -457,13 +462,13 @@ export function SecuritiesView() {
     loadSecurities();
   };
 
+  const { startSync } = useQuoteSync();
   const handleSyncPrices = async () => {
     setIsSyncing(true);
     setError(null);
     setSuccess(null);
 
     try {
-      // Build API keys object
       const apiKeys = {
         finnhub: finnhubApiKey || undefined,
         coingecko: coingeckoApiKey || undefined,
@@ -471,14 +476,9 @@ export function SecuritiesView() {
         twelveData: twelveDataApiKey || undefined,
       };
 
-      const result = await syncAllPrices(syncOnlyHeldSecurities, apiKeys);
-      if (result.errors > 0) {
-        setError(`${result.errors} Fehler beim Abrufen: ${result.errorMessages.slice(0, 3).join(', ')}${result.errorMessages.length > 3 ? '...' : ''}`);
-      }
-      const modeText = syncOnlyHeldSecurities ? ' (nur im Bestand)' : '';
-      setSuccess(`${result.success} von ${result.total} Kurse aktualisiert${modeText}`);
-      await loadSecurities(); // Reload to show updated prices
-      await loadQuoteErrors(); // Reload quote errors
+      await startSync(syncOnlyHeldSecurities, apiKeys);
+      await loadSecurities();
+      await loadQuoteErrors();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -956,6 +956,18 @@ export function SecuritiesView() {
                             }
                           />
                         </button>
+                        {aiEnabled && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setNewsModalSecurity(security);
+                            }}
+                            className="p-1.5 hover:bg-muted rounded-md transition-colors"
+                            title="Nachrichten recherchieren"
+                          >
+                            <Newspaper size={16} className="text-muted-foreground" />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1191,6 +1203,21 @@ export function SecuritiesView() {
         onSuccess={loadSecurities}
         defaultSourceSecurityId={selectedSecurity?.id}
       />
+
+      {/* News Research Modal */}
+      {newsModalSecurity && (
+        <NewsResearchModal
+          isOpen={!!newsModalSecurity}
+          onClose={() => setNewsModalSecurity(null)}
+          security={{
+            id: newsModalSecurity.id,
+            name: newsModalSecurity.name,
+            ticker: newsModalSecurity.ticker,
+            isin: newsModalSecurity.isin,
+            currency: newsModalSecurity.currency,
+          }}
+        />
+      )}
     </div>
   );
 }

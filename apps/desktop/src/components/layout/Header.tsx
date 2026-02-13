@@ -3,7 +3,7 @@
  * Simplified: removed legacy file operations (Neu, Öffnen, Speichern).
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Plus,
   Database,
@@ -20,6 +20,8 @@ import {
   ChevronDown,
   BarChart3,
   User,
+  Newspaper,
+  Search,
 } from 'lucide-react';
 import {
   useUIStore,
@@ -36,7 +38,12 @@ import { PdfExportModal } from '../modals/PdfExportModal';
 import { DivvyDiaryExportModal } from '../modals/DivvyDiaryExportModal';
 import { DivvyDiaryLogo } from '../common/DivvyDiaryLogo';
 import { PortfolioInsightsModal } from '../modals/PortfolioInsightsModal';
+import { NewsResearchModal } from '../modals/NewsResearchModal';
+import { SecurityLogo } from '../common/SecurityLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import { useCachedLogos } from '../../lib/hooks';
+import { getAllHoldings } from '../../lib/api';
+import type { AggregatedHolding } from '../../lib/types';
 
 interface HeaderProps {
   onImportPP: () => void;
@@ -87,10 +94,39 @@ export function Header({
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [insightsMode, setInsightsMode] = useState<'insights' | 'opportunities'>('insights');
   const [showAiMenu, setShowAiMenu] = useState(false);
+  const [showNewsSubmenu, setShowNewsSubmenu] = useState(false);
+  const [newsSearchQuery, setNewsSearchQuery] = useState('');
+  const [newsHoldings, setNewsHoldings] = useState<AggregatedHolding[]>([]);
+  const [showNewsModal, setShowNewsModal] = useState(false);
+  const [selectedNewsSecurity, setSelectedNewsSecurity] = useState<AggregatedHolding | null>(null);
 
   // Check if AI is configured (has at least one API key)
   const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey);
   const aiConfigured = aiEnabled && hasAnyAiApiKey;
+
+  const brandfetchApiKey = secureKeys.brandfetchApiKey ?? null;
+
+  const securitiesForLogos = useMemo(() =>
+    newsHoldings.map((h) => ({
+      id: h.securityIds[0],
+      ticker: h.ticker || undefined,
+      name: h.name,
+    })),
+    [newsHoldings]
+  );
+  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+
+  useEffect(() => {
+    if (aiConfigured) {
+      getAllHoldings().then(setNewsHoldings).catch(() => {});
+    }
+  }, [aiConfigured]);
+
+  const filteredNewsHoldings = newsHoldings.filter((h) => {
+    if (!newsSearchQuery) return true;
+    const q = newsSearchQuery.toLowerCase();
+    return h.name.toLowerCase().includes(q) || (h.ticker?.toLowerCase().includes(q));
+  });
 
   return (
     <>
@@ -202,6 +238,79 @@ export function Header({
                       <FileSpreadsheet className="w-4 h-4 text-teal-600" />
                       <span>CSV-Import</span>
                     </button>
+
+                    <div className="border-t border-border my-1" />
+
+                    {/* Nachrichten-Recherche with submenu */}
+                    <div
+                      className="relative"
+                      onMouseEnter={() => setShowNewsSubmenu(true)}
+                      onMouseLeave={() => setShowNewsSubmenu(false)}
+                    >
+                      <button
+                        onClick={() => setShowNewsSubmenu(!showNewsSubmenu)}
+                        className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                      >
+                        <Newspaper className="w-4 h-4 text-amber-600" />
+                        <span className="flex-1 text-left">Nachrichten</span>
+                        <ChevronDown className="w-3 h-3 -rotate-90" />
+                      </button>
+
+                      {showNewsSubmenu && (
+                        <div className="absolute left-full top-0 ml-1 w-72 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+                          {/* Search field */}
+                          <div className="p-2 border-b border-border">
+                            <div className="flex items-center gap-2 px-2.5 py-2 bg-muted/50 border border-border rounded-md focus-within:border-primary/40 focus-within:bg-background transition-colors">
+                              <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                              <input
+                                type="text"
+                                value={newsSearchQuery}
+                                onChange={(e) => setNewsSearchQuery(e.target.value)}
+                                placeholder="Wertpapier suchen..."
+                                className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                                autoFocus
+                              />
+                            </div>
+                          </div>
+
+                          {/* Holdings list */}
+                          <div className="max-h-72 overflow-y-auto py-1">
+                            {filteredNewsHoldings.length === 0 ? (
+                              <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                                {newsHoldings.length === 0 ? 'Keine Bestände vorhanden' : 'Kein Treffer'}
+                              </div>
+                            ) : (
+                              filteredNewsHoldings.map((h) => (
+                                <button
+                                  key={h.isin + h.securityIds[0]}
+                                  onClick={() => {
+                                    setSelectedNewsSecurity(h);
+                                    setShowNewsModal(true);
+                                    setShowAiMenu(false);
+                                    setShowNewsSubmenu(false);
+                                    setNewsSearchQuery('');
+                                  }}
+                                  className="w-full flex items-center gap-2.5 px-2.5 py-2 text-sm hover:bg-accent transition-colors group"
+                                >
+                                  <SecurityLogo
+                                    securityId={h.securityIds[0]}
+                                    logos={cachedLogos}
+                                    size={24}
+                                  />
+                                  <div className="flex-1 min-w-0 text-left">
+                                    <div className="truncate text-sm">{h.name}</div>
+                                    {h.ticker && (
+                                      <div className="text-xs text-muted-foreground font-mono">{h.ticker}</div>
+                                    )}
+                                  </div>
+                                  <Newspaper className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Context-specific actions */}
                     {getContextActions(currentView).length > 0 && (
@@ -396,6 +505,22 @@ export function Header({
         onClose={() => setShowInsightsModal(false)}
         initialMode={insightsMode}
       />
+
+      {/* News Research Modal */}
+      {selectedNewsSecurity && (
+        <NewsResearchModal
+          isOpen={showNewsModal}
+          onClose={() => { setShowNewsModal(false); setSelectedNewsSecurity(null); }}
+          security={{
+            id: selectedNewsSecurity.securityIds[0],
+            name: selectedNewsSecurity.name,
+            ticker: selectedNewsSecurity.ticker,
+            isin: selectedNewsSecurity.isin,
+            currency: selectedNewsSecurity.currency,
+          }}
+          currentPrice={selectedNewsSecurity.currentPrice}
+        />
+      )}
     </>
   );
 }

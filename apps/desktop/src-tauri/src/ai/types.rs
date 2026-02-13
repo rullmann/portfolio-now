@@ -26,8 +26,8 @@ pub const MAX_TOKENS: u32 = 1500;
 pub const MAX_TOKENS_INSIGHTS: u32 = 2000;
 
 /// Maximum tokens for chat responses
-/// Note: 4096 needed for SQL queries + explanations + command markers (e.g. EXTRACTED_TRANSACTIONS JSON)
-pub const MAX_TOKENS_CHAT: u32 = 4096;
+/// Note: 8192 needed for longer answers with SQL queries + explanations + command markers (e.g. EXTRACTED_TRANSACTIONS JSON)
+pub const MAX_TOKENS_CHAT: u32 = 8192;
 
 // ============================================================================
 // Structured AI Errors
@@ -185,6 +185,20 @@ pub struct ChartContext {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartAnalysisResponse {
+    pub analysis: String,
+    pub provider: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+}
+
+// ============================================================================
+// News Research Types
+// ============================================================================
+
+/// Response from news research
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsResearchResponse {
     pub analysis: String,
     pub provider: String,
     pub model: String,

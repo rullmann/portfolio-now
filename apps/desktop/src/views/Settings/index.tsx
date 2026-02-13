@@ -1260,7 +1260,7 @@ export function SettingsView() {
                           toast.error(String(err));
                         }
                       }}
-                      disabled={twitterAuth.isConnecting || !effectiveTwitterClientId}
+                      disabled={twitterAuth.isConnecting || !effectiveTwitterClientId?.trim()}
                       className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {twitterAuth.isConnecting ? (
@@ -1285,7 +1285,7 @@ export function SettingsView() {
                     Erstelle eine X Developer App mit OAuth 2.0 (Native App / Public Client).{' '}
                     <button
                       type="button"
-                      onClick={() => open('https://developer.twitter.com/en/portal/dashboard')}
+                      onClick={() => open('https://console.x.com')}
                       className="text-primary hover:underline inline-flex items-center gap-1"
                     >
                       X Developer Portal
@@ -1298,7 +1298,12 @@ export function SettingsView() {
                       value={effectiveTwitterClientId}
                       onChange={(e) => handleSetApiKey('twitterClientId', e.target.value)}
                       placeholder="Client ID aus dem X Developer Portal"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 font-mono text-sm"
+                      className={cn(
+                        "w-full rounded-md border bg-background px-3 py-2 pr-10 font-mono text-sm",
+                        effectiveTwitterClientId && effectiveTwitterClientId.trim().length > 256
+                          ? "border-red-500"
+                          : "border-input"
+                      )}
                     />
                     <button
                       type="button"
@@ -1308,14 +1313,30 @@ export function SettingsView() {
                       {showTwitterClientId ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
-                  {effectiveTwitterClientId && (
+                  {effectiveTwitterClientId && effectiveTwitterClientId.trim().length > 256 && (
+                    <p className="text-xs text-red-500 mt-1">
+                      Client ID darf maximal 256 Zeichen lang sein.
+                    </p>
+                  )}
+                  {effectiveTwitterClientId && effectiveTwitterClientId.trim().length > 0 && effectiveTwitterClientId.trim().length <= 256 && (
                     <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                       {secureStorageAvailable && <Shield size={12} />}
                       Client ID {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
                     </p>
                   )}
                   <p className="text-xs text-muted-foreground mt-2">
-                    Redirect URI: <code className="bg-muted px-1 py-0.5 rounded text-xs">http://127.0.0.1/callback</code>
+                    Redirect URI:{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText('http://127.0.0.1:17548/callback');
+                        toast.success('Redirect URI kopiert');
+                      }}
+                      className="bg-muted px-1 py-0.5 rounded text-xs font-mono hover:bg-muted/80 transition-colors cursor-pointer"
+                      title="Klicken zum Kopieren"
+                    >
+                      http://127.0.0.1:17548/callback
+                    </button>
                   </p>
                 </div>
               </div>

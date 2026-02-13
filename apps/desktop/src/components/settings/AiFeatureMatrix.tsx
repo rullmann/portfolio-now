@@ -15,11 +15,14 @@ import {
   Eye,
   AlertCircle,
   Bot,
+  Newspaper,
+  Globe,
 } from 'lucide-react';
 import {
   useSettingsStore,
   AI_FEATURES,
   AI_MODELS,
+  WEB_SEARCH_AI_MODELS,
   DEFAULT_MODELS,
   type AiFeatureId,
   type AiProvider,
@@ -34,6 +37,7 @@ const FEATURE_ICONS: Record<string, React.ComponentType<{ className?: string }>>
   FileText,
   FileSpreadsheet,
   Bot,
+  Newspaper,
 };
 
 // Provider display names
@@ -69,11 +73,19 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
 
   const hasAnyProvider = availableProviders.length > 0;
 
-  // Get models for a specific provider
-  const getModelsForProvider = (provider: AiProvider) => {
+  // Get models for a specific provider, optionally filtered by web search capability
+  const getModelsForProvider = (provider: AiProvider, requiresWebSearch?: boolean) => {
+    if (requiresWebSearch) {
+      return [...(WEB_SEARCH_AI_MODELS[provider] || [])];
+    }
     const models = AI_MODELS[provider] || [];
     return [...models];
   };
+
+  // Get available providers for web-search features (only those in WEB_SEARCH_AI_MODELS)
+  const webSearchProviders = useMemo(() => {
+    return availableProviders.filter(p => WEB_SEARCH_AI_MODELS[p] && WEB_SEARCH_AI_MODELS[p]!.length > 0);
+  }, [availableProviders]);
 
   // Auto-migrate features when providers become unavailable
   useEffect(() => {
@@ -83,22 +95,24 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
       const config = aiFeatureSettings[feature.id];
       if (!config) return;
 
+      const validProviders = feature.requiresWebSearch ? webSearchProviders : availableProviders;
+
       // Check if current provider is still available
-      if (!availableProviders.includes(config.provider)) {
+      if (validProviders.length > 0 && !validProviders.includes(config.provider)) {
         // Auto-migrate to first available provider
-        const newProvider = availableProviders[0];
-        const models = getModelsForProvider(newProvider);
+        const newProvider = validProviders[0];
+        const models = getModelsForProvider(newProvider, feature.requiresWebSearch);
         setAiFeatureSetting(feature.id, {
           provider: newProvider,
           model: models[0]?.id || DEFAULT_MODELS[newProvider],
         });
       }
     });
-  }, [availableProviders, aiFeatureSettings, setAiFeatureSetting, hasAnyProvider]);
+  }, [availableProviders, webSearchProviders, aiFeatureSettings, setAiFeatureSetting, hasAnyProvider]);
 
   // Handle provider change for a feature
-  const handleProviderChange = (featureId: AiFeatureId, provider: AiProvider) => {
-    const models = getModelsForProvider(provider);
+  const handleProviderChange = (featureId: AiFeatureId, provider: AiProvider, requiresWebSearch?: boolean) => {
+    const models = getModelsForProvider(provider, requiresWebSearch);
     const defaultModel = models[0]?.id || DEFAULT_MODELS[provider];
     setAiFeatureSetting(featureId, { provider, model: defaultModel });
   };
@@ -110,18 +124,19 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
   };
 
   // Get validated config (fallback if provider unavailable)
-  const getValidatedConfig = (featureId: AiFeatureId) => {
+  const getValidatedConfig = (featureId: AiFeatureId, requiresWebSearch?: boolean) => {
     const config = aiFeatureSettings[featureId];
+    const validProviders = requiresWebSearch ? webSearchProviders : availableProviders;
 
-    if (!availableProviders.includes(config.provider) && availableProviders.length > 0) {
+    if (!validProviders.includes(config.provider) && validProviders.length > 0) {
       return {
-        provider: availableProviders[0],
-        model: DEFAULT_MODELS[availableProviders[0]],
+        provider: validProviders[0],
+        model: DEFAULT_MODELS[validProviders[0]],
         needsMigration: true,
       };
     }
 
-    const models = getModelsForProvider(config.provider);
+    const models = getModelsForProvider(config.provider, requiresWebSearch);
     if (!models.some(m => m.id === config.model) && models.length > 0) {
       return {
         provider: config.provider,
@@ -157,8 +172,9 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
       <div className="divide-y divide-border">
         {AI_FEATURES.map((feature) => {
           const Icon = FEATURE_ICONS[feature.icon] || FileText;
-          const config = getValidatedConfig(feature.id);
-          const models = getModelsForProvider(config.provider);
+          const config = getValidatedConfig(feature.id, feature.requiresWebSearch);
+          const featureProviders = feature.requiresWebSearch ? webSearchProviders : availableProviders;
+          const models = getModelsForProvider(config.provider, feature.requiresWebSearch);
 
           return (
             <div
@@ -174,16 +190,21 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
                     <Eye className="h-3 w-3 text-blue-500 shrink-0" />
                   </span>
                 )}
+                {feature.requiresWebSearch && (
+                  <span title="Benötigt Web-Suche">
+                    <Globe className="h-3 w-3 text-green-500 shrink-0" />
+                  </span>
+                )}
               </div>
 
               {/* Provider Dropdown */}
               <div className="relative">
                 <select
                   value={config.provider}
-                  onChange={(e) => handleProviderChange(feature.id, e.target.value as AiProvider)}
+                  onChange={(e) => handleProviderChange(feature.id, e.target.value as AiProvider, feature.requiresWebSearch)}
                   className="w-full pl-7 pr-2 py-1.5 text-xs border border-border rounded bg-background appearance-none cursor-pointer hover:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
                 >
-                  {availableProviders.map((provider) => (
+                  {featureProviders.map((provider) => (
                     <option key={provider} value={provider}>
                       {PROVIDER_NAMES[provider]}
                     </option>

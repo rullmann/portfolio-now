@@ -46,6 +46,17 @@ pub struct MediaUploadResponse {
     pub media_id_string: String,
 }
 
+/// v2 media upload response: { data: { id, media_key, ... } }
+#[derive(Debug, Deserialize)]
+struct MediaUploadV2Data {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaUploadV2Response {
+    data: MediaUploadV2Data,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TweetResult {
     pub tweet_id: String,
@@ -56,11 +67,23 @@ pub struct TweetResult {
 // OAuth State (shared between start_auth and await_callback)
 // ============================================================================
 
-#[derive(Debug)]
 struct OAuthState {
     code_verifier: String,
     state: String,
     port: u16,
+    listener: Option<TcpListener>,
+}
+
+// Manual Debug impl because TcpListener doesn't implement Debug nicely
+impl std::fmt::Debug for OAuthState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthState")
+            .field("code_verifier", &self.code_verifier)
+            .field("state", &self.state)
+            .field("port", &self.port)
+            .field("listener", &self.listener.as_ref().map(|_| "TcpListener(...)"))
+            .finish()
+    }
 }
 
 static OAUTH_STATE: Mutex<Option<OAuthState>> = Mutex::new(None);
@@ -103,18 +126,43 @@ fn generate_state() -> String {
 }
 
 // ============================================================================
+// Validation
+// ============================================================================
+
+/// Validate that a Twitter/X Client ID is well-formed (non-empty, max 256 chars).
+/// X OAuth 2.0 Client IDs can be alphanumeric and may contain special characters.
+fn validate_twitter_client_id(client_id: &str) -> Result<(), String> {
+    let trimmed = client_id.trim();
+    if trimmed.is_empty() {
+        return Err("Twitter Client ID darf nicht leer sein.".to_string());
+    }
+    if trimmed.len() > 256 {
+        return Err(format!(
+            "Twitter Client ID darf maximal 256 Zeichen lang sein (aktuell: {}).",
+            trimmed.len()
+        ));
+    }
+    Ok(())
+}
+
+// ============================================================================
 // Commands
 // ============================================================================
+
+/// Fixed port for OAuth callback — must match redirect URI registered in X Developer Console
+const OAUTH_CALLBACK_PORT: u16 = 17548;
 
 /// Start OAuth 2.0 PKCE flow: generate verifier/challenge, bind local server, return auth URL
 #[command]
 pub async fn twitter_start_auth(client_id: String) -> Result<AuthStartResult, String> {
-    // Bind to random available port
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Failed to bind local server: {}", e))?;
-    let port = listener.local_addr().map_err(|e| format!("Failed to get port: {}", e))?.port();
+    let client_id = client_id.trim().to_string();
+    validate_twitter_client_id(&client_id)?;
 
-    // Drop the listener so it can be rebound in await_callback
-    drop(listener);
+    let port = OAUTH_CALLBACK_PORT;
+
+    // Bind listener and keep it alive until callback is received (prevents race condition)
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .map_err(|e| format!("OAuth callback port {} is already in use: {}", port, e))?;
 
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
@@ -131,12 +179,13 @@ pub async fn twitter_start_auth(client_id: String) -> Result<AuthStartResult, St
         urlencoding::encode(&code_challenge),
     );
 
-    // Store state for callback
+    // Store state + listener for callback
     let mut oauth_state = OAUTH_STATE.lock().map_err(|e| format!("Lock error: {}", e))?;
     *oauth_state = Some(OAuthState {
         code_verifier,
         state: state.clone(),
         port,
+        listener: Some(listener),
     });
 
     log::info!("Twitter OAuth started on port {}", port);
@@ -147,17 +196,15 @@ pub async fn twitter_start_auth(client_id: String) -> Result<AuthStartResult, St
 /// Wait for the OAuth callback on the local server (120s timeout)
 #[command]
 pub async fn twitter_await_callback() -> Result<CallbackResult, String> {
-    let (port, expected_state) = {
-        let oauth_state = OAUTH_STATE.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let (listener, expected_state) = {
+        let mut oauth_state = OAUTH_STATE.lock().map_err(|e| format!("Lock error: {}", e))?;
         let state = oauth_state
-            .as_ref()
+            .as_mut()
             .ok_or("No OAuth flow in progress. Call twitter_start_auth first.")?;
-        (state.port, state.state.clone())
+        let listener = state.listener.take()
+            .ok_or("OAuth listener already consumed. Call twitter_start_auth again.")?;
+        (listener, state.state.clone())
     };
-
-    // Re-bind the listener on the same port
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-        .map_err(|e| format!("Failed to bind callback server on port {}: {}", port, e))?;
 
     listener
         .set_nonblocking(false)
@@ -250,7 +297,7 @@ pub async fn twitter_exchange_token(
 
     let client = reqwest::Client::new();
     let response = client
-        .post("https://api.twitter.com/2/oauth2/token")
+        .post("https://api.x.com/2/oauth2/token")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
@@ -287,7 +334,7 @@ pub async fn twitter_refresh_token(
 ) -> Result<TokenResponse, String> {
     let client = reqwest::Client::new();
     let response = client
-        .post("https://api.twitter.com/2/oauth2/token")
+        .post("https://api.x.com/2/oauth2/token")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type=refresh_token&refresh_token={}&client_id={}",
@@ -319,7 +366,7 @@ pub async fn twitter_refresh_token(
 pub async fn twitter_get_user_info(access_token: String) -> Result<TwitterUser, String> {
     let client = reqwest::Client::new();
     let response = client
-        .get("https://api.twitter.com/2/users/me")
+        .get("https://api.x.com/2/users/me")
         .bearer_auth(&access_token)
         .send()
         .await
@@ -374,7 +421,7 @@ pub async fn twitter_upload_media(
 
     let client = reqwest::Client::new();
     let response = client
-        .post("https://upload.twitter.com/1.1/media/upload.json")
+        .post("https://api.x.com/2/media/upload")
         .bearer_auth(&access_token)
         .multipart(form)
         .send()
@@ -384,20 +431,21 @@ pub async fn twitter_upload_media(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        log::error!("Twitter media upload failed: {} - {}", status, body);
+        log::error!("X media upload failed: {} - {}", status, body);
         return Err(format!("Media upload failed ({}): {}", status, body));
     }
 
-    let upload_response: MediaUploadResponse = response
+    let v2_response: MediaUploadV2Response = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse upload response: {}", e))?;
 
-    log::info!(
-        "Twitter media uploaded: {}",
-        upload_response.media_id_string
-    );
-    Ok(upload_response)
+    let media_id = v2_response.data.id;
+    log::info!("X media uploaded: {}", media_id);
+
+    Ok(MediaUploadResponse {
+        media_id_string: media_id,
+    })
 }
 
 /// Post a tweet (with optional media and reply)
@@ -436,7 +484,7 @@ pub async fn twitter_post_tweet(
 
     let client = reqwest::Client::new();
     let response = client
-        .post("https://api.twitter.com/2/tweets")
+        .post("https://api.x.com/2/tweets")
         .bearer_auth(&access_token)
         .json(&payload)
         .send()

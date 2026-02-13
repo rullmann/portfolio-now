@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Example
 /// ```
-/// use crate::pp::common::parse_date_flexible;
+/// use app_lib::pp::common::parse_date_flexible;
 /// let date = parse_date_flexible("2024-01-15").unwrap();
 /// ```
 pub fn parse_date_flexible(date_str: &str) -> Option<NaiveDate> {

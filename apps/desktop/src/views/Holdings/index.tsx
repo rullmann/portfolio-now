@@ -5,12 +5,13 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Customized } from 'recharts';
-import { Building2, PieChart as PieChartIcon } from 'lucide-react';
+import { Building2, PieChart as PieChartIcon, Newspaper } from 'lucide-react';
 import type { AggregatedHolding, PortfolioData } from '../types';
 import { formatNumber } from '../utils';
 import { getBaseCurrency } from '../../lib/api';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
+import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 
 // Color palette similar to Portfolio Performance
 const COLORS = [
@@ -126,7 +127,9 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('total');
   const [selectedPortfolio, setSelectedPortfolio] = useState<number | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [newsModalHolding, setNewsModalHolding] = useState<AggregatedHolding | null>(null);
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
+  const aiEnabled = useSettingsStore((state) => state.aiEnabled);
 
   // Prepare securities list for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -403,7 +406,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
             {chartData.map((item, index) => (
               <div
                 key={item.securityId}
-                className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
+                className={`group flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
                   hoveredIndex === index ? 'bg-accent' : 'hover:bg-accent/50'
                 }`}
                 onMouseEnter={() => setHoveredIndex(index)}
@@ -437,15 +440,46 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
                   </div>
                 </div>
 
-                {/* Percentage */}
-                <div className="text-sm font-medium tabular-nums">
-                  {item.percentValue.toFixed(1)}%
+                {/* Actions */}
+                <div className="flex items-center gap-1">
+                  {aiEnabled && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const holding = dbHoldings.find(h => h.securityIds.includes(item.securityId));
+                        if (holding) setNewsModalHolding(holding);
+                      }}
+                      className="p-1 hover:bg-muted rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                      title="Nachrichten recherchieren"
+                    >
+                      <Newspaper size={14} className="text-muted-foreground" />
+                    </button>
+                  )}
+                  {/* Percentage */}
+                  <div className="text-sm font-medium tabular-nums">
+                    {item.percentValue.toFixed(1)}%
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
       </div>
+
+      {/* News Research Modal */}
+      {newsModalHolding && (
+        <NewsResearchModal
+          isOpen={!!newsModalHolding}
+          onClose={() => setNewsModalHolding(null)}
+          security={{
+            id: newsModalHolding.securityIds[0],
+            name: newsModalHolding.name,
+            isin: newsModalHolding.isin,
+            currency: newsModalHolding.currency,
+          }}
+          currentPrice={newsModalHolding.currentPrice ?? undefined}
+        />
+      )}
     </div>
   );
 }

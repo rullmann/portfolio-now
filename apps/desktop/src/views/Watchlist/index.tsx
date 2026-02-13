@@ -3,11 +3,12 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
+import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Newspaper } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { getWatchlists, getWatchlistSecurities, createWatchlist, deleteWatchlist, removeFromWatchlist, getPriceHistory } from '../../lib/api';
 import { TradingViewMiniChart } from '../../components/charts';
 import { SecurityLogo } from '../../components/common';
+import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
 import type { WatchlistData, WatchlistSecurityData, PriceData } from '../../lib/types';
@@ -21,7 +22,8 @@ export function WatchlistView() {
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [priceHistories, setPriceHistories] = useState<Record<number, PriceData[]>>({});
-  const { brandfetchApiKey } = useSettingsStore();
+  const { brandfetchApiKey, aiEnabled } = useSettingsStore();
+  const [newsModalSecurity, setNewsModalSecurity] = useState<WatchlistSecurityData | null>(null);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -328,13 +330,24 @@ export function WatchlistView() {
                               )}
                             </td>
                             <td className="py-3 px-4 text-right">
-                              <button
-                                onClick={() => handleRemoveSecurity(security.securityId)}
-                                className="p-1 hover:bg-destructive/10 rounded-md text-destructive"
-                                title="Entfernen"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              <div className="flex justify-end gap-1">
+                                {aiEnabled && (
+                                  <button
+                                    onClick={() => setNewsModalSecurity(security)}
+                                    className="p-1 hover:bg-muted rounded-md transition-colors"
+                                    title="Nachrichten recherchieren"
+                                  >
+                                    <Newspaper size={14} className="text-muted-foreground" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleRemoveSecurity(security.securityId)}
+                                  className="p-1 hover:bg-destructive/10 rounded-md text-destructive"
+                                  title="Entfernen"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -358,6 +371,22 @@ export function WatchlistView() {
           </div>
         </div>
       </div>
+
+      {/* News Research Modal */}
+      {newsModalSecurity && (
+        <NewsResearchModal
+          isOpen={!!newsModalSecurity}
+          onClose={() => setNewsModalSecurity(null)}
+          security={{
+            id: newsModalSecurity.securityId,
+            name: newsModalSecurity.name,
+            ticker: newsModalSecurity.ticker,
+            isin: newsModalSecurity.isin,
+            currency: newsModalSecurity.currency,
+          }}
+          currentPrice={newsModalSecurity.latestPrice ?? undefined}
+        />
+      )}
     </div>
   );
 }

@@ -44,6 +44,7 @@ import {
   ErrorBanner,
   LoadingIndicator,
   ToastContainer,
+  QuoteSyncOverlay,
 } from './components/layout';
 
 // Chat components
@@ -628,6 +629,9 @@ function App() {
             {renderView()}
           </div>
         </main>
+
+        {/* Quote sync progress overlay */}
+        <QuoteSyncOverlay />
 
         {/* Toast notifications */}
         <ToastContainer />

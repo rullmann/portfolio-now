@@ -853,6 +853,8 @@ ORDER BY t.date DESC
 
 Ohne ```sql``` Block in deiner Antwort passiert NICHTS - das System kann nur SQL ausführen!
 
+WICHTIG: SQL nur bei DATENFRAGEN verwenden! Bei allgemeinen Fragen (Finanzwissen, Smalltalk, Meinungen, Erklärungen) oder wenn die Antwort bereits in der Portfolio-Übersicht oben steht → direkt antworten, KEIN SQL!
+
 === BENUTZER ===
 {}
 
@@ -909,24 +911,13 @@ WATCHLIST:
 [[WATCHLIST_ADD:{{"watchlist":"Standard","security":"Apple"}}]]
 [[WATCHLIST_REMOVE:{{"watchlist":"Standard","security":"Microsoft"}}]]
 
-=== SQL-ABFRAGEN (ABSOLUT KRITISCH - WICHTIGSTE REGEL!) ===
-⛔⛔⛔ STOP! LIES DAS GENAU! ⛔⛔⛔
+=== SQL-ABFRAGEN ===
 
-Du MUSST bei JEDER Datenfrage SOFORT einen ```sql``` Block schreiben!
+SQL ist dein Zugang zur Datenbank. Bei Datenfragen die NICHT aus dem Kontext oben beantwortet werden können, generiere einen ```sql``` Block.
 
-❌ VERBOTEN (funktioniert NICHT - System ignoriert das!):
-- "Ich werde die Daten abfragen..." → FALSCH!
-- "Einen Moment, ich schaue nach..." → FALSCH!
-- "Lass mich das herausfinden..." → FALSCH!
-- "Ich kann dir zeigen..." ohne SQL → FALSCH!
-- Jeder Text OHNE ```sql``` Block bei Datenfragen → FALSCH!
+WICHTIG: Sage NICHT "Ich werde abfragen..." — generiere direkt den SQL-Block! Ohne ```sql``` Block wird nichts abgefragt.
 
-✅ PFLICHT (EINZIGE Methode die funktioniert):
-Bei Fragen zu Käufen, Verkäufen, Dividenden, Holdings, Transaktionen, Performance etc.:
-→ SOFORT ```sql``` Block generieren!
-
-WARUM: Ohne SQL-Block wird NICHTS abgefragt! Du hast KEINEN anderen Zugang zur Datenbank!
-Das System kann nur SQL-Blocks lesen und ausführen - alles andere wird ignoriert.
+KEIN SQL bei: Allgemeinen Fragen, Finanzwissen, Smalltalk, Meinungen, oder wenn die Daten bereits im Kontext (Holdings, Transaktionen, Dividenden, Portfolio-Übersicht) stehen.
 
 ERLAUBT: Nur SELECT auf pp_* Tabellen (KEIN INSERT/UPDATE/DELETE!)
 AUTOMATISCH: LIMIT wird auf 100 begrenzt
@@ -1013,7 +1004,7 @@ RELATIVE DATUM-FUNKTIONEN (SQLite):
 === ANTWORT-STIL ===
 - KURZ + PRÄGNANT, Bullet Points
 - AGGREGIERT: Summen statt Listen (außer explizit gewünscht)
-- DB VOR WEB: Portfolio-Fragen → IMMER mit SQL abfragen, Web nur für externe Infos
+- KONTEXT ZUERST: Nutze die Portfolio-Daten oben. SQL nur wenn Daten nicht im Kontext. Web nur für externe Infos
 - SYNONYME ERKENNEN: "mehrere"="verschiedene"="verteilt", "Depot"="Portfolio"
 
 === TRANSAKTIONEN ERSTELLEN/LÖSCHEN ===
@@ -1107,7 +1098,7 @@ BEISPIEL 3 - Dividende mit Quellensteuer:
 [[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-20","txnType":"DIVIDENDS","securityName":"Microsoft Corp.","isin":"US5949181045","grossAmount":12.50,"grossCurrency":"USD","exchangeRate":1.08,"amount":11.57,"currency":"EUR","taxes":1.88}}],"sourceDescription":"Trade Republic Dividende"}}]]
 Dividende von Microsoft: 12,50 USD (11,57 EUR nach 1,88 EUR Steuern).
 
-🚨 ERINNERUNG: Bei JEDER Datenfrage (Käufe, Verkäufe, Dividenden, Transaktionen, etc.) MUSST du einen ```sql``` Block generieren! Text wie "Ich werde abfragen..." ohne SQL funktioniert NICHT!
+ERINNERUNG: Bei Datenfragen einen ```sql``` Block generieren — aber NUR wenn die Daten nicht bereits im Kontext oben stehen. Keine SQL bei allgemeinen Fragen!
 
 === WÄHRUNGSHINWEIS GBX/GBp ===
 UK-Aktien werden oft in GBX (Pence) notiert, nicht GBP (Pfund). 1 GBP = 100 GBX. Wenn currency = "GBX" oder "GBp", teile den Kurs durch 100 für den GBP-Wert.
@@ -1272,6 +1263,109 @@ Beispiel:
 }
 ```"
 "##.to_string()
+}
+
+/// Build the news research prompt for a security
+pub fn build_news_research_prompt(
+    security_name: &str,
+    ticker: Option<&str>,
+    isin: Option<&str>,
+    currency: &str,
+    current_price: Option<f64>,
+    language: Option<&str>,
+    model: &str,
+) -> String {
+    let ticker_str = ticker.unwrap_or("-");
+    let isin_str = isin.unwrap_or("-");
+    let price_str = current_price
+        .map(|p| format!("{:.2} {}", p, currency))
+        .unwrap_or_else(|| "Unbekannt".to_string());
+
+    let lang_directive = match language {
+        Some("en") => "Respond in English.",
+        _ => "Antworte auf Deutsch.",
+    };
+
+    if is_fast_model(model) {
+        format!(
+            r#"Recherchiere aktuelle Nachrichten für {} ({}, ISIN: {}).
+Kurs: {}
+
+{}
+
+Antworte in Markdown mit diesen Abschnitten:
+
+## Aktuelle Nachrichten
+[Top 3-5 News der letzten 7 Tage mit Quelle und Datum]
+
+## Analysten-Einschätzungen
+[Ratings, Kursziele, Konsensus]
+
+## Marktstimmung
+[Bullish/Bearish/Neutral + kurze Begründung]
+
+## Termine & Events
+[Nächste Earnings, Ex-Dividende, HV]
+
+## Fazit
+[2-3 Sätze Zusammenfassung]
+
+Beginne direkt mit ## Aktuelle Nachrichten. Keine Einleitung."#,
+            security_name, ticker_str, isin_str, price_str, lang_directive
+        )
+    } else {
+        format!(
+            r#"Du bist ein erfahrener Finanzjournalist und Analyst. Recherchiere umfassend aktuelle Informationen zu diesem Wertpapier.
+
+**Wertpapier:** {} ({})
+**ISIN:** {}
+**Aktueller Kurs:** {}
+
+{}
+
+Antworte in Markdown-Format mit Überschriften im Format: ## Überschrift
+
+## Aktuelle Nachrichten
+[Die wichtigsten 5-7 Nachrichten der letzten 7 Tage. Für jede News:
+- Überschrift/Zusammenfassung
+- Quelle und Datum
+- Relevanz für den Kurs (positiv/negativ/neutral)]
+
+## Analysten-Einschätzungen
+[Aktuelle Analysten-Ratings und Kursziele:
+- Konsensus-Rating (Kaufen/Halten/Verkaufen)
+- Durchschnittliches Kursziel
+- Letzte Rating-Änderungen mit Datum und Analyst/Bank]
+
+## Quartalsergebnisse
+[Letzte und nächste Quartalszahlen:
+- Letztes Quartal: EPS (erwartet vs. tatsächlich), Umsatz
+- Nächstes Quartal: EPS-Erwartung, Umsatz-Erwartung, Termin]
+
+## Marktstimmung
+[Gesamteinschätzung:
+- **Tendenz:** Bullish / Bearish / Neutral
+- **Begründung:** 2-3 Sätze zur aktuellen Marktstimmung]
+
+## Termine & Events
+[Wichtige bevorstehende Termine:
+- Nächster Earnings-Termin
+- Ex-Dividende-Datum
+- Hauptversammlung
+- Sonstige relevante Events]
+
+## Fazit
+[3-4 Sätze Zusammenfassung: Was sind die wichtigsten Treiber? Wie ist die Gesamtlage? Worauf sollte man achten?]
+
+WICHTIG:
+- Nenne immer die Quellen deiner Informationen
+- Gib Datum bei jeder Nachricht an
+- Sei faktisch und objektiv
+- Dies ist KEINE Anlageberatung
+- Beginne direkt mit ## Aktuelle Nachrichten"#,
+            security_name, ticker_str, isin_str, price_str, lang_directive
+        )
+    }
 }
 
 /// Build a user message for the quote assistant with security context

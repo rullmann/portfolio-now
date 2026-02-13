@@ -14,7 +14,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDown, Check, Settings, Sparkles } from 'lucide-react';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
-import { useSettingsStore, AI_MODELS, type AiProvider, type AiFeatureId } from '../../store';
+import { useSettingsStore, AI_MODELS, WEB_SEARCH_AI_MODELS, type AiProvider, type AiFeatureId } from '../../store';
 import { useUIStore } from '../../store';
 import { AIProviderLogo, AI_PROVIDER_NAMES } from './AIProviderLogo';
 import { cn } from '../../lib/utils';
@@ -24,6 +24,8 @@ interface AIModelSelectorProps {
   featureId: AiFeatureId;
   /** Only show vision-capable models */
   requiresVision?: boolean;
+  /** Only show web-search-capable models (OpenAI, Perplexity) */
+  requiresWebSearch?: boolean;
   /** Current selected provider and model */
   value: { provider: AiProvider; model: string };
   /** Callback when selection changes */
@@ -46,6 +48,7 @@ const NON_VISION_MODELS = new Set<string>([
 export function AIModelSelector({
   featureId,
   requiresVision = false,
+  requiresWebSearch = false,
   value,
   onChange,
   compact = false,
@@ -69,31 +72,40 @@ export function AIModelSelector({
     perplexity: !!keys.perplexityApiKey,
   }), [keys]);
 
-  // Get available providers (with API key)
+  // Get available providers (with API key, filtered by web search if needed)
   const availableProviders = useMemo(() => {
-    return PROVIDER_ORDER.filter(p => providerHasKey[p]);
-  }, [providerHasKey]);
+    const withKey = PROVIDER_ORDER.filter(p => providerHasKey[p]);
+    if (requiresWebSearch) {
+      return withKey.filter(p => WEB_SEARCH_AI_MODELS[p] && WEB_SEARCH_AI_MODELS[p]!.length > 0);
+    }
+    return withKey;
+  }, [providerHasKey, requiresWebSearch]);
 
-  // Get models for each provider (filtered by vision if needed)
+  // Get models for each provider (filtered by vision/web-search if needed)
   const modelsByProvider = useMemo(() => {
     const result: Partial<Record<AiProvider, Array<{ id: string; name: string; description: string }>>> = {};
 
     for (const provider of PROVIDER_ORDER) {
-      const models = AI_MODELS[provider] || [];
-      // Filter by vision capability if required
-      result[provider] = requiresVision
-        ? models.filter(m => !NON_VISION_MODELS.has(m.id))
-        : [...models];
+      if (requiresWebSearch) {
+        result[provider] = [...(WEB_SEARCH_AI_MODELS[provider] || [])];
+      } else {
+        const models = AI_MODELS[provider] || [];
+        result[provider] = requiresVision
+          ? models.filter(m => !NON_VISION_MODELS.has(m.id))
+          : [...models];
+      }
     }
 
     return result;
-  }, [requiresVision]);
+  }, [requiresVision, requiresWebSearch]);
 
   // Get current model info
   const currentModelInfo = useMemo(() => {
-    const models = AI_MODELS[value.provider] || [];
+    const models = requiresWebSearch
+      ? (WEB_SEARCH_AI_MODELS[value.provider] || [])
+      : (AI_MODELS[value.provider] || []);
     return models.find(m => m.id === value.model) || { id: value.model, name: value.model, description: '' };
-  }, [value]);
+  }, [value, requiresWebSearch]);
 
   // Get short display name for the current model
   const shortModelName = useMemo(() => {
@@ -201,7 +213,7 @@ export function AIModelSelector({
           openDirection === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
         )}>
           <div className="max-h-[320px] overflow-y-auto py-1">
-            {PROVIDER_ORDER.map(provider => {
+            {PROVIDER_ORDER.filter(p => !requiresWebSearch || (WEB_SEARCH_AI_MODELS[p] && WEB_SEARCH_AI_MODELS[p]!.length > 0)).map(provider => {
               const hasKey = providerHasKey[provider];
               const models = modelsByProvider[provider] || [];
 

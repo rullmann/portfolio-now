@@ -228,7 +228,7 @@ pub struct SecurityQuoteRequest {
 }
 
 /// Kurs für eine einzelne Security abrufen
-async fn fetch_quote_for_security(sec: &SecurityQuoteRequest) -> QuoteResult {
+pub async fn fetch_quote_for_security(sec: &SecurityQuoteRequest) -> QuoteResult {
     match sec.provider {
         ProviderType::Yahoo | ProviderType::YahooAdjustedClose => {
             let adjusted = sec.provider == ProviderType::YahooAdjustedClose;

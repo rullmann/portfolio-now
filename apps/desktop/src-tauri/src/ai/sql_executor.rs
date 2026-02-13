@@ -154,11 +154,22 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
         });
     }
 
-    // 1. Must start with SELECT (also rejects WITH/CTE as entry point)
-    if !sql_upper.trim_start().starts_with("SELECT") {
+    // 1. Must start with SELECT or WITH (CTE + SELECT)
+    let trimmed_upper = sql_upper.trim_start();
+    if trimmed_upper.starts_with("WITH") {
+        // CTE: ensure it contains a final SELECT (not INSERT/UPDATE/DELETE after the CTE)
+        // Find the last top-level statement keyword after the CTE definitions
+        // A valid CTE must eventually execute a SELECT
+        if !trimmed_upper.contains("SELECT") {
+            return Err(SqlValidationError {
+                message: "WITH/CTE muss eine SELECT-Abfrage enthalten.".to_string(),
+                suggestion: Some("Füge nach dem WITH-Block eine SELECT-Abfrage hinzu.".to_string()),
+            });
+        }
+    } else if !trimmed_upper.starts_with("SELECT") {
         return Err(SqlValidationError {
-            message: "Nur SELECT-Abfragen sind erlaubt (kein WITH/CTE).".to_string(),
-            suggestion: Some("Beginne die Query mit SELECT.".to_string()),
+            message: "Nur SELECT-Abfragen sind erlaubt.".to_string(),
+            suggestion: Some("Beginne die Query mit SELECT oder WITH ... SELECT.".to_string()),
         });
     }
 
@@ -176,13 +187,26 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
         }
     }
 
-    // 3. Check for allowed tables only (operates on comment-stripped SQL)
+    // 3. Collect CTE alias names so they pass the table check
+    static RE_CTE_ALIAS: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bWITH\s+(\w+)\s+AS\b|\b,\s*(\w+)\s+AS\s*\(").unwrap()
+    });
+    let cte_aliases: HashSet<String> = RE_CTE_ALIAS.captures_iter(&sql_clean)
+        .filter_map(|caps| {
+            caps.get(1).or(caps.get(2)).map(|m| m.as_str().to_lowercase())
+        })
+        .collect();
+
+    // 4. Check for allowed tables only (operates on comment-stripped SQL)
     static RE_TABLE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)\bFROM\s+(\w+)|\bJOIN\s+(\w+)").unwrap()
     });
 
     for caps in RE_TABLE.captures_iter(&sql_clean) {
         let table = caps.get(1).or(caps.get(2)).unwrap().as_str().to_lowercase();
+        if cte_aliases.contains(&table) {
+            continue; // CTE alias, not a real table
+        }
         if !ALLOWED_TABLES.contains(&table.as_str()) {
             return Err(SqlValidationError {
                 message: format!("Tabelle '{}' ist nicht erlaubt.", table),
@@ -780,11 +804,25 @@ SELECT * FROM pp_txn WHERE txn_type = 'DIVIDENDS'
     }
 
     #[test]
-    fn test_validate_sql_rejects_cte_with() {
+    fn test_validate_sql_allows_cte_with_select() {
+        let sql = "WITH cte AS (SELECT id, name FROM pp_security) SELECT * FROM cte";
+        let result = validate_sql(sql);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_sql_rejects_cte_with_forbidden_table() {
         let sql = "WITH cte AS (SELECT * FROM sqlite_master) SELECT * FROM cte";
         let result = validate_sql(sql);
         assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("SELECT"));
+        assert!(result.unwrap_err().message.contains("nicht erlaubt"));
+    }
+
+    #[test]
+    fn test_validate_sql_rejects_cte_without_select() {
+        let sql = "WITH cte AS (SELECT 1) DELETE FROM pp_security";
+        let result = validate_sql(sql);
+        assert!(result.is_err());
     }
 
     #[test]

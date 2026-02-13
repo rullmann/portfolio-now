@@ -28,6 +28,7 @@ import {
   GitCompare,
   Check,
   Pencil,
+  Newspaper,
 } from 'lucide-react';
 import { TradingViewChart } from '../../components/charts/TradingViewChart';
 import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
@@ -36,6 +37,7 @@ import { SignalsPanel } from '../../components/charts/SignalsPanel';
 import { AlertsPanel } from '../../components/charts/AlertsPanel';
 import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel, ShareToXButton } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
+import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC } from '../../lib/indicators';
@@ -152,7 +154,7 @@ const timeRanges: { value: TimeRange; label: string }[] = [
 // ============================================================================
 
 export function ChartsView() {
-  const { theme, brandfetchApiKey } = useSettingsStore();
+  const { theme, brandfetchApiKey, aiEnabled } = useSettingsStore();
 
   // State
   const [securities, setSecurities] = useState<SecurityData[]>([]);
@@ -183,6 +185,7 @@ export function ChartsView() {
   const [watchlistSecurityIds, setWatchlistSecurityIds] = useState<Set<number>>(new Set());
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
 
   // AI Annotations state
   const [chartAnnotations, setChartAnnotations] = useState<ChartAnnotationWithId[]>([]);
@@ -982,6 +985,18 @@ export function ChartsView() {
                   />
                 )}
 
+                {/* News Research Button */}
+                {!isComparisonMode && selectedSecurity && aiEnabled && (
+                  <button
+                    onClick={() => setIsNewsModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors bg-muted text-muted-foreground hover:bg-muted/80"
+                    title="Nachrichten recherchieren"
+                  >
+                    <Newspaper size={14} />
+                    News
+                  </button>
+                )}
+
                 {isComparisonMode ? (
                   <span className="text-xs text-muted-foreground">
                     {comparisonSecurities.size}/8 ausgewählt
@@ -1154,6 +1169,22 @@ export function ChartsView() {
         onClose={() => setIsSearchModalOpen(false)}
         onSecurityAdded={handleSecurityAdded}
       />
+
+      {/* News Research Modal */}
+      {selectedSecurity && (
+        <NewsResearchModal
+          isOpen={isNewsModalOpen}
+          onClose={() => setIsNewsModalOpen(false)}
+          security={{
+            id: selectedSecurity.id,
+            name: selectedSecurity.name,
+            ticker: selectedSecurity.ticker,
+            isin: selectedSecurity.isin,
+            currency: selectedSecurity.currency,
+          }}
+          currentPrice={ohlcData[ohlcData.length - 1]?.close}
+        />
+      )}
     </>
   );
 }

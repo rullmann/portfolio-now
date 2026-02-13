@@ -116,6 +116,8 @@ struct ResponsesApiRequest {
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 /// Input can be a simple string or array of messages
@@ -682,6 +684,7 @@ pub async fn analyze_portfolio(
                 input: ResponsesInput::Text(prompt.clone()),
                 instructions: None,
                 max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+                tools: None,
             };
 
             let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
@@ -831,6 +834,7 @@ pub async fn analyze_opportunities(
                 input: ResponsesInput::Text(prompt.clone()),
                 instructions: None,
                 max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+                tools: None,
             };
 
             let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
@@ -1013,6 +1017,7 @@ pub async fn chat(
                 input: ResponsesInput::Messages(responses_messages),
                 instructions: Some(system_prompt.clone()),
                 max_output_tokens: Some(MAX_TOKENS_CHAT),
+                tools: None,
             };
 
             let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
@@ -1233,6 +1238,7 @@ pub async fn complete_text(
                 input: ResponsesInput::Text(prompt.to_string()),
                 instructions: None,
                 max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+                tools: None,
             };
 
             let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
@@ -1323,6 +1329,87 @@ pub async fn complete_text(
             .first()
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default());
+    }
+
+    Err(last_error)
+}
+
+/// Text completion with web search via OpenAI Responses API (web_search_preview tool)
+/// Uses the Responses API for all models since web_search_preview is a Responses API tool.
+pub async fn complete_text_with_web_search(
+    model: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<String, AiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key))
+            .map_err(|_| AiError::invalid_api_key("OpenAI", model))?,
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .pool_max_idle_per_host(2)
+        .build()
+        .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
+
+    let web_search_tool = serde_json::json!({ "type": "web_search_preview" });
+
+    let request_body = ResponsesApiRequest {
+        model: model.to_string(),
+        input: ResponsesInput::Text(prompt.to_string()),
+        instructions: None,
+        max_output_tokens: Some(MAX_TOKENS_INSIGHTS),
+        tools: Some(vec![web_search_tool]),
+    };
+
+    let mut last_error = AiError::other("OpenAI", model, "No attempts made");
+
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(calculate_backoff_delay(attempt - 1)).await;
+        }
+
+        let response = match client.post(RESPONSES_API_URL).json(&request_body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = if e.is_timeout() {
+                    AiError::network_error("OpenAI", model, "Zeitüberschreitung")
+                } else if e.is_connect() {
+                    AiError::network_error("OpenAI", model, "Verbindung fehlgeschlagen")
+                } else {
+                    AiError::network_error("OpenAI", model, &e.to_string())
+                };
+
+                if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = parse_error(status.as_u16(), &body, model);
+
+            if attempt < MAX_RETRIES && is_retryable(&last_error) {
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let data: ResponsesApiResponse = response
+            .json()
+            .await
+            .map_err(|e| AiError::other("OpenAI", model, &format!("JSON parse error: {}", e)))?;
+
+        // extract_responses_text already filters for message-type outputs,
+        // skipping web_search_call items automatically
+        return Ok(extract_responses_text(&data));
     }
 
     Err(last_error)

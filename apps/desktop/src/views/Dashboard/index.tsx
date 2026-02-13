@@ -33,7 +33,8 @@ import {
 } from '../../store/portfolioAnalysis';
 import type { AggregatedHolding, PortfolioData } from '../types';
 import { formatNumber } from '../utils';
-import { getBaseCurrency, calculatePerformance, syncAllPrices } from '../../lib/api';
+import { getBaseCurrency, calculatePerformance } from '../../lib/api';
+import { useQuoteSync } from '../../hooks/useQuoteSync';
 import { useCachedLogos } from '../../lib/hooks';
 import type { PerformanceResult } from '../../lib/types';
 import { PortfolioInsightsModal } from '../../components/modals/PortfolioInsightsModal';
@@ -400,10 +401,11 @@ export function DashboardView({
   const setLastSyncTime = useSettingsStore((state) => state.setLastSyncTime);
   const [nextSyncSeconds, setNextSyncSeconds] = useState<number | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const { startSync } = useQuoteSync();
   const handleSyncQuotes = useCallback(async () => {
     if (isSyncing) return;
     setIsSyncing(true);
-    setSyncStatus('Lade Kurse...');
+    setSyncStatus('Sync...');
     try {
       const apiKeys = {
         finnhub: finnhubApiKey || undefined,
@@ -411,31 +413,12 @@ export function DashboardView({
         alphaVantage: alphaVantageApiKey || undefined,
         twelveData: twelveDataApiKey || undefined,
       };
-      const result = await syncAllPrices(syncOnlyHeldSecurities, apiKeys);
+      await startSync(syncOnlyHeldSecurities, apiKeys);
       setLastSyncTime(new Date());
-
-      // Build status message
-      let statusMsg = `${result.success} Kurse aktualisiert`;
-      if (result.errors > 0) {
-        statusMsg += `, ${result.errors} Fehler`;
-      }
-      setSyncStatus(statusMsg);
-
-      // Show toast notification
-      if (result.errors > 0) {
-        toast.warning(statusMsg);
-      } else {
-        toast.success(statusMsg);
-      }
-
       onRefresh?.();
-
-      // Clear status after 3 seconds
-      setTimeout(() => setSyncStatus(null), 3000);
+      setSyncStatus(null);
     } catch (err) {
-      const errorMsg = `Sync fehlgeschlagen: ${err}`;
-      setSyncStatus(errorMsg);
-      toast.error(errorMsg);
+      setSyncStatus(`Sync fehlgeschlagen: ${err}`);
       setTimeout(() => setSyncStatus(null), 5000);
     } finally {
       setIsSyncing(false);
@@ -449,6 +432,7 @@ export function DashboardView({
     syncOnlyHeldSecurities,
     onRefresh,
     setLastSyncTime,
+    startSync,
   ]);
 
 

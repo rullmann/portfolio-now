@@ -113,6 +113,8 @@ pub use types::{
     MAX_TOKENS, MAX_TOKENS_INSIGHTS, MAX_TOKENS_CHAT,
     // Error types
     AiError, AiErrorKind,
+    // News research types
+    NewsResearchResponse,
     // Chart analysis types
     ChartAnalysisRequest, ChartAnalysisResponse, ChartContext,
     IndicatorValue, CandleData, VolumeAnalysis,
@@ -148,6 +150,7 @@ pub use prompts::{
     build_portfolio_insights_prompt,
     build_opportunities_prompt,
     build_chat_system_prompt,
+    build_news_research_prompt,
 };
 
 // ============================================================================

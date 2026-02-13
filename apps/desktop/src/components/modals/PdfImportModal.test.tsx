@@ -32,12 +32,38 @@ vi.mock('../../lib/api', () => ({
 vi.mock('../../store', () => ({
   useSettingsStore: vi.fn(() => ({
     deliveryMode: false,
-    aiProvider: 'openai',
-    aiModel: 'gpt-4',
-    anthropicApiKey: '',
-    openaiApiKey: '',
-    geminiApiKey: '',
-    perplexityApiKey: '',
+    aiEnabled: false,
+    aiFeatureSettings: {
+      chartAnalysis: { provider: 'openai', model: 'gpt-4' },
+      portfolioInsights: { provider: 'openai', model: 'gpt-4' },
+      chatAssistant: { provider: 'openai', model: 'gpt-4' },
+      pdfOcr: { provider: 'openai', model: 'gpt-4' },
+      csvImport: { provider: 'openai', model: 'gpt-4' },
+      quoteAssistant: { provider: 'openai', model: 'gpt-4' },
+      newsResearch: { provider: 'perplexity', model: 'sonar-pro' },
+    },
+  })),
+  getVisionModels: vi.fn(() => []),
+}));
+
+// Mock useSecureApiKeys hook
+vi.mock('../../hooks/useSecureApiKeys', () => ({
+  useSecureApiKeys: vi.fn(() => ({
+    keys: {
+      anthropicApiKey: '',
+      openaiApiKey: '',
+      geminiApiKey: '',
+      perplexityApiKey: '',
+    },
+    setApiKey: vi.fn(),
+    isSecureStorageAvailable: false,
+  })),
+}));
+
+// Mock Tauri window API
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: vi.fn(() => ({
+    onDragDropEvent: vi.fn(() => Promise.resolve(vi.fn())),
   })),
 }));
 
@@ -148,8 +174,9 @@ describe('PdfImportModal', () => {
       fireEvent.click(details);
 
       await waitFor(() => {
-        expect(screen.getByText('DKB')).toBeInTheDocument();
-        expect(screen.getByText('ING')).toBeInTheDocument();
+        // Banks are displayed joined with comma in a single text node
+        expect(screen.getByText(/DKB/)).toBeInTheDocument();
+        expect(screen.getByText(/ING/)).toBeInTheDocument();
       });
     });
 

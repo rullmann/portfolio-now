@@ -11,7 +11,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,no_run,ignore
 //! // Create a consortium
 //! create_consortium(CreateConsortiumRequest { name: "Family Portfolio", portfolio_ids: vec![1, 2, 3] })
 //!

@@ -304,6 +304,8 @@ pub fn run() {
             commands::ai::import_extracted_transactions,
             commands::ai::enrich_extracted_transactions,
             commands::ai::check_extracted_transactions_for_duplicates,
+            // AI News Research
+            commands::ai::research_security_news,
             // Speech-to-Text
             commands::ai::transcribe_audio,
             // Chat History Persistence

@@ -5,6 +5,26 @@ All notable changes to Portfolio Now will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-02-13
+
+### Added
+- **AI News Research**: Dedicated news research feature for any security using web search via Perplexity or OpenAI
+  - Researches current news, analyst ratings, earnings, market sentiment, and upcoming events
+  - New Tauri command: `research_security_news` with structured markdown output
+  - OpenAI Responses API with `web_search_preview` tool support (`complete_text_with_web_search()`)
+  - New `NewsResearchModal` component with SafeMarkdown rendering, rate limiting, error handling
+  - `WEB_SEARCH_AI_MODELS` registry: OpenAI (gpt-4o, gpt-4o-mini, gpt-5-mini) + Perplexity (sonar-pro, sonar)
+  - `AIModelSelector` + `AiFeatureMatrix` support `requiresWebSearch` filter for web-search-only providers
+  - Integrated in all 4 views: Charts, Securities, Watchlist, Holdings (Newspaper button)
+  - Per-feature AI provider/model configuration via `aiFeatureSettings.newsResearch`
+
+### Fixed
+- **ChatBot response truncation**: Increased `MAX_TOKENS_CHAT` from 4096 to 8192 — longer AI answers no longer get cut off
+- **ChatBot excessive SQL queries**: Rebalanced system prompt so the LLM uses portfolio context data first and only generates SQL when data is not already available
+- **SQL CTE support**: `WITH ... AS (...) SELECT` queries (Common Table Expressions) now allowed in ChatBot SQL execution — previously all CTEs were rejected
+  - CTE alias names correctly excluded from table allowlist validation
+  - Safety preserved: only SELECT after CTE, forbidden keywords still blocked, only pp_* tables allowed
+
 ## [0.1.9] - 2026-02-11
 
 ### Added

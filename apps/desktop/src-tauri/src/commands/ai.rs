@@ -242,6 +242,73 @@ pub async fn analyze_portfolio_with_ai(
 }
 
 // ============================================================================
+// News Research Commands
+// ============================================================================
+
+/// Research security news using web search
+///
+/// Uses Perplexity (native web search) or OpenAI (web_search_preview tool)
+/// to find current news, analyst ratings, earnings, and events.
+#[command]
+pub async fn research_security_news(
+    provider: String,
+    model: String,
+    api_key: String,
+    security_name: String,
+    ticker: Option<String>,
+    isin: Option<String>,
+    currency: String,
+    current_price: Option<f64>,
+    language: Option<String>,
+) -> Result<crate::ai::NewsResearchResponse, String> {
+    security::check_rate_limit("ai_news_research", &security::limits::ai_news_research())?;
+
+    // Auto-upgrade deprecated models
+    let model = if let Some(upgraded) = get_model_upgrade(&model) {
+        log::info!("Auto-upgrading deprecated model {} to {}", model, upgraded);
+        upgraded.to_string()
+    } else {
+        model.clone()
+    };
+
+    // Build the prompt
+    let prompt = crate::ai::build_news_research_prompt(
+        &security_name,
+        ticker.as_deref(),
+        isin.as_deref(),
+        &currency,
+        current_price,
+        language.as_deref(),
+        &model,
+    );
+
+    // Call the appropriate provider
+    let result = match provider.as_str() {
+        "perplexity" => {
+            // Perplexity has native web search
+            perplexity::complete_text(&model, &api_key, &prompt).await
+        }
+        "openai" => {
+            // OpenAI uses web_search_preview tool via Responses API
+            openai::complete_text_with_web_search(&model, &api_key, &prompt).await
+        }
+        _ => {
+            return Err("Provider unterstützt keine Web-Suche. Bitte Perplexity oder OpenAI verwenden.".to_string());
+        }
+    };
+
+    match result {
+        Ok(text) => Ok(crate::ai::NewsResearchResponse {
+            analysis: text,
+            provider: provider.clone(),
+            model: model.clone(),
+            tokens_used: None,
+        }),
+        Err(e) => Err(serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())),
+    }
+}
+
+// ============================================================================
 // Portfolio Chat Commands
 // ============================================================================
 

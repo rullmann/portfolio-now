@@ -260,7 +260,7 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 `get/save_tax_settings(year)`, `generate_german_tax_report(year)`, `get_freistellung_status(year)`
 
 ### AI Features
-`analyze_chart_with_ai/with_annotations/enhanced`, `analyze_portfolio_with_ai`, `chat_with_portfolio_assistant`, `get_ai_models(provider, api_key)`, `get_vision_models(provider)`
+`analyze_chart_with_ai/with_annotations/enhanced`, `analyze_portfolio_with_ai`, `chat_with_portfolio_assistant`, `research_security_news(provider, model, api_key, security_name, ...)`, `get_ai_models(provider, api_key)`, `get_vision_models(provider)`
 
 ### AI Helper (ChatBot)
 `ai_search_security(query, api_key?)`, `ai_add/remove_from_watchlist(watchlist, security, api_key?)`, `ai_list_watchlists()`, `ai_query_transactions(security?, year?, type?, limit?)`
@@ -312,14 +312,15 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 
 Jedes Feature kann eigenen Provider/Model haben in `aiFeatureSettings`:
 
-| Feature | ID | Vision nötig? |
-|---------|-----|---------------|
-| Chart-Analyse | `chartAnalysis` | Ja |
-| Portfolio Insights | `portfolioInsights` | Nein |
-| Chat-Assistent | `chatAssistant` | Nein |
-| PDF OCR | `pdfOcr` | Ja |
-| CSV-Import | `csvImport` | Nein |
-| Kursquellen-Assistent | `quoteAssistant` | Nein |
+| Feature | ID | Vision nötig? | Web-Search nötig? |
+|---------|-----|---------------|-------------------|
+| Chart-Analyse | `chartAnalysis` | Ja | Nein |
+| Portfolio Insights | `portfolioInsights` | Nein | Nein |
+| Chat-Assistent | `chatAssistant` | Nein | Nein |
+| PDF OCR | `pdfOcr` | Ja | Nein |
+| CSV-Import | `csvImport` | Nein | Nein |
+| Kursquellen-Assistent | `quoteAssistant` | Nein | Nein |
+| Nachrichten-Recherche | `newsResearch` | Nein | Ja |
 
 **Logos:** `AIProviderLogo` in `src/components/common/AIProviderLogo.tsx`
 
@@ -386,7 +387,7 @@ Dashboard, WidgetDashboard, Portfolio, Securities, Accounts, Transactions, Holdi
 | **PDF-OCR Consent** | `PdfImportModal.tsx` | Explizite Zustimmung für KI-Upload |
 | **ZIP-Bomb-Schutz** | `protobuf/parser.rs` | `MAX_UNCOMPRESSED_SIZE` (500 MB) |
 | **Rate Limiting** | `security/mod.rs` | `check_rate_limit()` — aktiv für Quotes, AI-Chat, Chart-Analyse |
-| **SQL-Härtung** | `ai/sql_executor.rs` | Comment-Stripping, Semicolon-Schutz, CTE-Blocking |
+| **SQL-Härtung** | `ai/sql_executor.rs` | Comment-Stripping, Semicolon-Schutz, CTE-Support (WITH+SELECT erlaubt) |
 | **Input-Sanitization** | `commands/crud.rs` | `sanitize_string()` für Security/Account-Namen |
 | **Stale-Rate-Schutz** | `currency/mod.rs` | Wechselkurse > 180 Tage werden abgelehnt |
 | **API-Keys** | `secureStorage.ts` | `tauri-plugin-store`, nie localStorage |

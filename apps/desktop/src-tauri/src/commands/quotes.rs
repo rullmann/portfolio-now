@@ -145,6 +145,7 @@ pub async fn sync_security_prices(
 /// @param api_keys - optionale API Keys für verschiedene Provider
 #[command]
 pub async fn sync_all_prices(
+    app: AppHandle,
     only_held: Option<bool>,
     api_keys: Option<ApiKeys>,
 ) -> Result<SyncResult, String> {
@@ -166,7 +167,7 @@ pub async fn sync_all_prices(
     }
 
     let mut skipped = 0;
-    let requests: Vec<quotes::SecurityQuoteRequest> = securities
+    let requests: Vec<(quotes::SecurityQuoteRequest, String, String, String)> = securities
         .into_iter()
         .filter_map(|s| {
             // For current quotes: use latest_feed if set, otherwise fall back to feed
@@ -209,7 +210,7 @@ pub async fn sync_all_prices(
                 skipped += 1;
                 return None;
             }
-            let symbol = s.ticker.or(s.isin).or(Some(s.name.clone()));
+            let symbol = s.ticker.clone().or(s.isin.clone()).or(Some(s.name.clone()));
             if symbol.is_none() {
                 log::warn!("No symbol for security {}", s.name);
                 skipped += 1;
@@ -223,38 +224,101 @@ pub async fn sync_all_prices(
                 ProviderType::TwelveData => keys.twelve_data.clone(),
                 _ => None,
             };
+            let sec_name = s.name.clone();
+            let sec_ticker = s.ticker.clone().unwrap_or_default();
+            let sec_currency = s.currency.clone().unwrap_or_else(|| "EUR".to_string());
             log::info!("Will fetch {} with provider {:?}", symbol.as_ref().unwrap(), provider);
-            Some(quotes::SecurityQuoteRequest {
+            Some((quotes::SecurityQuoteRequest {
                 id: s.id,
                 symbol: symbol?,
                 provider,
                 feed_url: feed_url_to_use,
                 api_key,
                 currency: s.currency,
-            })
+            }, sec_name, sec_ticker, sec_currency))
         })
         .collect();
 
-    log::info!("Fetching quotes for {} securities (skipped {})", requests.len(), skipped);
+    let request_count = requests.len();
+    log::info!("Fetching quotes for {} securities (skipped {})", request_count, skipped);
 
-    let results = quotes::fetch_all_quotes(requests).await;
+    // Emit "started" event
+    let _ = app.emit("quote_sync_progress", QuoteSyncProgress {
+        security_id: 0,
+        security_name: String::new(),
+        ticker: String::new(),
+        provider: String::new(),
+        status: "started".to_string(),
+        price: None,
+        currency: None,
+        error: None,
+        current_index: 0,
+        total_count: request_count,
+    });
 
     let mut success_count = 0;
     let mut error_count = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for result in &results {
+    for (index, (request, sec_name, sec_ticker, sec_currency)) in requests.into_iter().enumerate() {
+        let idx = index + 1;
+        let provider_str = request.provider.as_str().to_string();
+
+        // Emit "loading" event
+        let _ = app.emit("quote_sync_progress", QuoteSyncProgress {
+            security_id: request.id,
+            security_name: sec_name.clone(),
+            ticker: sec_ticker.clone(),
+            provider: provider_str.clone(),
+            status: "loading".to_string(),
+            price: None,
+            currency: Some(sec_currency.clone()),
+            error: None,
+            current_index: idx,
+            total_count: request_count,
+        });
+
+        // Fetch quote for this security
+        let result = quotes::fetch_quote_for_security(&request).await;
+
         if result.success {
             if let Some(ref latest) = result.latest {
                 match save_quote_to_db(result.security_id, latest) {
                     Ok(_) => {
                         log::info!("Saved quote for {}: {}", result.symbol, latest.quote.close);
                         success_count += 1;
+                        // Emit "success" event
+                        let _ = app.emit("quote_sync_progress", QuoteSyncProgress {
+                            security_id: request.id,
+                            security_name: sec_name,
+                            ticker: sec_ticker,
+                            provider: provider_str,
+                            status: "success".to_string(),
+                            price: Some(latest.quote.close),
+                            currency: Some(sec_currency.clone()),
+                            error: None,
+                            current_index: idx,
+                            total_count: request_count,
+                        });
                     }
                     Err(e) => {
                         log::error!("Failed to save quote for {}: {}", result.symbol, e);
                         error_count += 1;
-                        errors.push(format!("{}: {}", result.symbol, e));
+                        let err_msg = format!("{}: {}", result.symbol, e);
+                        errors.push(err_msg.clone());
+                        // Emit "error" event (DB save failed)
+                        let _ = app.emit("quote_sync_progress", QuoteSyncProgress {
+                            security_id: request.id,
+                            security_name: sec_name,
+                            ticker: sec_ticker,
+                            provider: provider_str,
+                            status: "error".to_string(),
+                            price: None,
+                            currency: Some(sec_currency.clone()),
+                            error: Some(e.to_string()),
+                            current_index: idx,
+                            total_count: request_count,
+                        });
                     }
                 }
             }
@@ -272,6 +336,19 @@ pub async fn sync_all_prices(
                     );
                 }
             }
+            // Emit "error" event
+            let _ = app.emit("quote_sync_progress", QuoteSyncProgress {
+                security_id: request.id,
+                security_name: sec_name,
+                ticker: sec_ticker,
+                provider: provider_str,
+                status: "error".to_string(),
+                price: None,
+                currency: Some(sec_currency),
+                error: result.error.clone(),
+                current_index: idx,
+                total_count: request_count,
+            });
         }
     }
 
@@ -1190,6 +1267,21 @@ pub struct SyncResult {
     pub success: usize,
     pub errors: usize,
     pub error_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSyncProgress {
+    pub security_id: i64,
+    pub security_name: String,
+    pub ticker: String,
+    pub provider: String,
+    pub status: String,
+    pub price: Option<f64>,
+    pub currency: Option<String>,
+    pub error: Option<String>,
+    pub current_index: usize,
+    pub total_count: usize,
 }
 
 #[derive(Debug)]

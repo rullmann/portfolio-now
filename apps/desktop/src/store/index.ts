@@ -198,7 +198,7 @@ export type OpenAIModel = 'gpt-5-mini' | 'gpt-4.1' | 'gpt-4o' | 'gpt-4o-mini';
 export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-3-flash-preview' | 'gemini-3-pro-preview';
 
 // AI Feature Types for individual configuration
-export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport' | 'quoteAssistant';
+export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport' | 'quoteAssistant' | 'newsResearch';
 export type AiProvider = 'claude' | 'openai' | 'gemini' | 'perplexity';
 
 export interface AiFeatureConfig {
@@ -221,6 +221,7 @@ export interface AiFeatureDefinition {
   description: string;
   icon: string;
   requiresVision: boolean;
+  requiresWebSearch?: boolean;
 }
 
 export const AI_FEATURES: AiFeatureDefinition[] = [
@@ -230,6 +231,7 @@ export const AI_FEATURES: AiFeatureDefinition[] = [
   { id: 'pdfOcr', name: 'PDF OCR', description: 'Text aus gescannten Bank-PDFs extrahieren', icon: 'FileText', requiresVision: true },
   { id: 'csvImport', name: 'CSV-Import', description: 'Unbekannte Broker-Formate analysieren', icon: 'FileSpreadsheet', requiresVision: false },
   { id: 'quoteAssistant', name: 'Kursquellen-Assistent', description: 'Optimale Kursquellen mit Web-Suche finden', icon: 'Bot', requiresVision: false },
+  { id: 'newsResearch', name: 'Nachrichten-Recherche', description: 'Aktuelle Nachrichten und Analysten-Ratings per Web-Suche', icon: 'Newspaper', requiresVision: false, requiresWebSearch: true },
 ];
 
 // AI Models - Updated January 2026 (Vision-only)
@@ -261,6 +263,19 @@ export const AI_MODELS = {
     { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
   ],
 } as const;
+
+// Web-Search-capable AI Models (for features requiring web search like News Research)
+export const WEB_SEARCH_AI_MODELS: Partial<Record<AiProvider, Array<{ id: string; name: string; description: string }>>> = {
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', description: 'Multimodal + Web-Suche' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell + Web-Suche' },
+    { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Neuestes GPT-5 + Web-Suche' },
+  ],
+  perplexity: [
+    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Beste Qualität + Web-Suche' },
+    { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
+  ],
+};
 
 // Vision model type from backend
 export interface VisionModel {
@@ -544,6 +559,7 @@ export const useSettingsStore = create<SettingsState>()(
         pdfOcr: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
         csvImport: { provider: 'claude', model: 'claude-sonnet-4-5-20250514' },
         quoteAssistant: { provider: 'perplexity', model: 'sonar-pro' }, // Web-Suche für aktuelle Ticker
+        newsResearch: { provider: 'perplexity', model: 'sonar-pro' }, // Web-Suche für Nachrichten
       },
       setAiFeatureSetting: (featureId, config) => set((state) => ({
         aiFeatureSettings: {
@@ -588,7 +604,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'portfolio-settings',
-      version: 10, // v10: Added Twitter/X sharing settings
+      version: 11, // v11: Added newsResearch to aiFeatureSettings
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -622,6 +638,7 @@ export const useSettingsStore = create<SettingsState>()(
             pdfOcr: { provider: globalProvider, model: globalModel },
             csvImport: { provider: globalProvider, model: globalModel },
             quoteAssistant: { provider: 'perplexity' as AiProvider, model: 'sonar-pro' },
+            newsResearch: { provider: 'perplexity' as AiProvider, model: 'sonar-pro' },
           };
         }
 
@@ -661,6 +678,16 @@ export const useSettingsStore = create<SettingsState>()(
           state.twitterDefaultHashtags = '#PortfolioNow #Trading';
           state.twitterIncludeThread = true;
           state.twitterIncludeWatermark = true;
+        }
+
+        // Migration v11: Add newsResearch to aiFeatureSettings
+        if (version < 11) {
+          if (state.aiFeatureSettings && !state.aiFeatureSettings.newsResearch) {
+            state.aiFeatureSettings.newsResearch = {
+              provider: 'perplexity' as AiProvider,
+              model: 'sonar-pro',
+            };
+          }
         }
 
         return state as SettingsState;
