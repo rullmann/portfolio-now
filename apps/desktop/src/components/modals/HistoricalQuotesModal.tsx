@@ -22,6 +22,7 @@ interface HistoricalQuotesModalProps {
   isOpen: boolean;
   onClose: () => void;
   onComplete?: () => void;
+  securityIds?: number[];
 }
 
 const STATUS_ICONS = {
@@ -38,7 +39,7 @@ const STATUS_COLORS = {
   error: 'text-red-600',
 };
 
-export function HistoricalQuotesModal({ isOpen, onClose, onComplete }: HistoricalQuotesModalProps) {
+export function HistoricalQuotesModal({ isOpen, onClose, onComplete, securityIds }: HistoricalQuotesModalProps) {
   const currentYear = new Date().getFullYear();
   const [fromYear, setFromYear] = useState(currentYear - 3);
   const [onlyHeld, setOnlyHeld] = useState(true);
@@ -120,7 +121,7 @@ export function HistoricalQuotesModal({ isOpen, onClose, onComplete }: Historica
     try {
       const batchResult = await fetchHistoricalPricesBatch(
         {
-          securityIds: [], // Empty = all securities with quote source
+          securityIds: securityIds ?? [], // Empty = all securities with quote source
           fromYear,
           onlyHeld,
           force: forceReload,
@@ -138,7 +139,7 @@ export function HistoricalQuotesModal({ isOpen, onClose, onComplete }: Historica
         unlistenRef.current = null;
       }
     }
-  }, [fromYear, onlyHeld, forceReload, finnhubApiKey, coingeckoApiKey, alphaVantageApiKey, twelveDataApiKey]);
+  }, [fromYear, onlyHeld, forceReload, securityIds, finnhubApiKey, coingeckoApiKey, alphaVantageApiKey, twelveDataApiKey]);
 
   const handleClose = () => {
     if (isLoading) {
@@ -219,16 +220,18 @@ export function HistoricalQuotesModal({ isOpen, onClose, onComplete }: Historica
                 <span className="text-sm text-muted-foreground">bis: Heute</span>
               </div>
 
-              {/* Only held checkbox */}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={onlyHeld}
-                  onChange={(e) => setOnlyHeld(e.target.checked)}
-                  className="rounded border-border"
-                />
-                <span className="text-sm">Nur Wertpapiere im Bestand</span>
-              </label>
+              {/* Only held checkbox - hidden when specific securityIds are provided */}
+              {!securityIds && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyHeld}
+                    onChange={(e) => setOnlyHeld(e.target.checked)}
+                    className="rounded border-border"
+                  />
+                  <span className="text-sm">Nur Bestand &amp; Watchlist</span>
+                </label>
+              )}
 
               {/* Force reload checkbox */}
               <label className="flex items-center gap-2 cursor-pointer">

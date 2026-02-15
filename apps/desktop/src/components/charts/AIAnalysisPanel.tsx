@@ -994,7 +994,7 @@ export function AIAnalysisPanel({
                 )}
 
                 {/* Analysis text */}
-                <div className="prose prose-xs dark:prose-invert max-w-none text-[13px] leading-relaxed prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2.5 prose-headings:mb-0.5 prose-p:my-0.5 prose-ul:my-0.5 prose-li:my-0 prose-strong:font-semibold">
+                <div className="prose-ai">
                   <SafeMarkdown>{analysis}</SafeMarkdown>
                 </div>
 

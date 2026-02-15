@@ -62,7 +62,7 @@ function PortfolioInsightsCard({ onOpenInsights }: PortfolioInsightsCardProps) {
     return (
       <button
         onClick={() => setCurrentView('settings')}
-        className="glass-card p-3 min-w-[140px] flex flex-col items-center justify-center gap-2 hover:bg-muted/50 transition-colors cursor-pointer"
+        className="card-interactive p-3 min-w-[140px] flex flex-col items-center justify-center gap-2"
         title="KI-Funktionen konfigurieren"
       >
         <div className="p-2 rounded-full bg-muted">
@@ -81,7 +81,7 @@ function PortfolioInsightsCard({ onOpenInsights }: PortfolioInsightsCardProps) {
   return (
     <button
       onClick={onOpenInsights}
-      className="glass-card p-3 min-w-[140px] flex flex-col items-center justify-center gap-2 hover:bg-muted/50 transition-colors cursor-pointer group"
+      className="card-interactive p-3 min-w-[140px] flex flex-col items-center justify-center gap-2 group"
       title="Portfolio Insights anzeigen"
     >
       <div className="p-2 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors">
@@ -187,22 +187,23 @@ function PortfolioChart({
       layout: {
         background: { color: 'transparent' },
         textColor: '#888',
+        fontFamily: 'Geist Mono, ui-monospace, monospace',
       },
       grid: {
-        vertLines: { color: 'rgba(128, 128, 128, 0.1)' },
-        horzLines: { color: 'rgba(128, 128, 128, 0.1)' },
+        vertLines: { color: 'rgba(128, 128, 128, 0.08)' },
+        horzLines: { color: 'rgba(128, 128, 128, 0.08)' },
       },
       width: container.clientWidth,
       height: container.clientHeight,
       rightPriceScale: {
-        borderColor: 'rgba(128, 128, 128, 0.2)',
+        borderColor: 'rgba(128, 128, 128, 0.15)',
         scaleMargins: {
           top: 0.1,
           bottom: 0,
         },
       },
       timeScale: {
-        borderColor: 'rgba(128, 128, 128, 0.2)',
+        borderColor: 'rgba(128, 128, 128, 0.15)',
         timeVisible: true,
         rightOffset: 12,
       },
@@ -312,7 +313,7 @@ function PortfolioChart({
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-[3px] rounded-full bg-green-500" />
+            <span className="w-3 h-[3px] rounded-full bg-positive" />
             Marktwert
           </span>
           {chartMode === 'current' ? (
@@ -340,7 +341,7 @@ function PortfolioChart({
             <button
               key={range}
               onClick={() => onTimeRangeChange(range)}
-              className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all ${
+              className={`px-2 py-1 text-[10px] font-medium rounded-md transition-all font-mono ${
                 timeRange === range
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -605,11 +606,12 @@ export function DashboardView({
 
     return (
       <div className="h-full flex flex-col p-3 gap-2 overflow-hidden">
-        {/* Top Row - Metrics */}
+        {/* Top Row - Hero + Metrics */}
         <div className="flex gap-2 flex-shrink-0">
-          {/* Portfolio Value - Hero */}
+          {/* Portfolio Value - Hero Card */}
           <div
-            className="glass-card p-4 flex-1 min-w-[280px] cursor-help"
+            className="card-elevated p-5 flex-[2] min-w-[280px] cursor-help animate-fade-up"
+            style={{ background: 'var(--gradient-subtle)' }}
             title="Gesamtwert deines Portfolios
 
 Der aktuelle Marktwert aller deiner Wertpapiere basierend auf den letzten verfügbaren Kursen.
@@ -621,7 +623,7 @@ Berechnung:
 Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+              <span className="text-label text-muted-foreground">
                 Portfolio
               </span>
               <div className="flex items-center gap-2">
@@ -635,7 +637,7 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
                     size={12}
                     className={isSyncing ? 'animate-spin text-primary' : ''}
                   />
-                  <span className="text-[10px] font-medium">
+                  <span className="text-[10px] font-medium font-mono tabular-nums">
                     {isSyncing ? 'Sync...' : lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('de-DE', {
                       hour: '2-digit',
                       minute: '2-digit',
@@ -644,14 +646,14 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
                 </button>
               </div>
             </div>
-            <div className="text-3xl font-light tracking-tight">
+            <div className="text-display font-mono tabular-nums">
               {formatNumber(totalValue)}
-              <span className="text-base text-muted-foreground ml-1">{baseCurrency}</span>
+              <span className="text-base text-muted-foreground ml-1 font-sans">{baseCurrency}</span>
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span
-                className={`inline-flex items-center gap-0.5 text-sm font-medium ${
-                  totalGainLoss >= 0 ? 'text-emerald-500' : 'text-red-500'
+                className={`inline-flex items-center gap-0.5 text-sm font-medium font-mono tabular-nums ${
+                  totalGainLoss >= 0 ? 'text-positive' : 'text-negative'
                 }`}
               >
                 {totalGainLoss >= 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
@@ -659,10 +661,10 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
                 {formatNumber(totalGainLoss)}
               </span>
               <span
-                className={`text-xs px-1.5 py-0.5 rounded ${
+                className={`text-xs px-1.5 py-0.5 rounded font-mono tabular-nums ${
                   totalGainLossPercent >= 0
-                    ? 'bg-emerald-500/10 text-emerald-500'
-                    : 'bg-red-500/10 text-red-500'
+                    ? 'bg-positive-muted text-positive'
+                    : 'bg-negative-muted text-negative'
                 }`}
               >
                 {totalGainLossPercent >= 0 ? '+' : ''}
@@ -671,9 +673,9 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
             </div>
           </div>
 
-          {/* Metric Cards */}
+          {/* Metric Cards — staggered entrance */}
           <div
-            className="glass-card p-3 min-w-[100px] cursor-help"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-1"
             title="Tagesperformance
 
 Zeigt die Wertänderung deines Portfolios seit dem letzten Handelstag.
@@ -684,19 +686,19 @@ Berechnung:
 
 Hinweis: Berücksichtigt nur Kursänderungen, keine Ein-/Auszahlungen am selben Tag."
           >
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <span className="text-label text-muted-foreground block mb-1">
               Heute
             </span>
             <div
-              className={`text-xl font-medium ${
-                dailyChange >= 0 ? 'text-emerald-500' : 'text-red-500'
+              className={`text-headline font-mono tabular-nums ${
+                dailyChange >= 0 ? 'text-positive' : 'text-negative'
               }`}
             >
               {dailyChangePercent >= 0 ? '+' : ''}
               {dailyChangePercent.toFixed(2)}%
             </div>
             <div
-              className={`text-[10px] ${dailyChange >= 0 ? 'text-emerald-500/70' : 'text-red-500/70'}`}
+              className={`text-[10px] font-mono tabular-nums ${dailyChange >= 0 ? 'text-positive/70' : 'text-negative/70'}`}
             >
               {dailyChange >= 0 ? '+' : ''}
               {formatNumber(dailyChange)}
@@ -704,7 +706,7 @@ Hinweis: Berücksichtigt nur Kursänderungen, keine Ein-/Auszahlungen am selben 
           </div>
 
           <div
-            className="glass-card p-3 min-w-[100px] cursor-help"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-2"
             title="TTWROR (True Time-Weighted Rate of Return)
 
 Misst die reine Anlageperformance unabhängig von Ein- und Auszahlungen.
@@ -716,12 +718,12 @@ Gut geeignet um:
 
 Beispiel: Wenn du 1.000€ investierst und der Markt um 10% steigt, ist der TTWROR +10% - egal wann du das Geld eingezahlt hast."
           >
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <span className="text-label text-muted-foreground block mb-1">
               TTWROR
             </span>
             <div
-              className={`text-xl font-medium ${
-                (performance?.ttwror ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'
+              className={`text-headline font-mono tabular-nums ${
+                (performance?.ttwror ?? 0) >= 0 ? 'text-positive' : 'text-negative'
               }`}
             >
               {performance?.ttwror != null
@@ -732,7 +734,7 @@ Beispiel: Wenn du 1.000€ investierst und der Markt um 10% steigt, ist der TTWR
           </div>
 
           <div
-            className="glass-card p-3 min-w-[100px] cursor-help"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-3"
             title="IRR (Internal Rate of Return / Interner Zinsfuß)
 
 Misst deine persönliche Rendite unter Berücksichtigung WANN du Geld ein- oder ausgezahlt hast.
@@ -744,12 +746,12 @@ Gut geeignet um:
 
 Beispiel: Wenn du vor einem Crash mehr investiert hast, ist dein IRR niedriger als der TTWROR - und umgekehrt bei gutem Timing."
           >
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <span className="text-label text-muted-foreground block mb-1">
               IRR
             </span>
             <div
-              className={`text-xl font-medium ${
-                (performance?.irr ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'
+              className={`text-headline font-mono tabular-nums ${
+                (performance?.irr ?? 0) >= 0 ? 'text-positive' : 'text-negative'
               }`}
             >
               {performance?.irr != null
@@ -760,7 +762,7 @@ Beispiel: Wenn du vor einem Crash mehr investiert hast, ist dein IRR niedriger a
           </div>
 
           <div
-            className="glass-card p-3 min-w-[100px] cursor-help"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-4"
             title="Einstand (Cost Basis)
 
 Deine gesamten Anschaffungskosten nach der FIFO-Methode (First In, First Out).
@@ -774,16 +776,16 @@ Verwendung:
 • Gewinn/Verlust = Depotwert − Einstand
 • Basis für steuerliche Berechnung bei Verkauf"
           >
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <span className="text-label text-muted-foreground block mb-1">
               Einstand
             </span>
-            <div className="text-xl font-medium">{formatNumber(totalCostBasis)}</div>
+            <div className="text-headline font-mono tabular-nums">{formatNumber(totalCostBasis)}</div>
             <div className="text-[10px] text-muted-foreground">{baseCurrency}</div>
           </div>
 
           {/* Top 3 Performer */}
           <div
-            className="glass-card p-3 min-w-[180px] cursor-help"
+            className="card-surface p-3 px-4 min-w-[180px] cursor-help animate-fade-up-delay-4"
             title="Top 3 Performer
 
 Die drei Positionen mit der besten prozentualen Performance (unrealisierter Gewinn/Verlust).
@@ -792,7 +794,7 @@ Berechnung:
 • (Aktueller Wert − Einstand) / Einstand × 100%
 • Basierend auf FIFO-Einstandskursen"
           >
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
+            <span className="text-label text-muted-foreground block mb-2">
               Top Performer
             </span>
             <div className="space-y-1.5">
@@ -806,7 +808,7 @@ Berechnung:
                   const gainPercent = holding.gainLossPercent || 0;
                   return (
                     <div key={holding.securityIds[0]} className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted-foreground w-3">{index + 1}.</span>
+                      <span className="text-[10px] text-muted-foreground w-3 font-mono">{index + 1}.</span>
                       <div className="w-5 h-5 rounded bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
                         {logoUrl ? (
                           <img src={logoUrl} alt="" className="w-full h-full object-contain" />
@@ -817,7 +819,7 @@ Berechnung:
                       <span className="text-[11px] font-medium truncate flex-1 max-w-[80px]">
                         {holding.name}
                       </span>
-                      <span className={`text-[11px] font-semibold ${gainPercent >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                      <span className={`text-[11px] font-semibold font-mono tabular-nums ${gainPercent >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {gainPercent >= 0 ? '+' : ''}{gainPercent.toFixed(1)}%
                       </span>
                     </div>
@@ -833,7 +835,7 @@ Berechnung:
 
           {/* Auto-Update */}
           <div
-            className="glass-card p-3 flex flex-col justify-between min-w-[110px] cursor-help"
+            className="card-surface p-3 px-4 flex flex-col justify-between min-w-[110px] cursor-help animate-fade-up-delay-4"
             title="Automatische Kursaktualisierung
 
 Lädt aktuelle Kurse für deine Wertpapiere automatisch im gewählten Intervall.
@@ -870,7 +872,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                 Synchronisiere...
               </div>
             ) : nextSyncSeconds !== null && nextSyncSeconds > 0 ? (
-              <div className="text-[10px] text-muted-foreground tabular-nums">
+              <div className="text-[10px] text-muted-foreground font-mono tabular-nums">
                 Nächste: {Math.floor(nextSyncSeconds / 60)}:{(nextSyncSeconds % 60).toString().padStart(2, '0')}
               </div>
             ) : null}
@@ -884,7 +886,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
               ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
               : syncStatus.includes('Lade')
               ? 'bg-primary/10 text-primary border border-primary/20'
-              : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+              : 'bg-positive-muted text-positive border border-positive/20'
           }`}>
             {syncStatus.includes('Lade') && (
               <Loader2 size={12} className="animate-spin" />
@@ -896,7 +898,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
         {/* Main Content - Chart + Holdings */}
         <div className="flex-1 flex gap-2 min-h-0 overflow-hidden">
           {/* Chart */}
-          <div className="flex-1 glass-card p-4 min-w-0">
+          <div className="flex-1 card-elevated p-5 min-w-0">
             <PortfolioChart
               portfolioData={filteredChartData}
               investedCapitalData={filteredInvestedData}
@@ -908,10 +910,10 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
           </div>
 
           {/* Holdings Sidebar */}
-          <div className="w-[340px] glass-card p-3 flex flex-col flex-shrink-0">
+          <div className="w-[360px] card-surface p-4 flex flex-col flex-shrink-0">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                <span className="text-label text-muted-foreground">
                   Positionen
                 </span>
                 {/* AI Analysis Button */}
@@ -952,14 +954,14 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
               <div className="flex items-center gap-2">
                 {/* Batch progress indicator */}
                 {isBatchAnalyzing && (
-                  <span className="text-[9px] text-primary tabular-nums">
+                  <span className="text-[9px] text-primary font-mono tabular-nums">
                     {batchProgress.current}/{batchProgress.total}
                   </span>
                 )}
-                <span className="text-[10px] text-muted-foreground">{dbHoldings.length} Titel</span>
+                <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{dbHoldings.length} Titel</span>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto -mx-3 px-3 space-y-0.5">
+            <div className="flex-1 overflow-y-auto -mx-4 px-4 space-y-0.5">
               {holdingsByValue.map((holding) => {
                 const cachedLogo = cachedLogos.get(holding.securityIds[0]);
                 const logoUrl = holding.customLogo || cachedLogo?.url;
@@ -974,7 +976,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                 return (
                   <div
                     key={holding.securityIds[0]}
-                    className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-muted/30 transition-colors cursor-pointer group"
+                    className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-muted/30 transition-all duration-150 cursor-pointer group"
                   >
                     <div className="w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
                       {logoUrl ? (
@@ -987,16 +989,16 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                       <div className="text-xs font-medium truncate group-hover:text-primary transition-colors">
                         {holding.name}
                       </div>
-                      <div className="text-[10px] text-muted-foreground">{percent.toFixed(1)}%</div>
+                      <div className="text-[10px] text-muted-foreground font-mono tabular-nums">{percent.toFixed(1)}%</div>
                     </div>
                     {/* AI Trend Indicator */}
                     <TrendIndicator status={analysis?.trend} summary={analysis?.summary} />
                     <div className="text-right min-w-[65px]">
-                      <div className="text-xs font-medium">
+                      <div className="text-xs font-medium font-mono tabular-nums">
                         {formatNumber(holding.currentValue || 0)}
                       </div>
                       <div
-                        className={`text-[10px] ${isPositive ? 'text-emerald-500' : 'text-red-500'}`}
+                        className={`text-[10px] font-mono tabular-nums ${isPositive ? 'text-positive' : 'text-negative'}`}
                       >
                         {isPositive ? '+' : ''}
                         {gainPercent.toFixed(1)}%
@@ -1021,17 +1023,17 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
   // Welcome screen (no holdings yet)
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="text-center max-w-sm">
+      <div className="text-center max-w-sm animate-fade-up">
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center mx-auto mb-6 backdrop-blur-sm border border-primary/10">
           <TrendingUp className="w-8 h-8 text-primary" />
         </div>
-        <h2 className="text-xl font-light mb-2">Portfolio Now</h2>
+        <h2 className="text-xl font-light mb-2 tracking-tight">Portfolio Now</h2>
         <p className="text-sm text-muted-foreground mb-8">
           Importiere deine Portfolio Performance Datei, um zu starten
         </p>
         <button
           onClick={onImportPP}
-          className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors mx-auto"
+          className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors mx-auto dark:glow-primary"
         >
           <Database size={16} />
           PP-Datei importieren

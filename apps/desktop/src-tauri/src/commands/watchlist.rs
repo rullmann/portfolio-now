@@ -6,7 +6,7 @@
 use crate::db;
 use crate::pp::common::prices;
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, AppHandle, Emitter};
 
 // ============================================================================
 // Types
@@ -303,7 +303,7 @@ fn get_52w_range(conn: &rusqlite::Connection, security_id: i64) -> (Option<f64>,
 
 /// Add a security to a watchlist
 #[command]
-pub fn add_to_watchlist(watchlist_id: i64, security_id: i64) -> Result<(), String> {
+pub fn add_to_watchlist(app: AppHandle, watchlist_id: i64, security_id: i64) -> Result<(), String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
@@ -314,6 +314,8 @@ pub fn add_to_watchlist(watchlist_id: i64, security_id: i64) -> Result<(), Strin
         rusqlite::params![watchlist_id, security_id],
     )
     .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("watchlist-security-added", security_id);
 
     Ok(())
 }
@@ -337,14 +339,14 @@ pub fn remove_from_watchlist(watchlist_id: i64, security_id: i64) -> Result<(), 
 
 /// Add multiple securities to a watchlist
 #[command]
-pub fn add_securities_to_watchlist(watchlist_id: i64, security_ids: Vec<i64>) -> Result<i32, String> {
+pub fn add_securities_to_watchlist(app: AppHandle, watchlist_id: i64, security_ids: Vec<i64>) -> Result<i32, String> {
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
     let mut added = 0;
-    for security_id in security_ids {
+    for security_id in &security_ids {
         let result = conn.execute(
             "INSERT OR IGNORE INTO pp_watchlist_security (watchlist_id, security_id) VALUES (?, ?)",
             rusqlite::params![watchlist_id, security_id],
@@ -352,6 +354,10 @@ pub fn add_securities_to_watchlist(watchlist_id: i64, security_ids: Vec<i64>) ->
         if result.is_ok() {
             added += 1;
         }
+    }
+
+    for security_id in &security_ids {
+        let _ = app.emit("watchlist-security-added", security_id);
     }
 
     Ok(added)

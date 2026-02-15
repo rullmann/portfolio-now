@@ -264,7 +264,7 @@ export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: N
 
           {/* Result */}
           {result && !isLoading && (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
+            <div className="prose-ai">
               <SafeMarkdown>{result.analysis}</SafeMarkdown>
             </div>
           )}

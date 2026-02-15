@@ -119,7 +119,7 @@ export function QuoteChat({
                         : 'bg-muted'
                     }`}
                   >
-                    <div className="prose prose-sm dark:prose-invert max-w-none">
+                    <div className="prose-ai">
                       <SafeMarkdown>{msg.content}</SafeMarkdown>
                     </div>
                   </div>

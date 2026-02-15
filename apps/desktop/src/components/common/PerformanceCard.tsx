@@ -43,7 +43,7 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
 
   if (isLoading && !performance) {
     return (
-      <div className={`bg-card rounded-lg border border-border p-6 ${className}`}>
+      <div className={`card-elevated p-6 ${className}`}>
         <div className="flex items-center gap-2 text-muted-foreground">
           <RefreshCw size={16} className="animate-spin" />
           Lade Performance...
@@ -54,7 +54,7 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
 
   if (error) {
     return (
-      <div className={`bg-card rounded-lg border border-border p-6 ${className}`}>
+      <div className={`card-elevated p-6 ${className}`}>
         <div className="flex items-center gap-2 text-destructive">
           <AlertCircle size={16} />
           {error}
@@ -65,7 +65,7 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
 
   if (!performance) {
     return (
-      <div className={`bg-card rounded-lg border border-border p-6 ${className}`}>
+      <div className={`card-elevated p-6 ${className}`}>
         <p className="text-muted-foreground">Keine Performance-Daten verfügbar.</p>
       </div>
     );
@@ -75,9 +75,9 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
   const irrIsPositive = performance.irr >= 0;
 
   return (
-    <div className={`bg-card rounded-lg border border-border p-6 ${className}`}>
+    <div className={`card-elevated p-6 ${className}`}>
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Performance</h3>
+        <h3 className="text-title">Performance</h3>
         <button
           onClick={loadPerformance}
           disabled={isLoading}
@@ -95,15 +95,15 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
           <p className="text-sm text-muted-foreground">TTWROR</p>
           <div className="flex items-center gap-2">
             {isPositive ? (
-              <TrendingUp size={20} className="text-green-600" />
+              <TrendingUp size={20} className="text-positive" />
             ) : (
-              <TrendingDown size={20} className="text-red-600" />
+              <TrendingDown size={20} className="text-negative" />
             )}
-            <span className={`text-2xl font-bold tabular-nums ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+            <span className={`text-2xl font-bold font-mono tabular-nums ${isPositive ? 'text-positive' : 'text-negative'}`}>
               {performance.ttwror >= 0 ? '+' : ''}{formatNumber(performance.ttwror, 2)}%
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground font-mono tabular-nums">
             {formatNumber(performance.ttwrorAnnualized, 2)}% p.a.
           </p>
         </div>
@@ -117,8 +117,8 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
             )}
           </p>
           <div className="flex items-center gap-2">
-            <Percent size={20} className={irrIsPositive ? 'text-green-600' : 'text-red-600'} />
-            <span className={`text-2xl font-bold tabular-nums ${irrIsPositive ? 'text-green-600' : 'text-red-600'}`}>
+            <Percent size={20} className={irrIsPositive ? 'text-positive' : 'text-negative'} />
+            <span className={`text-2xl font-bold font-mono tabular-nums ${irrIsPositive ? 'text-positive' : 'text-negative'}`}>
               {performance.irr >= 0 ? '+' : ''}{formatNumber(performance.irr, 2)}%
             </span>
           </div>
@@ -128,10 +128,10 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
         {/* Current Value */}
         <div className="space-y-1">
           <p className="text-sm text-muted-foreground">Depotwert</p>
-          <p className="text-2xl font-bold tabular-nums">
+          <p className="text-2xl font-bold font-mono tabular-nums">
             {formatCurrency(performance.currentValue, baseCurrency)}
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground font-mono tabular-nums">
             Investiert: {formatCurrency(performance.totalInvested, baseCurrency)}
           </p>
         </div>
@@ -139,7 +139,7 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
         {/* Absolute Gain */}
         <div className="space-y-1">
           <p className="text-sm text-muted-foreground">Gewinn/Verlust</p>
-          <p className={`text-2xl font-bold tabular-nums ${performance.absoluteGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+          <p className={`text-2xl font-bold font-mono tabular-nums ${performance.absoluteGain >= 0 ? 'text-positive' : 'text-negative'}`}>
             {performance.absoluteGain >= 0 ? '+' : ''}{formatCurrency(performance.absoluteGain, baseCurrency)}
           </p>
           <p className="text-xs text-muted-foreground flex items-center gap-1">

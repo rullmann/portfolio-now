@@ -27,6 +27,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { useSettingsStore, useUIStore, toast, type ChartTimeRange } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots, validateAllSecurities, getValidationStatus, getUserProfilePicture, setUserProfilePicture } from '../../lib/api';
@@ -278,6 +279,8 @@ export function SettingsView() {
 
     try {
       const count = await clearLogoCache();
+      // Notify all useCachedLogos hooks to re-fetch from CDN
+      await emit('logo-cache-cleared');
       if (count > 0) {
         setCacheResult(`${count} alte Cache-Dateien gelöscht`);
       } else {

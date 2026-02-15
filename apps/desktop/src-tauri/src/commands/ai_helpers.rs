@@ -34,6 +34,7 @@ pub struct AiWatchlistResult {
     pub watchlist_name: String,
     pub security_name: Option<String>,
     pub security_ticker: Option<String>,
+    pub security_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +217,7 @@ pub async fn ai_add_to_watchlist(
         watchlist_name: watchlist_name.to_string(),
         security_name: Some(security_name),
         security_ticker,
+        security_id: Some(security_id),
     })
 }
 
@@ -291,6 +293,7 @@ pub fn ai_remove_from_watchlist(
         watchlist_name: watchlist_name.to_string(),
         security_name: Some(security_name),
         security_ticker,
+        security_id: None,
     })
 }
 

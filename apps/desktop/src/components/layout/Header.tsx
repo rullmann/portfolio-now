@@ -130,10 +130,10 @@ export function Header({
 
   return (
     <>
-      <header className="h-14 flex items-center justify-between px-6 border-b border-border bg-card">
+      <header className="relative z-20 h-14 flex items-center justify-between px-6 border-b border-border/50 bg-card/80 backdrop-blur-md shadow-elevation-1">
         {/* Left: View title + AI indicator */}
         <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold text-foreground">
+          <h1 className="text-base font-semibold tracking-tight text-foreground">
             {getViewLabel(currentView)}
           </h1>
 
@@ -160,7 +160,7 @@ export function Header({
                   />
 
                   {/* Menu */}
-                  <div className="absolute top-full left-0 mt-1 w-56 bg-popover border border-border rounded-lg shadow-lg z-50 py-1">
+                  <div className="absolute top-full left-0 mt-1 w-56 bg-popover border border-border rounded-lg shadow-elevation-3 z-50 py-1 animate-scale-in">
                     {/* Portfolio Insights */}
                     <button
                       onClick={() => {
@@ -257,7 +257,7 @@ export function Header({
                       </button>
 
                       {showNewsSubmenu && (
-                        <div className="absolute left-full top-0 ml-1 w-72 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+                        <div className="absolute left-full top-0 ml-1 w-72 bg-popover border border-border rounded-lg shadow-elevation-3 z-50 overflow-hidden animate-scale-in">
                           {/* Search field */}
                           <div className="p-2 border-b border-border">
                             <div className="flex items-center gap-2 px-2.5 py-2 bg-muted/50 border border-border rounded-md focus-within:border-primary/40 focus-within:bg-background transition-colors">
@@ -435,7 +435,7 @@ export function Header({
           <button
             onClick={() => setShowTransactionModal(true)}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:glow-primary"
             aria-label="Neue Buchung erstellen"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />

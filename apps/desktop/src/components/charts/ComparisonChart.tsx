@@ -86,9 +86,9 @@ export function ComparisonChart({
 
   // Theme colors
   const isDark = theme === 'dark';
-  const backgroundColor = isDark ? '#1e1e2e' : '#ffffff';
+  const backgroundColor = isDark ? '#0d1117' : '#ffffff';
   const textColor = isDark ? '#9ca3af' : '#374151';
-  const gridColor = isDark ? '#2d2d3d' : '#e5e7eb';
+  const gridColor = isDark ? '#1b2332' : '#e5e7eb';
 
   // Create chart
   useEffect(() => {

@@ -1350,14 +1350,16 @@ fn get_all_securities_for_sync(only_held: bool) -> anyhow::Result<Vec<SecurityIn
            AND (s.ticker IS NOT NULL AND s.ticker != ''
                 OR s.isin IS NOT NULL AND s.isin != '')
            AND (
-               SELECT COALESCE(SUM(CASE
+               (SELECT COALESCE(SUM(CASE
                    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
                    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
                    ELSE 0
                END), 0)
                FROM pp_txn t
                WHERE t.security_id = s.id AND t.owner_type = 'portfolio' AND t.shares IS NOT NULL
-           ) > 0"
+           ) > 0
+               OR EXISTS (SELECT 1 FROM pp_watchlist_security ws WHERE ws.security_id = s.id)
+           )"
     } else {
         "SELECT id, name,
                 COALESCE(NULLIF(feed, ''), 'YAHOO') as feed,

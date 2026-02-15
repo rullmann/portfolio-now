@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import * as api from './api';
 import type {
   ImportProgress,
@@ -351,6 +352,14 @@ export function useCachedLogos(
 
   useEffect(() => {
     loadLogos();
+  }, [loadLogos]);
+
+  // Re-fetch logos when cache is cleared
+  useEffect(() => {
+    const unlisten = listen('logo-cache-cleared', () => {
+      loadLogos();
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, [loadLogos]);
 
   return { logos, isLoading, refresh: loadLogos };

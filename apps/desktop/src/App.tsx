@@ -23,7 +23,7 @@ import { setGlobalErrorHandler } from './lib/errors';
 import { toast } from './store';
 
 // API
-import { validateAllSecurities } from './lib/api';
+import { validateAllSecurities, fetchHistoricalPricesBatch, getSecurity, fetchSecurityLogo, saveLogoToCache, isLogoCached } from './lib/api';
 
 // Store
 import {
@@ -458,6 +458,70 @@ function App() {
     };
   }, [loadDbData]);
 
+  // Auto-fetch historical prices and logo when a security is added to a watchlist
+  useEffect(() => {
+    if (apiKeysLoading) return;
+
+    const unlisten = listen<number>('watchlist-security-added', (event) => {
+      const securityId = event.payload;
+      console.log('Watchlist security added, fetching historical prices for security:', securityId);
+
+      const quoteApiKeys = {
+        finnhub: apiKeys.finnhubApiKey || undefined,
+        alphaVantage: apiKeys.alphaVantageApiKey || undefined,
+        coingecko: apiKeys.coingeckoApiKey || undefined,
+        twelveData: apiKeys.twelveDataApiKey || undefined,
+      };
+
+      // Fetch historical prices
+      fetchHistoricalPricesBatch(
+        { securityIds: [securityId], fromYear: 2010, onlyHeld: false, force: false },
+        quoteApiKeys
+      )
+        .then((result) => {
+          console.log('Historical prices fetched for watchlist security:', securityId, result);
+        })
+        .catch((err) => {
+          console.warn('Failed to fetch historical prices for watchlist security:', securityId, err);
+        });
+
+      // Pre-cache logo
+      const brandfetchKey = apiKeys.brandfetchApiKey;
+      if (brandfetchKey) {
+        getSecurity(securityId)
+          .then(async (sec) => {
+            const logoResult = await fetchSecurityLogo(brandfetchKey, securityId, sec.ticker, sec.name);
+            if (logoResult.domain && logoResult.logoUrl) {
+              const cached = await isLogoCached(logoResult.domain);
+              if (!cached) {
+                try {
+                  const response = await fetch(logoResult.logoUrl);
+                  if (response.ok) {
+                    const blob = await response.blob();
+                    const reader = new FileReader();
+                    reader.onload = async () => {
+                      await saveLogoToCache(logoResult.domain!, reader.result as string);
+                      console.log('Logo cached for watchlist security:', sec.name);
+                    };
+                    reader.readAsDataURL(blob);
+                  }
+                } catch {
+                  // Logo caching is best-effort
+                }
+              }
+            }
+          })
+          .catch((err) => {
+            console.warn('Failed to pre-cache logo for watchlist security:', securityId, err);
+          });
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [apiKeysLoading, apiKeys]);
+
   // Set up global error handler
   useEffect(() => {
     setGlobalErrorHandler((error) => {
@@ -625,7 +689,7 @@ function App() {
           <LoadingIndicator />
 
           {/* Content Area */}
-          <div className="flex-1 overflow-auto p-4">
+          <div key={currentView} className="flex-1 overflow-auto px-5 py-4 animate-fade-in">
             {renderView()}
           </div>
         </main>

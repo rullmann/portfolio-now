@@ -154,7 +154,7 @@ function InsightCard({ section }: { section: ParsedSection }) {
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-sm mb-2">{section.title}</h3>
-          <div className="prose prose-sm dark:prose-invert max-w-none text-[13px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0.5">
+          <div className="prose-ai">
             <SafeMarkdown>{section.content}</SafeMarkdown>
           </div>
         </div>
@@ -454,7 +454,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
                 ))
               ) : (
                 // Fallback to plain markdown if parsing fails
-                <div className="prose prose-sm dark:prose-invert max-w-none">
+                <div className="prose-ai">
                   <SafeMarkdown>{result.analysis}</SafeMarkdown>
                 </div>
               )}

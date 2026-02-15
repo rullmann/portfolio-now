@@ -1,6 +1,6 @@
 /**
  * Modal for displaying security price chart with TradingView Lightweight Charts.
- * Best practices based on Yahoo Finance and Apple Stocks.
+ * Redesigned with larger layout, modern styling, and per-feature AI provider.
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
@@ -8,9 +8,11 @@ import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, Re
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
 import { SafeMarkdown } from '../common/SafeMarkdown';
+import { AIModelSelector } from '../common/AIModelSelector';
 import { formatDate, type SecurityData, type PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices, forceReloadHistoricalPrices } from '../../lib/api';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, type AiProvider } from '../../store';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useEscapeKey } from '../../lib/hooks';
 
 interface ChartAnalysisResponse {
@@ -102,11 +104,29 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
   const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
   const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
-  const aiProvider = useSettingsStore((state) => state.aiProvider);
-  const aiModel = useSettingsStore((state) => state.aiModel);
-  const anthropicApiKey = useSettingsStore((state) => state.anthropicApiKey);
-  const openaiApiKey = useSettingsStore((state) => state.openaiApiKey);
-  const geminiApiKey = useSettingsStore((state) => state.geminiApiKey);
+
+  // Per-feature AI settings (chartAnalysis)
+  const { aiFeatureSettings, aiEnabled } = useSettingsStore();
+  const chartAnalysisConfig = aiFeatureSettings.chartAnalysis;
+
+  // Temporary model selection (not persisted unless "save as default" is checked)
+  const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
+
+  const aiProvider = (tempSelection?.provider ?? chartAnalysisConfig.provider) as AiProvider;
+  const aiModel = tempSelection?.model ?? chartAnalysisConfig.model;
+
+  // Secure API keys
+  const { keys } = useSecureApiKeys();
+
+  // Get API key for selected provider (from secure storage)
+  const aiApiKey = useMemo(() => {
+    switch (aiProvider) {
+      case 'claude': return keys.anthropicApiKey;
+      case 'openai': return keys.openaiApiKey;
+      case 'gemini': return keys.geminiApiKey;
+      case 'perplexity': return keys.perplexityApiKey;
+    }
+  }, [aiProvider, keys]);
 
   // AI Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -119,23 +139,6 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const [isForceReloading, setIsForceReloading] = useState(false);
   const [forceReloadMessage, setForceReloadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Get API key for selected provider
-  const aiApiKey = useMemo(() => {
-    switch (aiProvider) {
-      case 'claude': return anthropicApiKey;
-      case 'openai': return openaiApiKey;
-      case 'gemini': return geminiApiKey;
-    }
-  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey]);
-
-  const providerName = useMemo(() => {
-    switch (aiProvider) {
-      case 'claude': return 'Claude';
-      case 'openai': return 'GPT-4';
-      case 'gemini': return 'Gemini';
-    }
-  }, [aiProvider]);
-
   // Reset AI analysis when modal closes or security changes
   useEffect(() => {
     if (!isOpen) {
@@ -143,6 +146,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       setAnalysisInfo(null);
       setAnalysisError(null);
       setIsAiCollapsed(true);
+      setTempSelection(null);
     }
   }, [isOpen, security?.id]);
 
@@ -172,7 +176,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       ctx.scale(dpr, dpr);
 
       const isDark = document.documentElement.classList.contains('dark');
-      ctx.fillStyle = isDark ? '#1f2937' : '#ffffff';
+      ctx.fillStyle = isDark ? '#0d1117' : '#ffffff';
       ctx.fillRect(0, 0, containerRect.width, containerRect.height);
 
       // Draw each canvas layer at correct position
@@ -215,7 +219,6 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const handleForceReload = async () => {
     if (!security) return;
 
-    // Ask for confirmation
     if (!confirm(`Alle historischen Kurse für "${security.name}" löschen und komplett neu laden?\n\nDies kann nicht rückgängig gemacht werden.`)) {
       return;
     }
@@ -231,7 +234,6 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
         twelveData: twelveDataApiKey || undefined,
       };
 
-      // Use 2010 as default start year for full reload
       const result = await forceReloadHistoricalPrices(security.id, 2010, apiKeys);
 
       if (result.error) {
@@ -245,7 +247,6 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
           text: `${result.deletedCount} alte Kurse gelöscht, ${result.insertedCount} neue Kurse eingefügt (${result.dateFrom} - ${result.dateTo})`,
         });
 
-        // Reload prices in modal
         const { from, to } = getDateRange(selectedPeriod);
         const newPrices = await getPriceHistory(security.id, from, to);
         setPrices(newPrices);
@@ -267,13 +268,11 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       return;
     }
 
-    // Use custom logo if available
     if (security.customLogo) {
       setLogoUrl(security.customLogo);
       return;
     }
 
-    // Try to fetch from Brandfetch
     const loadLogo = async () => {
       if (!brandfetchApiKey) return;
 
@@ -307,25 +306,17 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
       try {
         const { from, to } = getDateRange(selectedPeriod);
-
-        // First try to get prices from database
         let data = await getPriceHistory(security.id, from, to);
 
-        // If insufficient data (less than 5 points), try fetching from provider
         if (data.length < 5 && security.feed) {
           try {
             const apiKeys = {
               finnhub: finnhubApiKey || undefined,
               coingecko: coingeckoApiKey || undefined,
             };
-
-            // Fetch historical prices from provider (also saves to DB)
             await fetchHistoricalPrices(security.id, from, to, apiKeys);
-
-            // Reload from database
             data = await getPriceHistory(security.id, from, to);
           } catch (fetchErr) {
-            // If fetching fails, continue with whatever data we have
             console.warn('Failed to fetch historical prices:', fetchErr);
           }
         }
@@ -341,14 +332,14 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
     loadPrices();
   }, [isOpen, security, selectedPeriod, finnhubApiKey, coingeckoApiKey]);
 
-  // Process chart data - NO conversion needed, backend already converts!
+  // Process chart data
   const chartData = useMemo(() => {
     if (!prices || prices.length === 0) return [];
 
     return prices
       .map((p) => ({
         time: p.date as Time,
-        value: p.value, // Already decimal from backend
+        value: p.value,
       }))
       .sort((a, b) => (a.time as string).localeCompare(b.time as string));
   }, [prices]);
@@ -376,32 +367,30 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       return;
     }
 
-    // Clean up existing chart
     if (chartRef.current) {
       chartRef.current.remove();
       chartRef.current = null;
       seriesRef.current = null;
     }
 
-    // Detect dark mode
     const isDark = document.documentElement.classList.contains('dark');
 
-    // Create chart
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: isDark ? '#9ca3af' : '#6b7280',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontFamily: 'Geist Mono, ui-monospace, monospace',
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: isDark ? '#374151' : '#e5e7eb' },
-        horzLines: { color: isDark ? '#374151' : '#e5e7eb' },
+        vertLines: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)' },
       },
       width: chartContainerRef.current.clientWidth,
-      height: 350,
+      height: 400,
       rightPriceScale: {
         borderVisible: false,
+        entireTextOnly: true,
       },
       timeScale: {
         borderVisible: false,
@@ -412,13 +401,15 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       crosshair: {
         vertLine: {
           width: 1,
-          color: isDark ? '#6b7280' : '#9ca3af',
+          color: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
           style: 2,
+          labelBackgroundColor: isDark ? '#1e293b' : '#f1f5f9',
         },
         horzLine: {
           width: 1,
-          color: isDark ? '#6b7280' : '#9ca3af',
+          color: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
           style: 2,
+          labelBackgroundColor: isDark ? '#1e293b' : '#f1f5f9',
         },
       },
       handleScroll: false,
@@ -427,13 +418,15 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
     chartRef.current = chart;
 
-    // Create area series with gradient
-    const areaColor = stats.isPositive ? '#22c55e' : '#ef4444';
     const areaSeries = chart.addSeries(AreaSeries, {
-      lineColor: areaColor,
-      lineWidth: 2,
-      topColor: stats.isPositive ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)',
-      bottomColor: stats.isPositive ? 'rgba(34, 197, 94, 0.0)' : 'rgba(239, 68, 68, 0.0)',
+      lineColor: stats.isPositive ? '#22c55e' : '#ef4444',
+      lineWidth: 3,
+      topColor: stats.isPositive ? 'rgba(34, 197, 94, 0.35)' : 'rgba(239, 68, 68, 0.35)',
+      bottomColor: stats.isPositive ? 'rgba(34, 197, 94, 0.02)' : 'rgba(239, 68, 68, 0.02)',
+      crosshairMarkerRadius: 5,
+      crosshairMarkerBorderWidth: 2,
+      crosshairMarkerBackgroundColor: stats.isPositive ? '#22c55e' : '#ef4444',
+      crosshairMarkerBorderColor: isDark ? '#0d1117' : '#ffffff',
       priceFormat: {
         type: 'price',
         precision: 2,
@@ -442,14 +435,9 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
     });
 
     seriesRef.current = areaSeries as ISeriesApi<'Area'>;
-
-    // Set data
     areaSeries.setData(chartData as AreaData<Time>[]);
-
-    // Fit content
     chart.timeScale().fitContent();
 
-    // Handle resize
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -477,43 +465,43 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative bg-card rounded-lg shadow-xl border border-border w-full max-w-3xl mx-4 max-h-[90vh] overflow-hidden">
+      <div className="relative card-elevated w-full max-w-5xl mx-6 max-h-[92vh] overflow-hidden animate-scale-in">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between p-5 border-b border-border/50">
+          <div className="flex items-center gap-4">
             {/* Logo */}
             {logoUrl ? (
               <img
                 src={logoUrl}
                 alt=""
-                className="w-10 h-10 rounded-lg object-contain bg-muted"
+                className="w-12 h-12 rounded-xl object-contain bg-muted/50 p-1"
                 crossOrigin="anonymous"
               />
             ) : (
-              <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-muted/50 flex items-center justify-center">
                 <Building2 size={24} className="text-muted-foreground" />
               </div>
             )}
             <div>
-              <h2 className="text-lg font-semibold">{security?.name || 'Kursverlauf'}</h2>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                {security?.ticker && <span className="font-mono">{security.ticker}</span>}
-                {security?.isin && <span className="font-mono">{security.isin}</span>}
+              <h2 className="text-title">{security?.name || 'Kursverlauf'}</h2>
+              <div className="flex items-center gap-3 text-sm text-muted-foreground mt-0.5">
+                {security?.ticker && <span className="font-mono tabular-nums">{security.ticker}</span>}
+                {security?.isin && <span className="font-mono tabular-nums text-muted-foreground/60">{security.isin}</span>}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {/* View mode tabs */}
-            <div className="flex gap-1 bg-muted p-1 rounded-md">
+            <div className="flex gap-1 bg-muted/50 p-1 rounded-lg">
               <button
                 onClick={() => setViewMode('chart')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-sm rounded transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${
                   viewMode === 'chart'
-                    ? 'bg-background shadow-sm'
-                    : 'hover:bg-background/50'
+                    ? 'bg-background shadow-elevation-1 font-medium'
+                    : 'hover:bg-background/50 text-muted-foreground'
                 }`}
               >
                 <LineChart size={14} />
@@ -521,10 +509,10 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
               </button>
               <button
                 onClick={() => setViewMode('table')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-sm rounded transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${
                   viewMode === 'table'
-                    ? 'bg-background shadow-sm'
-                    : 'hover:bg-background/50'
+                    ? 'bg-background shadow-elevation-1 font-medium'
+                    : 'hover:bg-background/50 text-muted-foreground'
                 }`}
               >
                 <Table2 size={14} />
@@ -533,7 +521,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
             </div>
             <button
               onClick={onClose}
-              className="p-2 hover:bg-muted rounded-md transition-colors"
+              className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <X size={20} />
             </button>
@@ -542,154 +530,174 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
         {viewMode === 'chart' ? (
           <>
-            {/* Price Info */}
-            {chartData.length > 0 && (
-              <div className="p-4 border-b border-border">
-                <div className="flex items-baseline gap-4">
-                  <span className="text-3xl font-bold tabular-nums">
-                    {stats.latestPrice.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    <span className="text-lg font-normal text-muted-foreground ml-1">{currency}</span>
-                  </span>
-                  <div className={`flex items-center gap-1 ${stats.isPositive ? 'text-green-500' : 'text-red-500'}`}>
-                    {stats.isPositive ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-                    <span className="font-medium tabular-nums">
-                      {stats.isPositive ? '+' : ''}{stats.change.toFixed(2)} ({stats.isPositive ? '+' : ''}{stats.changePercent.toFixed(2)}%)
-                    </span>
+            {/* Price Hero */}
+            <div className="px-6 pt-5 pb-4">
+              {chartData.length > 0 ? (
+                <div className="flex items-end justify-between">
+                  <div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-light font-mono tabular-nums tracking-tight">
+                        {stats.latestPrice.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                      <span className="text-base text-muted-foreground/70 font-medium">{currency}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                        stats.isPositive
+                          ? 'bg-positive/10 text-positive'
+                          : 'bg-negative/10 text-negative'
+                      }`}>
+                        {stats.isPositive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                        <span className="font-mono tabular-nums">
+                          {stats.isPositive ? '+' : ''}{stats.change.toFixed(2)} ({stats.isPositive ? '+' : ''}{stats.changePercent.toFixed(2)}%)
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground/50">
+                        {TIME_PERIODS.find(p => p.value === selectedPeriod)?.label}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Time Period Selector */}
+                  <div className="flex gap-0.5 bg-muted/40 p-1 rounded-lg">
+                    {TIME_PERIODS.map((period) => (
+                      <button
+                        key={period.value}
+                        onClick={() => setSelectedPeriod(period.value)}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
+                          selectedPeriod === period.value
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-muted/80'
+                        }`}
+                      >
+                        {period.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {TIME_PERIODS.find(p => p.value === selectedPeriod)?.label} Zeitraum
-                </p>
-              </div>
-            )}
-
-            {/* Time Period Selector */}
-            <div className="flex gap-1 p-4 bg-muted/30 overflow-x-auto">
-              {TIME_PERIODS.map((period) => (
-                <button
-                  key={period.value}
-                  onClick={() => setSelectedPeriod(period.value)}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${
-                    selectedPeriod === period.value
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  }`}
-                >
-                  {period.label}
-                </button>
-              ))}
+              ) : (
+                <div className="text-muted-foreground text-sm">Keine Kursdaten</div>
+              )}
             </div>
 
             {/* Chart Area */}
-            <div className="p-4">
+            <div className="px-3 pb-1">
               {isLoading ? (
-                <div className="flex items-center justify-center h-[350px] text-muted-foreground">
-                  <div className="animate-pulse">Lade Kursdaten...</div>
+                <div className="flex items-center justify-center h-[400px] text-muted-foreground">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw size={20} className="animate-spin opacity-40" />
+                    <span className="text-sm">Lade Kursdaten...</span>
+                  </div>
                 </div>
               ) : error ? (
-                <div className="flex items-center justify-center h-[350px] text-destructive">
+                <div className="flex items-center justify-center h-[400px] text-destructive text-sm">
                   {error}
                 </div>
               ) : chartData.length === 0 ? (
-                <div className="flex items-center justify-center h-[350px] text-muted-foreground">
-                  Keine Kursdaten für diesen Zeitraum verfügbar
+                <div className="flex flex-col items-center justify-center h-[400px] text-muted-foreground">
+                  <LineChart size={36} className="mb-3 opacity-20" />
+                  <p className="text-sm">Keine Kursdaten für diesen Zeitraum</p>
                 </div>
               ) : (
                 <div ref={chartContainerRef} className="w-full" />
               )}
             </div>
 
-            {/* Footer with stats */}
+            {/* Stats Row */}
             {chartData.length > 0 && (
-              <div className="p-4 border-t border-border bg-muted/30">
-                <div className="grid grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <p className="text-muted-foreground">Eröffnung</p>
-                    <p className="font-medium tabular-nums">{stats.firstPrice.toLocaleString('de-DE', { minimumFractionDigits: 2 })} {currency}</p>
+              <div className="px-6 pb-4">
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">Eröffnung</p>
+                    <p className="text-sm font-mono tabular-nums font-medium">{stats.firstPrice.toLocaleString('de-DE', { minimumFractionDigits: 2 })} <span className="text-muted-foreground/50">{currency}</span></p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Hoch</p>
-                    <p className="font-medium text-green-600 tabular-nums">{stats.max.toLocaleString('de-DE', { minimumFractionDigits: 2 })} {currency}</p>
+                  <div className="rounded-lg bg-positive/5 border border-positive/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-positive/60 mb-0.5">Hoch</p>
+                    <p className="text-sm font-mono tabular-nums font-medium text-positive">{stats.max.toLocaleString('de-DE', { minimumFractionDigits: 2 })} <span className="text-positive/50">{currency}</span></p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Tief</p>
-                    <p className="font-medium text-red-600 tabular-nums">{stats.min.toLocaleString('de-DE', { minimumFractionDigits: 2 })} {currency}</p>
+                  <div className="rounded-lg bg-negative/5 border border-negative/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-negative/60 mb-0.5">Tief</p>
+                    <p className="text-sm font-mono tabular-nums font-medium text-negative">{stats.min.toLocaleString('de-DE', { minimumFractionDigits: 2 })} <span className="text-negative/50">{currency}</span></p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Aktuell</p>
-                    <p className="font-medium tabular-nums">{stats.latestPrice.toLocaleString('de-DE', { minimumFractionDigits: 2 })} {currency}</p>
+                  <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">Aktuell</p>
+                    <p className="text-sm font-mono tabular-nums font-medium">{stats.latestPrice.toLocaleString('de-DE', { minimumFractionDigits: 2 })} <span className="text-muted-foreground/50">{currency}</span></p>
                   </div>
                 </div>
               </div>
             )}
 
             {/* AI Analysis Section */}
-            {aiApiKey && chartData.length > 0 && (
-              <div className="border-t border-border">
+            {aiEnabled && chartData.length > 0 && (
+              <div className="border-t border-border/30">
                 {/* AI Header */}
-                <div className="flex items-center justify-between p-3 bg-muted/30">
+                <div className="flex items-center justify-between px-6 py-2.5">
                   <button
                     onClick={() => setIsAiCollapsed(!isAiCollapsed)}
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
+                    className="flex items-center gap-2 group"
                   >
-                    <Sparkles size={16} className="text-primary" />
-                    <span className="font-medium text-sm">KI-Analyse</span>
-                    <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
-                      {providerName}
-                    </span>
-                    {isAiCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <Sparkles size={14} className="text-primary/70 group-hover:text-primary transition-colors" />
+                    <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">KI-Analyse</span>
+                    {isAiCollapsed ? <ChevronDown size={12} className="text-muted-foreground/40" /> : <ChevronUp size={12} className="text-muted-foreground/40" />}
                   </button>
-                  <button
-                    onClick={handleAnalyze}
-                    disabled={isAnalyzing}
-                    className="flex items-center gap-2 px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <RefreshCw size={12} className="animate-spin" />
-                        Analysiere...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={12} />
-                        Analysieren
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <AIModelSelector
+                      featureId="chartAnalysis"
+                      requiresVision={true}
+                      value={{ provider: aiProvider, model: aiModel }}
+                      onChange={setTempSelection}
+                      compact
+                      disabled={isAnalyzing}
+                    />
+                    <button
+                      onClick={handleAnalyze}
+                      disabled={isAnalyzing || !aiApiKey}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary/90 text-primary-foreground rounded-md hover:bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-all font-medium"
+                    >
+                      {isAnalyzing ? (
+                        <>
+                          <RefreshCw size={11} className="animate-spin" />
+                          Analysiere...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={11} />
+                          Analysieren
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {/* AI Content */}
                 {!isAiCollapsed && (
-                  <div className="p-4 h-48 overflow-y-auto border-t border-border">
-                    {analysisError ? (
-                      <div className="text-destructive text-sm">{analysisError}</div>
-                    ) : isAnalyzing ? (
-                      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                        <RefreshCw size={24} className="animate-spin mb-2 opacity-50" />
-                        <p className="text-sm">Analyse wird erstellt...</p>
-                      </div>
-                    ) : analysis ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-                        <SafeMarkdown>{analysis}</SafeMarkdown>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm">
-                        <Sparkles size={24} className="mb-2 opacity-30" />
-                        <p>Klicke "Analysieren" für KI-Einschätzung</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* AI Footer */}
-                {!isAiCollapsed && (
-                  <div className="px-4 py-2 border-t border-border bg-muted/30 flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Keine Anlageberatung</span>
+                  <div className="px-6 pb-4">
+                    <div className="rounded-lg bg-muted/20 border border-border/30 p-4 max-h-56 overflow-y-auto">
+                      {analysisError ? (
+                        <div className="text-destructive text-sm">{analysisError}</div>
+                      ) : isAnalyzing ? (
+                        <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                          <RefreshCw size={20} className="animate-spin mb-3 opacity-30" />
+                          <p className="text-xs">Analyse wird erstellt...</p>
+                        </div>
+                      ) : analysis ? (
+                        <div className="prose-ai">
+                          <SafeMarkdown>{analysis}</SafeMarkdown>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center py-6 text-muted-foreground/40 text-xs gap-2">
+                          <Sparkles size={14} />
+                          <span>Klicke "Analysieren" für eine KI-Einschätzung</span>
+                        </div>
+                      )}
+                    </div>
                     {analysisInfo && (
-                      <span className="text-xs text-muted-foreground">
-                        {analysisInfo.model}
-                        {analysisInfo.tokens && ` | ${analysisInfo.tokens.toLocaleString()} Tokens`}
-                      </span>
+                      <div className="flex items-center justify-between mt-1.5 px-1">
+                        <span className="text-[10px] text-muted-foreground/40">Keine Anlageberatung</span>
+                        <span className="text-[10px] text-muted-foreground/40 font-mono">
+                          {analysisInfo.model}{analysisInfo.tokens && ` · ${analysisInfo.tokens.toLocaleString()} Tokens`}
+                        </span>
+                      </div>
                     )}
                   </div>
                 )}
@@ -698,9 +706,9 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
           </>
         ) : (
           /* Table View - Price History */
-          <div className="flex flex-col max-h-[500px]">
+          <div className="flex flex-col max-h-[calc(92vh-80px)]">
             {/* Table Header */}
-            <div className="flex items-center justify-between p-4 border-b border-border bg-muted/30">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
               <div className="flex items-center gap-3">
                 <span className="text-sm text-muted-foreground">
                   {prices.length} Kursbuchungen
@@ -709,7 +717,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                   <button
                     onClick={handleForceReload}
                     disabled={isForceReloading}
-                    className="flex items-center gap-1.5 px-2 py-1 text-xs border border-amber-500/50 text-amber-600 rounded hover:bg-amber-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs border border-amber-500/50 text-amber-600 rounded-lg hover:bg-amber-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Alle Kurse löschen und komplett neu laden"
                   >
                     <RotateCcw size={12} className={isForceReloading ? 'animate-spin' : ''} />
@@ -717,16 +725,15 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                   </button>
                 )}
               </div>
-              {/* Time Period Selector for Table too */}
-              <div className="flex gap-1 overflow-x-auto">
+              <div className="flex gap-1">
                 {TIME_PERIODS.map((period) => (
                   <button
                     key={period.value}
                     onClick={() => setSelectedPeriod(period.value)}
-                    className={`px-2 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
                       selectedPeriod === period.value
                         ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-muted'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     {period.label}
@@ -737,10 +744,10 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
             {/* Force Reload Message */}
             {forceReloadMessage && (
-              <div className={`px-4 py-2 text-sm ${
+              <div className={`px-5 py-2 text-sm ${
                 forceReloadMessage.type === 'success'
-                  ? 'bg-green-500/10 text-green-600'
-                  : 'bg-red-500/10 text-red-600'
+                  ? 'bg-positive-muted text-positive'
+                  : 'bg-negative-muted text-negative'
               }`}>
                 {forceReloadMessage.text}
               </div>
@@ -750,7 +757,10 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
             <div className="flex-1 overflow-y-auto">
               {isLoading ? (
                 <div className="flex items-center justify-center h-48 text-muted-foreground">
-                  <div className="animate-pulse">Lade Kursdaten...</div>
+                  <div className="flex items-center gap-3">
+                    <RefreshCw size={16} className="animate-spin" />
+                    <span>Lade Kursdaten...</span>
+                  </div>
                 </div>
               ) : error ? (
                 <div className="flex items-center justify-center h-48 text-destructive">
@@ -762,10 +772,10 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                 </div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-card border-b border-border">
+                  <thead className="sticky top-0 bg-card border-b border-border/50">
                     <tr>
-                      <th className="text-left py-2 px-4 font-medium">Datum</th>
-                      <th className="text-right py-2 px-4 font-medium">Kurs</th>
+                      <th className="text-left py-2.5 px-5 text-label">Datum</th>
+                      <th className="text-right py-2.5 px-5 text-label">Kurs</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -774,12 +784,12 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                       .map((price, index) => (
                         <tr
                           key={`${price.date}-${index}`}
-                          className="border-b border-border/50 last:border-0 hover:bg-muted/30"
+                          className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors"
                         >
-                          <td className="py-2 px-4 text-muted-foreground">
+                          <td className="py-2.5 px-5 text-muted-foreground">
                             {formatDate(price.date)}
                           </td>
-                          <td className="py-2 px-4 text-right font-mono tabular-nums">
+                          <td className="py-2.5 px-5 text-right font-mono tabular-nums">
                             {price.value.toLocaleString('de-DE', {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 4,

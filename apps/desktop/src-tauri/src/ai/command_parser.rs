@@ -970,7 +970,7 @@ pub async fn execute_confirmed_watchlist_action(
     action_type: &str,
     payload: &str,
     alpha_vantage_api_key: Option<String>,
-) -> Result<String, String> {
+) -> Result<(String, Option<i64>), String> {
     let cmd: WatchlistCommand = serde_json::from_str(payload)
         .map_err(|e| format!("Invalid payload: {}", e))?;
 
@@ -982,12 +982,12 @@ pub async fn execute_confirmed_watchlist_action(
                 alpha_vantage_api_key,
             )
             .await
-            .map(|r| r.message)
+            .map(|r| (r.message, r.security_id))
             .map_err(|e| e.to_string())
         }
         "watchlist_remove" => {
             ai_helpers::ai_remove_from_watchlist(cmd.watchlist, cmd.security)
-                .map(|r| r.message)
+                .map(|r| (r.message, None))
                 .map_err(|e| e.to_string())
         }
         _ => Err(format!("Unknown action type: {}", action_type)),

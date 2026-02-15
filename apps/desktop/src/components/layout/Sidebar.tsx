@@ -121,15 +121,15 @@ export function Sidebar() {
     <aside
       className={`${
         sidebarCollapsed ? 'w-16' : 'w-64'
-      } flex flex-col border-r border-border bg-card transition-all duration-300`}
+      } flex flex-col border-r border-border/50 bg-muted/30 transition-all duration-300`}
       aria-label="Hauptnavigation"
     >
       {/* Logo/Header */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-border">
+      <div className="flex items-center justify-between h-14 px-4 border-b border-border/50">
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-primary" aria-hidden="true" />
-            <span className="font-semibold text-foreground">Portfolio</span>
+            <span className="font-semibold tracking-tight text-foreground">Portfolio</span>
           </div>
         )}
         <button
@@ -151,21 +151,24 @@ export function Sidebar() {
         {Object.entries(sections).map(([sectionKey, items]) =>
           items.length > 0 ? (
             <div key={sectionKey} className="mb-4" role="group" aria-label={sectionLabels[sectionKey]}>
-              {/* Section label */}
+              {/* Section label with line */}
               {!sidebarCollapsed && (
                 <div
-                  className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+                  className="flex items-center gap-2 px-3 py-2"
                   id={`section-${sectionKey}`}
                 >
-                  {sectionLabels[sectionKey]}
+                  <span className="text-label text-muted-foreground whitespace-nowrap">
+                    {sectionLabels[sectionKey]}
+                  </span>
+                  <div className="flex-1 h-px bg-border/50" />
                 </div>
               )}
               {sidebarCollapsed && sectionKey !== 'main' && (
-                <div className="border-t border-border my-2" role="separator" />
+                <div className="border-t border-border/50 my-2" role="separator" />
               )}
 
               {/* Section items */}
-              <div className="space-y-1" role="list">
+              <div className="space-y-0.5" role="list">
                 {items.map((item) => (
                   <button
                     key={item.id}
@@ -176,15 +179,19 @@ export function Sidebar() {
                     aria-label={sidebarCollapsed ? item.label : undefined}
                     aria-current={currentView === item.id ? 'page' : undefined}
                     role="listitem"
-                    className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                       currentView === item.id
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? 'bg-primary/10 text-primary font-medium'
+                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:translate-x-0.5'
                     }`}
                   >
+                    {/* Active indicator bar */}
+                    {currentView === item.id && (
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-primary" />
+                    )}
                     {getIcon(item.icon)}
                     {!sidebarCollapsed && (
-                      <span className="flex-1 text-left">{item.label}</span>
+                      <span className="flex-1 text-left text-sm">{item.label}</span>
                     )}
                     {/* Alert badge for rebalancing - HIDDEN FOR v0.1.0 (rebalancing nav item hidden) */}
                   </button>
@@ -196,7 +203,7 @@ export function Sidebar() {
       </nav>
 
       {/* Settings at bottom */}
-      <div className="p-2 border-t border-border">
+      <div className="p-2 border-t border-border/50">
         <button
           data-nav-item="settings"
           onClick={() => setCurrentView('settings')}
@@ -204,14 +211,17 @@ export function Sidebar() {
           title={sidebarCollapsed ? 'Einstellungen' : undefined}
           aria-label={sidebarCollapsed ? 'Einstellungen' : undefined}
           aria-current={currentView === 'settings' ? 'page' : undefined}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             currentView === 'settings'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+              ? 'bg-primary/10 text-primary font-medium'
+              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:translate-x-0.5'
           }`}
         >
+          {currentView === 'settings' && (
+            <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-primary" />
+          )}
           <Settings className="w-5 h-5" aria-hidden="true" />
-          {!sidebarCollapsed && <span>Einstellungen</span>}
+          {!sidebarCollapsed && <span className="text-sm">Einstellungen</span>}
         </button>
       </div>
     </aside>

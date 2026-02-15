@@ -241,22 +241,23 @@ export function TradingViewChart({
       width: containerRef.current.clientWidth,
       height: chartHeight,
       layout: {
-        background: { type: ColorType.Solid, color: isDark ? '#1a1a2e' : '#ffffff' },
+        background: { type: ColorType.Solid, color: isDark ? '#0d1117' : '#ffffff' },
         textColor: isDark ? '#d1d4dc' : '#333333',
+        fontFamily: 'Geist Mono, ui-monospace, monospace',
       },
       grid: {
-        vertLines: { color: isDark ? '#2B2B43' : '#e1e1e1' },
-        horzLines: { color: isDark ? '#2B2B43' : '#e1e1e1' },
+        vertLines: { color: isDark ? '#1b2332' : '#e1e1e1' },
+        horzLines: { color: isDark ? '#1b2332' : '#e1e1e1' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
       },
       rightPriceScale: {
-        borderColor: isDark ? '#2B2B43' : '#e1e1e1',
+        borderColor: isDark ? '#1b2332' : '#e1e1e1',
         mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
       },
       timeScale: {
-        borderColor: isDark ? '#2B2B43' : '#e1e1e1',
+        borderColor: isDark ? '#1b2332' : '#e1e1e1',
         timeVisible: true,
         secondsVisible: false,
       },
@@ -794,8 +795,8 @@ export function TradingViewChart({
               className={`ml-1 mr-2 ${
                 legendData.close && legendData.open
                   ? legendData.close >= legendData.open
-                    ? 'text-emerald-500'
-                    : 'text-red-500'
+                    ? 'text-positive'
+                    : 'text-negative'
                   : 'text-foreground'
               }`}
             >

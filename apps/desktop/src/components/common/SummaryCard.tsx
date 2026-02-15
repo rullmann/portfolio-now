@@ -11,11 +11,11 @@ interface SummaryCardProps {
 
 export function SummaryCard({ title, value, change, positive = true }: SummaryCardProps) {
   return (
-    <div className="bg-card rounded-lg border border-border p-3">
+    <div className="card-surface p-3">
       <div className="text-xs text-muted-foreground mb-0.5">{title}</div>
-      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-lg font-semibold font-mono tabular-nums">{value}</div>
       {change && (
-        <div className={`text-xs ${positive ? 'text-green-500' : 'text-red-500'}`}>
+        <div className={`text-xs font-mono tabular-nums ${positive ? 'text-positive' : 'text-negative'}`}>
           {change}
         </div>
       )}

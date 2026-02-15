@@ -473,7 +473,7 @@ export function RebalancingView() {
               {/* Overall Reasoning */}
               <div>
                 <h4 className="text-sm font-medium text-muted-foreground mb-2">Gesamtbegründung</h4>
-                <div className="prose prose-sm prose-slate dark:prose-invert max-w-none">
+                <div className="prose-ai">
                   <SafeMarkdown>{aiSuggestion.reasoning}</SafeMarkdown>
                 </div>
               </div>
@@ -484,7 +484,7 @@ export function RebalancingView() {
                   <AlertTriangle size={14} />
                   Risikoeinschätzung
                 </h4>
-                <div className="prose prose-sm prose-slate dark:prose-invert max-w-none text-muted-foreground">
+                <div className="prose-ai text-muted-foreground">
                   <SafeMarkdown>{aiSuggestion.riskAssessment}</SafeMarkdown>
                 </div>
               </div>
