@@ -344,7 +344,7 @@ export function TradingAnalysisPanel({
               </button>
             ) : (
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <SafeMarkdown content={aiResponse} />
+                <SafeMarkdown>{aiResponse}</SafeMarkdown>
               </div>
             )}
           </div>

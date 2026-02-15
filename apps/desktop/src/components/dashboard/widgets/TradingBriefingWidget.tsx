@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Activity, RefreshCw, TrendingUp } from 'lucide-react';
+import { Activity, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { RegimeBadge } from '../../common/RegimeBadge';
 import { SetupScoreBadge } from '../../common/SetupScoreBadge';
@@ -24,7 +24,7 @@ interface BriefingEntry {
   setup: SetupScore;
 }
 
-export function TradingBriefingWidget({ config }: WidgetProps) {
+export function TradingBriefingWidget({ config: _config }: WidgetProps) {
   const [entries, setEntries] = useState<BriefingEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const { brandfetchApiKey } = useSettingsStore();
