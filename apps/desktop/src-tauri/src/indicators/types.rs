@@ -123,7 +123,7 @@ pub enum CandlestickPattern {
     ThreeInsideDown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PatternDirection {
     Bullish,
@@ -334,4 +334,107 @@ pub struct AllIndicatorsResult {
     pub fibonacci: Option<FibonacciResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heikin_ashi: Option<Vec<OHLCData>>,
+}
+
+// ============================================================================
+// Trading Analysis Types (Regime, Setup Scoring, Risk)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegimeType {
+    StrongUptrend,
+    Uptrend,
+    Sideways,
+    Downtrend,
+    StrongDowntrend,
+    Squeeze,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VolatilityLevel {
+    Low,
+    Normal,
+    High,
+    Extreme,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegimeAnalysis {
+    pub regime: RegimeType,
+    pub confidence: f64,
+    pub trend_strength: f64,
+    pub volatility_level: VolatilityLevel,
+    pub momentum: f64,
+    pub supporting_evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupType {
+    TrendFollowing,
+    Breakout,
+    Reversal,
+    MeanReversion,
+    Squeeze,
+    NoSetup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeDirection {
+    Long,
+    Short,
+    Neutral,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupFactorDetail {
+    pub name: String,
+    pub score: f64,
+    pub weight: f64,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupScore {
+    pub total_score: f64,
+    pub regime_score: f64,
+    pub momentum_score: f64,
+    pub pattern_score: f64,
+    pub volume_score: f64,
+    pub risk_score: f64,
+    pub factors: Vec<SetupFactorDetail>,
+    pub setup_type: SetupType,
+    pub setup_label: String,
+    pub direction: TradeDirection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RiskAnalysis {
+    pub atr_value: f64,
+    pub atr_stop_price: f64,
+    pub atr_stop_percent: f64,
+    pub suggested_position_size: f64,
+    pub suggested_position_value: f64,
+    pub risk_per_trade: f64,
+    pub risk_reward_ratio: f64,
+    pub portfolio_impact_percent: f64,
+    pub max_loss_percent: f64,
+    pub entry_price: f64,
+    pub stop_price: f64,
+    pub target_price: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradingAnalysis {
+    pub regime: RegimeAnalysis,
+    pub setup: SetupScore,
+    pub risk: Option<RiskAnalysis>,
 }

@@ -14,6 +14,7 @@ import {
   Calendar,
   Target,
   LayoutGrid,
+  Activity,
 } from 'lucide-react';
 import type { WidgetDefinition, WidgetType } from './types';
 
@@ -37,6 +38,7 @@ const WIDGET_ICONS: Record<string, React.ElementType> = {
   alerts: Bell,
   chart: LineChart,
   benchmark: Target,
+  trading_briefing: Activity,
 };
 
 export function WidgetCatalog({

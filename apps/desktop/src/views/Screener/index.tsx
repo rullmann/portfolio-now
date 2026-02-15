@@ -35,8 +35,9 @@ import {
   type ScreenerCondition,
   type ScreenerPreset,
 } from '../../lib/screener';
-import { runScreener } from '../../lib/indicators-rust';
-import { SecurityLogo } from '../../components/common';
+import { runScreener, detectRegime, scoreSetup } from '../../lib/indicators-rust';
+import { SecurityLogo, RegimeBadge, SetupScoreBadge } from '../../components/common';
+import type { RegimeAnalysis, SetupScore } from '../../lib/indicators';
 import { useCachedLogos, type CachedLogo } from '../../lib/hooks';
 import { useSettingsStore, useUIStore } from '../../store';
 import type { SecurityData as APISecurity, PriceData } from '../../lib/types';
@@ -258,10 +259,16 @@ function ResultsTable({
   results,
   logos,
   onSelectSecurity,
+  tradingData,
+  sortBy,
+  onSortChange,
 }: {
   results: ScreenerResult[];
   logos: Map<number, CachedLogo>;
   onSelectSecurity: (securityId: number) => void;
+  tradingData: Record<number, { regime: RegimeAnalysis; setup: SetupScore }>;
+  sortBy: 'default' | 'score';
+  onSortChange: (sort: 'default' | 'score') => void;
 }) {
   const formatValue = (value: number | undefined, decimals: number = 2) => {
     if (value === undefined) return '-';
@@ -292,6 +299,14 @@ function ResultsTable({
               <th className="text-right py-3 px-4 font-medium">20T</th>
               <th className="text-right py-3 px-4 font-medium">RSI</th>
               <th className="text-right py-3 px-4 font-medium">ADX</th>
+              <th className="text-center py-3 px-4 font-medium">Regime</th>
+              <th
+                className="text-center py-3 px-4 font-medium cursor-pointer hover:text-primary transition-colors"
+                onClick={() => onSortChange(sortBy === 'score' ? 'default' : 'score')}
+                title="Nach Score sortieren"
+              >
+                Score {sortBy === 'score' ? '\u2193' : ''}
+              </th>
               <th className="text-left py-3 px-4 font-medium">Erfüllte Filter</th>
               <th className="w-10"></th>
             </tr>
@@ -331,6 +346,20 @@ function ResultsTable({
                 </td>
                 <td className="py-3 px-4 text-right font-mono">
                   {formatValue(result.currentValues.adx)}
+                </td>
+                <td className="py-3 px-4 text-center">
+                  {tradingData[result.securityId] ? (
+                    <RegimeBadge regime={tradingData[result.securityId].regime.regime} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </td>
+                <td className="py-3 px-4 text-center">
+                  {tradingData[result.securityId] ? (
+                    <SetupScoreBadge score={tradingData[result.securityId].setup.totalScore} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
                 </td>
                 <td className="py-3 px-4">
                   <div className="flex flex-wrap gap-1">
@@ -374,6 +403,8 @@ export function ScreenerView() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+  const [tradingData, setTradingData] = useState<Record<number, { regime: RegimeAnalysis; setup: SetupScore }>>({});
+  const [sortBy, setSortBy] = useState<'default' | 'score'>('default');
 
   const { brandfetchApiKey } = useSettingsStore();
   const { setCurrentView, setScrollTarget } = useUIStore();
@@ -474,7 +505,26 @@ export function ScreenerView() {
   // Re-run screener when data is loaded
   useEffect(() => {
     if (securitiesData.length > 0 && filters.some((f) => f.enabled)) {
-      runScreener(securitiesData, filters).then(setResults).catch(() => setResults([]));
+      runScreener(securitiesData, filters).then(async (res) => {
+        setResults(res);
+        // Compute regime + setup for each result
+        const trading: Record<number, { regime: RegimeAnalysis; setup: SetupScore }> = {};
+        await Promise.all(
+          res.map(async (r) => {
+            const secData = securitiesData.find(s => s.securityId === r.securityId);
+            if (secData && secData.ohlcData.length >= 50) {
+              try {
+                const [regime, setup] = await Promise.all([
+                  detectRegime(secData.ohlcData),
+                  scoreSetup(secData.ohlcData),
+                ]);
+                trading[r.securityId] = { regime, setup };
+              } catch { /* ignore */ }
+            }
+          })
+        );
+        setTradingData(trading);
+      }).catch(() => setResults([]));
     }
   }, [securitiesData, filters]);
 
@@ -510,6 +560,18 @@ export function ScreenerView() {
   };
 
   const activeFilterCount = filters.filter((f) => f.enabled).length;
+
+  // Sort results
+  const sortedResults = useMemo(() => {
+    if (sortBy === 'score') {
+      return [...results].sort((a, b) => {
+        const scoreA = tradingData[a.securityId]?.setup.totalScore ?? 0;
+        const scoreB = tradingData[b.securityId]?.setup.totalScore ?? 0;
+        return scoreB - scoreA;
+      });
+    }
+    return results;
+  }, [results, sortBy, tradingData]);
 
   return (
     <div className="space-y-6">
@@ -571,11 +633,14 @@ export function ScreenerView() {
       />
 
       {/* Results */}
-      {results.length > 0 ? (
+      {sortedResults.length > 0 ? (
         <ResultsTable
-          results={results}
+          results={sortedResults}
           logos={logos}
           onSelectSecurity={handleSelectSecurity}
+          tradingData={tradingData}
+          sortBy={sortBy}
+          onSortChange={setSortBy}
         />
       ) : (
         <div className="bg-card rounded-lg border border-border p-8 text-center text-muted-foreground">

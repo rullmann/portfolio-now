@@ -116,6 +116,7 @@ apps/desktop/
         │   ├── patterns.rs      # 22 Candlestick-Patterns
         │   ├── signals.rs       # Signal-Erkennung + Divergenzen
         │   ├── screener.rs      # Screener-Engine mit allen Filtern
+        │   ├── regime.rs        # Markt-Regime-Erkennung, Setup-Scoring, Risk-Engine
         │   └── types.rs         # Shared Types
         ├── security/       # Pfadvalidierung, Rate Limiting
         ├── validation/     # Input-Validierung, AI-Fallback
@@ -157,6 +158,7 @@ cd apps/desktop/src-tauri && cargo test --release  # Rust Tests
 | **Candlestick-Muster** | `indicators/patterns.rs` | `detect_candlestick_patterns()` | TS Pattern-Erkennung |
 | **Handelssignale** | `indicators/signals.rs` | `detect_signals()`, `get_all_signals()` | TS Signal-Erkennung |
 | **Screener** | `indicators/screener.rs` | `run_screener()` | TS Screener-Engine |
+| **Regime-Erkennung** | `indicators/regime.rs` | `detect_regime()`, `score_setup()`, `calculate_risk()` | Eigene Regime/Scoring-Logik |
 | **Datumsformatierung** | `lib/types.ts` | `formatDate()`, `formatDateTime()`, `formatDateShort()` | Eigene Date-Formatierung |
 | **ChatBot DB-Abfragen** | `ai/sql_executor.rs` | `execute_sql()`, `validate_sql()` | Hardcodierte SQL im ChatBot |
 | **Txn-Type-Normalisierung** | `ai/command_parser.rs` | `normalize_extracted_txn_type()` | Eigene Txn-Type-Mappings |
@@ -260,7 +262,7 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 `get/save_tax_settings(year)`, `generate_german_tax_report(year)`, `get_freistellung_status(year)`
 
 ### AI Features
-`analyze_chart_with_ai/with_annotations/enhanced`, `analyze_portfolio_with_ai`, `chat_with_portfolio_assistant`, `research_security_news(provider, model, api_key, security_name, ...)`, `get_ai_models(provider, api_key)`, `get_vision_models(provider)`
+`analyze_chart_with_ai/with_annotations/enhanced`, `analyze_portfolio_with_ai`, `chat_with_portfolio_assistant`, `research_security_news(provider, model, api_key, security_name, ...)`, `analyze_trading_setup_with_ai(provider, model, api_key, securityName, regimeLabel, setupScore, ...)`, `get_ai_models(provider, api_key)`, `get_vision_models(provider)`
 
 ### AI Helper (ChatBot)
 `ai_search_security(query, api_key?)`, `ai_add/remove_from_watchlist(watchlist, security, api_key?)`, `ai_list_watchlists()`, `ai_query_transactions(security?, year?, type?, limit?)`
@@ -269,7 +271,7 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 `save/get/delete/clear_chart_drawing(s)`, `save_pattern_detection`, `evaluate_pattern_outcomes`, `get_pattern_statistics`, `get_pattern_history`
 
 ### Technical Analysis (Rust-native)
-`calculate_sma`, `calculate_ema`, `calculate_rsi`, `calculate_macd`, `calculate_bollinger`, `calculate_atr`, `calculate_vwap`, `calculate_stochastic`, `calculate_obv`, `calculate_adx`, `calculate_ichimoku`, `calculate_pivot_points`, `calculate_fibonacci`, `convert_to_heikin_ashi`, `calculate_all_indicators`, `detect_candlestick_patterns`, `detect_signals`, `get_all_signals`, `detect_all_divergences`, `run_screener`
+`calculate_sma`, `calculate_ema`, `calculate_rsi`, `calculate_macd`, `calculate_bollinger`, `calculate_atr`, `calculate_vwap`, `calculate_stochastic`, `calculate_obv`, `calculate_adx`, `calculate_ichimoku`, `calculate_pivot_points`, `calculate_fibonacci`, `convert_to_heikin_ashi`, `calculate_all_indicators`, `detect_candlestick_patterns`, `detect_signals`, `get_all_signals`, `detect_all_divergences`, `run_screener`, `detect_regime`, `score_setup`, `calculate_risk`, `full_trading_analysis`
 
 ---
 

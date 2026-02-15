@@ -21,6 +21,10 @@ import type {
   PatternMatch,
   TechnicalSignal,
   SignalDetectionConfig,
+  RegimeAnalysis,
+  SetupScore,
+  RiskAnalysis,
+  TradingAnalysis,
 } from './indicators';
 import type {
   ScreenerFilter,
@@ -173,5 +177,47 @@ export async function runScreener(
       ohlcData: s.ohlcData,
     })),
     filters,
+  });
+}
+
+// ============================================================================
+// Trading Analysis (Regime, Setup Scoring, Risk)
+// ============================================================================
+
+export async function detectRegime(data: OHLCData[]): Promise<RegimeAnalysis> {
+  return invoke('detect_regime', { data });
+}
+
+export async function scoreSetup(data: OHLCData[]): Promise<SetupScore> {
+  return invoke('score_setup', { data });
+}
+
+export async function calculateRisk(
+  data: OHLCData[],
+  accountSize: number,
+  riskPercent?: number,
+  entryPrice?: number,
+  atrMultiplier?: number,
+): Promise<RiskAnalysis> {
+  return invoke('calculate_risk', {
+    data,
+    accountSize,
+    riskPercent: riskPercent ?? null,
+    entryPrice: entryPrice ?? null,
+    atrMultiplier: atrMultiplier ?? null,
+  });
+}
+
+export async function fullTradingAnalysis(
+  data: OHLCData[],
+  accountSize?: number,
+  riskPercent?: number,
+  entryPrice?: number,
+): Promise<TradingAnalysis> {
+  return invoke('full_trading_analysis', {
+    data,
+    accountSize: accountSize ?? null,
+    riskPercent: riskPercent ?? null,
+    entryPrice: entryPrice ?? null,
   });
 }

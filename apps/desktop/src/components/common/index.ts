@@ -17,3 +17,5 @@ export { AIProviderLogo, ClaudeLogo, OpenAILogo, GeminiLogo, AI_PROVIDER_NAMES }
 export { AIModelSelector } from './AIModelSelector';
 export { SecurityLogo } from './SecurityLogo';
 export { SafeMarkdown } from './SafeMarkdown';
+export { RegimeBadge } from './RegimeBadge';
+export { SetupScoreBadge } from './SetupScoreBadge';

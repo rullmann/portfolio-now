@@ -14,7 +14,8 @@ export type WidgetType =
   | 'year_returns'
   | 'alerts'
   | 'chart'
-  | 'benchmark';
+  | 'benchmark'
+  | 'trading_briefing';
 
 export interface Position {
   x: number;

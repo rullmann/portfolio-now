@@ -306,6 +306,8 @@ pub fn run() {
             commands::ai::check_extracted_transactions_for_duplicates,
             // AI News Research
             commands::ai::research_security_news,
+            // AI Trading Analysis
+            commands::ai::analyze_trading_setup_with_ai,
             // Speech-to-Text
             commands::ai::transcribe_audio,
             // Chat History Persistence
@@ -429,6 +431,11 @@ pub fn run() {
             commands::indicators::detect_all_divergences,
             // Screener (Rust-native)
             commands::indicators::run_screener,
+            // Trading Analysis (Regime, Setup Scoring, Risk)
+            commands::indicators::detect_regime,
+            commands::indicators::score_setup,
+            commands::indicators::calculate_risk,
+            commands::indicators::full_trading_analysis,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

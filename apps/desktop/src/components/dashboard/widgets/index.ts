@@ -10,3 +10,4 @@ export { RecentTransactionsWidget } from './RecentTransactionsWidget';
 export { DividendsWidget } from './DividendsWidget';
 export { WatchlistWidget } from './WatchlistWidget';
 export { BenchmarkWidget } from './BenchmarkWidget';
+export { TradingBriefingWidget } from './TradingBriefingWidget';

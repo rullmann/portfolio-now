@@ -35,6 +35,7 @@ import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
 import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SignalsPanel } from '../../components/charts/SignalsPanel';
 import { AlertsPanel } from '../../components/charts/AlertsPanel';
+import { TradingAnalysisPanel } from '../../components/charts/TradingAnalysisPanel';
 import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel, ShareToXButton } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
@@ -766,7 +767,7 @@ export function ChartsView() {
 
         <div className="flex-1 flex gap-4 min-h-0">
           {/* Left Sidebar - Security Selection */}
-          <div className="w-64 flex-shrink-0 flex flex-col bg-card border border-border rounded-lg overflow-hidden">
+          <div className="w-64 flex-shrink-0 flex flex-col card-surface overflow-hidden">
             {/* Filter Toggle */}
             <div className="p-2 border-b border-border flex gap-1">
               <button
@@ -1050,7 +1051,7 @@ export function ChartsView() {
             {/* Chart Area */}
             <div
               ref={chartContainerRef}
-              className="flex-1 bg-card border border-border rounded-lg overflow-hidden min-h-0"
+              className="flex-1 card-elevated overflow-hidden min-h-0"
             >
               {isComparisonMode ? (
                 // Comparison Mode Chart
@@ -1124,8 +1125,17 @@ export function ChartsView() {
             )}
           </div>
 
-          {/* Right Sidebar - Indicators, Signals, Alerts & Pattern Statistics */}
-          <div className="w-72 flex-shrink-0 space-y-4 overflow-auto max-h-full">
+          {/* Right Sidebar - Trading Analysis, Indicators, Signals, Alerts & Pattern Statistics */}
+          <div className="w-72 flex-shrink-0 space-y-4 overflow-y-auto">
+            {!isComparisonMode && ohlcData.length >= 20 && (
+              <TradingAnalysisPanel
+                data={ohlcData}
+                securityName={selectedSecurity?.name}
+                ticker={selectedSecurity?.ticker || undefined}
+                currency={selectedSecurity?.currency}
+                currentPrice={ohlcData[ohlcData.length - 1]?.close}
+              />
+            )}
             <IndicatorsPanel indicators={indicators} onIndicatorsChange={setIndicators} />
             <SignalsPanel data={ohlcData} />
             <AlertsPanel
@@ -1137,22 +1147,22 @@ export function ChartsView() {
 
             {/* Chart Info */}
             {ohlcData.length > 0 && (
-              <div className="mt-4 bg-card border border-border rounded-lg p-3">
+              <div className="mt-4 card-surface p-3">
                 <div className="text-xs text-muted-foreground font-medium mb-2">Chart-Info</div>
                 <div className="space-y-1 text-xs">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Datenpunkte:</span>
-                    <span className="font-mono">{ohlcData.length}</span>
+                    <span className="font-mono tabular-nums">{ohlcData.length}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Zeitraum:</span>
-                    <span className="font-mono">
+                    <span className="font-mono tabular-nums">
                       {ohlcData[0]?.time} - {ohlcData[ohlcData.length - 1]?.time}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Aktuell:</span>
-                    <span className="font-mono font-semibold">
+                    <span className="font-mono tabular-nums font-semibold">
                       {ohlcData[ohlcData.length - 1]?.close.toFixed(2)} {selectedSecurity?.currency}
                     </span>
                   </div>

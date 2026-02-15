@@ -21,6 +21,7 @@ pub enum WidgetType {
     Alerts,
     Chart,
     Benchmark,
+    TradingBriefing,
 }
 
 // Note: Widget size and labels are defined in the frontend (TypeScript)
@@ -221,6 +222,18 @@ pub fn get_available_widgets() -> Result<Vec<WidgetDefinition>, String> {
             max_width: 4,
             max_height: 4,
             configurable: true,
+        },
+        WidgetDefinition {
+            widget_type: WidgetType::TradingBriefing,
+            label: "Trading Briefing".to_string(),
+            description: "Top-Wertpapiere nach Setup-Score".to_string(),
+            default_width: 2,
+            default_height: 2,
+            min_width: 2,
+            min_height: 2,
+            max_width: 4,
+            max_height: 4,
+            configurable: false,
         },
     ];
 

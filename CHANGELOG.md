@@ -5,6 +5,33 @@ All notable changes to Portfolio Now will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-15
+
+### Added
+- **Trading-Modul: Regime-Erkennung + Setup-Scoring + Risk-Engine**
+  - `indicators/regime.rs`: Markt-Regime-Erkennung (StrongUptrend/Uptrend/Sideways/Downtrend/StrongDowntrend/Squeeze) mit Direction-Score-Algorithmus, ADX, SMA-Alignment, Bollinger-Squeeze-Erkennung
+  - Trade-Setup-Scoring (0-100) mit 5 gewichteten Faktoren: Regime (30%), Momentum (25%), Pattern (15%), Volumen (15%), Risiko (15%)
+  - Setup-Typ-Klassifikation: Trend-Pullback, Trend-Fortsetzung, Squeeze-Auflösung, Umkehr, Mean-Reversion
+  - ATR-basierter Risiko-Rechner: Stop-Loss, Positionsgröße, Risk/Reward-Ratio, Portfolio-Impact
+  - 4 neue Tauri Commands: `detect_regime`, `score_setup`, `calculate_risk`, `full_trading_analysis`
+  - 7 Rust-Tests (Uptrend, Downtrend, insufficient data, score range, risk calculation, full analysis)
+- **Frontend-Komponenten**
+  - `RegimeBadge`: Farbiges Badge pro Regime-Typ (grün/gelb/rot/lila)
+  - `SetupScoreBadge`: Score-Anzeige 0-100 mit Farbverlauf
+  - `TradingAnalysisPanel`: Vollständiges Analyse-Panel mit Regime, Setup-Score-Faktoren, klappbarem Risiko-Rechner und KI-Analyse-Sektion
+- **View-Integrationen**
+  - Watchlist: 2 neue Spalten (Regime, Score), Preis-History auf 6 Monate erweitert
+  - Screener: 2 neue Spalten (Regime, Score), Sortierung nach Setup-Score
+  - Charts: TradingAnalysisPanel im rechten Sidebar
+- **Dashboard Widget: Trading Briefing**
+  - Top 5 Securities nach Setup-Score aus Holdings + Watchlist
+  - Klick navigiert zur Charts-View
+  - Registriert in Widget-Katalog, Container und Rust-Enum
+- **KI-Trading-Analyse**
+  - `build_trading_analysis_prompt()` in `prompts.rs` mit Fast-/Full-Model-Variante
+  - `analyze_trading_setup_with_ai` Tauri Command: Text-Completion über alle 4 AI-Provider
+  - Natürlichsprachliche Interpretation von Regime, Setup und Risiko
+
 ## [0.1.10] - 2026-02-13
 
 ### Added

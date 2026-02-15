@@ -19,6 +19,7 @@ import { RecentTransactionsWidget } from './widgets/RecentTransactionsWidget';
 import { DividendsWidget } from './widgets/DividendsWidget';
 import { WatchlistWidget } from './widgets/WatchlistWidget';
 import { BenchmarkWidget } from './widgets/BenchmarkWidget';
+import { TradingBriefingWidget } from './widgets/TradingBriefingWidget';
 
 interface WidgetContainerProps {
   widgets: WidgetConfig[];
@@ -53,6 +54,7 @@ const widgetComponents: Record<string, React.ComponentType<WidgetProps & Record<
   dividends: DividendsWidget,
   watchlist: WatchlistWidget,
   benchmark: BenchmarkWidget,
+  trading_briefing: TradingBriefingWidget,
 };
 
 export function WidgetContainer({

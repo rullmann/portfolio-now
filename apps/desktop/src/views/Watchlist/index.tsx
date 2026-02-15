@@ -3,14 +3,18 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Newspaper } from 'lucide-react';
+import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Newspaper, History } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { getWatchlists, getWatchlistSecurities, createWatchlist, deleteWatchlist, removeFromWatchlist, getPriceHistory } from '../../lib/api';
 import { TradingViewMiniChart } from '../../components/charts';
-import { SecurityLogo } from '../../components/common';
+import { SecurityLogo, RegimeBadge, SetupScoreBadge } from '../../components/common';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
+import { HistoricalQuotesModal } from '../../components/modals/HistoricalQuotesModal';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
+import { convertToOHLC } from '../../lib/indicators';
+import type { RegimeAnalysis, SetupScore } from '../../lib/indicators';
+import { detectRegime, scoreSetup } from '../../lib/indicators-rust';
 import type { WatchlistData, WatchlistSecurityData, PriceData } from '../../lib/types';
 
 export function WatchlistView() {
@@ -22,8 +26,10 @@ export function WatchlistView() {
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [priceHistories, setPriceHistories] = useState<Record<number, PriceData[]>>({});
+  const [tradingData, setTradingData] = useState<Record<number, { regime: RegimeAnalysis; setup: SetupScore }>>({});
   const { brandfetchApiKey, aiEnabled } = useSettingsStore();
   const [newsModalSecurity, setNewsModalSecurity] = useState<WatchlistSecurityData | null>(null);
+  const [showHistoricalModal, setShowHistoricalModal] = useState(false);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -62,22 +68,33 @@ export function WatchlistView() {
     }
   };
 
-  // Load 1-month price history for all securities
+  // Load 6-month price history for all securities (needed for regime detection)
   const loadPriceHistories = useCallback(async () => {
     if (securities.length === 0) return;
 
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-    const from = oneMonthAgo.toISOString().split('T')[0];
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const from = sixMonthsAgo.toISOString().split('T')[0];
     const to = new Date().toISOString().split('T')[0];
 
     const histories: Record<number, PriceData[]> = {};
+    const trading: Record<number, { regime: RegimeAnalysis; setup: SetupScore }> = {};
 
     await Promise.all(
       securities.map(async (security) => {
         try {
           const prices = await getPriceHistory(security.securityId, from, to);
           histories[security.securityId] = prices;
+
+          // Compute regime + setup if enough data
+          if (prices.length >= 50) {
+            const ohlc = convertToOHLC(prices, 1.5);
+            const [regime, setup] = await Promise.all([
+              detectRegime(ohlc),
+              scoreSetup(ohlc),
+            ]);
+            trading[security.securityId] = { regime, setup };
+          }
         } catch {
           // Ignore errors for individual securities
         }
@@ -85,6 +102,7 @@ export function WatchlistView() {
     );
 
     setPriceHistories(histories);
+    setTradingData(trading);
   }, [securities]);
 
   useEffect(() => {
@@ -167,14 +185,25 @@ export function WatchlistView() {
           <Eye className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold">Watchlist</h1>
         </div>
-        <button
-          onClick={loadWatchlists}
-          disabled={isLoading}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
-        >
-          <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-          Aktualisieren
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowHistoricalModal(true)}
+            disabled={!selectedWatchlist || securities.length === 0}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Komplette Kurshistorie für Watchlist-Titel laden"
+          >
+            <History size={16} />
+            Historie laden
+          </button>
+          <button
+            onClick={loadWatchlists}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+          >
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            Aktualisieren
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -279,9 +308,11 @@ export function WatchlistView() {
                       <tr className="border-b border-border bg-muted/50">
                         <th className="text-left py-3 px-4 font-medium">Wertpapier</th>
                         <th className="text-left py-3 px-4 font-medium">ISIN</th>
-                        <th className="text-center py-3 px-4 font-medium w-32">1M</th>
+                        <th className="text-center py-3 px-4 font-medium w-32">6M</th>
                         <th className="text-right py-3 px-4 font-medium">Kurs</th>
                         <th className="text-right py-3 px-4 font-medium">Änderung</th>
+                        <th className="text-center py-3 px-4 font-medium">Regime</th>
+                        <th className="text-center py-3 px-4 font-medium">Score</th>
                         <th className="text-right py-3 px-4 font-medium">Aktionen</th>
                       </tr>
                     </thead>
@@ -329,6 +360,20 @@ export function WatchlistView() {
                                 <span className="text-muted-foreground">-</span>
                               )}
                             </td>
+                            <td className="py-3 px-4 text-center">
+                              {tradingData[security.securityId] ? (
+                                <RegimeBadge regime={tradingData[security.securityId].regime.regime} />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              {tradingData[security.securityId] ? (
+                                <SetupScoreBadge score={tradingData[security.securityId].setup.totalScore} />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">-</span>
+                              )}
+                            </td>
                             <td className="py-3 px-4 text-right">
                               <div className="flex justify-end gap-1">
                                 {aiEnabled && (
@@ -371,6 +416,14 @@ export function WatchlistView() {
           </div>
         </div>
       </div>
+
+      {/* Historical Quotes Modal */}
+      <HistoricalQuotesModal
+        isOpen={showHistoricalModal}
+        onClose={() => setShowHistoricalModal(false)}
+        onComplete={loadPriceHistories}
+        securityIds={securities.map((s) => s.securityId)}
+      />
 
       {/* News Research Modal */}
       {newsModalSecurity && (

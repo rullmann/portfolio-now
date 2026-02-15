@@ -222,6 +222,72 @@ export interface PatternMatch {
 }
 
 // ============================================================================
+// Trading Analysis Types (Regime, Setup Scoring, Risk)
+// ============================================================================
+
+export type RegimeType =
+  | 'strong_uptrend' | 'uptrend' | 'sideways'
+  | 'downtrend' | 'strong_downtrend' | 'squeeze';
+
+export type VolatilityLevel = 'low' | 'normal' | 'high' | 'extreme';
+
+export type SetupType =
+  | 'trend_following' | 'breakout' | 'reversal'
+  | 'mean_reversion' | 'squeeze' | 'no_setup';
+
+export type TradeDirection = 'long' | 'short' | 'neutral';
+
+export interface RegimeAnalysis {
+  regime: RegimeType;
+  confidence: number;
+  trendStrength: number;
+  volatilityLevel: VolatilityLevel;
+  momentum: number;
+  supportingEvidence: string[];
+}
+
+export interface SetupFactorDetail {
+  name: string;
+  score: number;
+  weight: number;
+  description: string;
+}
+
+export interface SetupScore {
+  totalScore: number;
+  regimeScore: number;
+  momentumScore: number;
+  patternScore: number;
+  volumeScore: number;
+  riskScore: number;
+  factors: SetupFactorDetail[];
+  setupType: SetupType;
+  setupLabel: string;
+  direction: TradeDirection;
+}
+
+export interface RiskAnalysis {
+  atrValue: number;
+  atrStopPrice: number;
+  atrStopPercent: number;
+  suggestedPositionSize: number;
+  suggestedPositionValue: number;
+  riskPerTrade: number;
+  riskRewardRatio: number;
+  portfolioImpactPercent: number;
+  maxLossPercent: number;
+  entryPrice: number;
+  stopPrice: number;
+  targetPrice: number;
+}
+
+export interface TradingAnalysis {
+  regime: RegimeAnalysis;
+  setup: SetupScore;
+  risk: RiskAnalysis | null;
+}
+
+// ============================================================================
 // Utility: Convert price-only data to synthetic OHLC
 // ============================================================================
 

@@ -1,6 +1,7 @@
 use crate::indicators::types::*;
 use crate::indicators::calculations;
 use crate::indicators::patterns;
+use crate::indicators::regime;
 use crate::indicators::signals;
 use crate::indicators::screener;
 
@@ -203,4 +204,40 @@ pub fn detect_all_divergences(data: Vec<OHLCData>, lookback: Option<usize>) -> V
 #[tauri::command]
 pub fn run_screener(securities: Vec<ScreenerSecurityData>, filters: Vec<ScreenerFilter>) -> Vec<ScreenerResult> {
     screener::run_screener(&securities, &filters)
+}
+
+// ============================================================================
+// Trading Analysis Commands (Regime, Setup Scoring, Risk)
+// ============================================================================
+
+#[tauri::command]
+pub fn detect_regime(data: Vec<OHLCData>) -> RegimeAnalysis {
+    regime::detect_regime(&data)
+}
+
+#[tauri::command]
+pub fn score_setup(data: Vec<OHLCData>) -> SetupScore {
+    let regime_result = regime::detect_regime(&data);
+    regime::score_setup(&data, &regime_result)
+}
+
+#[tauri::command]
+pub fn calculate_risk(
+    data: Vec<OHLCData>,
+    account_size: f64,
+    risk_percent: Option<f64>,
+    entry_price: Option<f64>,
+    atr_multiplier: Option<f64>,
+) -> RiskAnalysis {
+    regime::calculate_risk(&data, account_size, risk_percent, entry_price, atr_multiplier)
+}
+
+#[tauri::command]
+pub fn full_trading_analysis(
+    data: Vec<OHLCData>,
+    account_size: Option<f64>,
+    risk_percent: Option<f64>,
+    entry_price: Option<f64>,
+) -> TradingAnalysis {
+    regime::full_trading_analysis(&data, account_size, risk_percent, entry_price)
 }

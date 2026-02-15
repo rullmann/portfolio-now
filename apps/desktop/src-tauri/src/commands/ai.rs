@@ -463,7 +463,7 @@ pub async fn execute_confirmed_ai_action(
 
     log::info!("Executing confirmed AI action: {} with payload: {}", action_type, payload);
 
-    let result = execute_confirmed_watchlist_action(
+    let (message, security_id) = execute_confirmed_watchlist_action(
         &action_type,
         &payload,
         alpha_vantage_api_key,
@@ -472,9 +472,13 @@ pub async fn execute_confirmed_ai_action(
     // Emit watchlist update event if successful
     if action_type.starts_with("watchlist") {
         let _ = app.emit("watchlist-updated", ());
+        // Emit security-added event so App.tsx can auto-fetch historical prices
+        if let Some(sid) = security_id {
+            let _ = app.emit("watchlist-security-added", sid);
+        }
     }
 
-    Ok(result)
+    Ok(message)
 }
 
 // ============================================================================
@@ -1755,6 +1759,78 @@ fn find_security_id(conn: &rusqlite::Connection, isin: &Option<String>, name: &O
 #[derive(Debug, Deserialize)]
 struct WhisperResponse {
     text: String,
+}
+
+// ============================================================================
+// Trading Analysis with AI
+// ============================================================================
+
+/// Request for AI trading analysis
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradingAnalysisAiRequest {
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub security_name: String,
+    pub ticker: String,
+    pub currency: String,
+    pub current_price: f64,
+    pub regime_label: String,
+    pub regime_confidence: f64,
+    pub regime_evidence: Vec<String>,
+    pub setup_score: f64,
+    pub setup_label: String,
+    pub setup_factors: Vec<crate::indicators::types::SetupFactorDetail>,
+    pub risk_data: Option<crate::indicators::types::RiskAnalysis>,
+}
+
+/// Analyze a trading setup with AI
+///
+/// Takes pre-computed regime, setup scoring, and risk data and sends it to the AI
+/// for a natural-language interpretation and trading recommendation.
+#[command]
+pub async fn analyze_trading_setup_with_ai(
+    request: TradingAnalysisAiRequest,
+) -> Result<String, String> {
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+
+    // Auto-upgrade deprecated models
+    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
+        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
+        upgraded.to_string()
+    } else {
+        request.model.clone()
+    };
+
+    // Build the prompt
+    let prompt = crate::ai::build_trading_analysis_prompt(
+        &model,
+        &request.security_name,
+        &request.ticker,
+        &request.currency,
+        request.current_price,
+        &request.regime_label,
+        request.regime_confidence,
+        &request.regime_evidence,
+        request.setup_score,
+        &request.setup_label,
+        &request.setup_factors,
+        request.risk_data.as_ref(),
+    );
+
+    // Call the appropriate provider's text completion
+    let result = match request.provider.as_str() {
+        "claude" => claude::complete_text(&model, &request.api_key, &prompt).await,
+        "openai" => openai::complete_text(&model, &request.api_key, &prompt).await,
+        "gemini" => gemini::complete_text(&model, &request.api_key, &prompt).await,
+        "perplexity" => perplexity::complete_text(&model, &request.api_key, &prompt).await,
+        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+    };
+
+    result.map_err(|e| {
+        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
+    })
 }
 
 /// Transcribe audio using OpenAI Whisper API
