@@ -156,6 +156,7 @@ pub fn init_database(path: &Path) -> Result<()> {
             security_id INTEGER NOT NULL,
             date TEXT NOT NULL,
             value INTEGER NOT NULL,
+            volume INTEGER,
             UNIQUE(security_id, date),
             FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
         );
@@ -388,6 +389,13 @@ pub fn init_database(path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_pp_fifo_lot_remaining ON pp_fifo_lot(remaining_shares) WHERE remaining_shares > 0;
         CREATE INDEX IF NOT EXISTS idx_pp_fifo_consumption_lot ON pp_fifo_consumption(lot_id);
         CREATE INDEX IF NOT EXISTS idx_pp_fifo_consumption_sale ON pp_fifo_consumption(sale_txn_id);
+
+        -- Performance-critical composite indices
+        CREATE INDEX IF NOT EXISTS idx_pp_txn_owner_date ON pp_txn(owner_type, owner_id, date);
+        CREATE INDEX IF NOT EXISTS idx_pp_txn_type_date ON pp_txn(txn_type, date);
+        CREATE INDEX IF NOT EXISTS idx_pp_txn_security_date ON pp_txn(security_id, date);
+        CREATE INDEX IF NOT EXISTS idx_pp_price_security_date_desc ON pp_price(security_id, date DESC);
+        CREATE INDEX IF NOT EXISTS idx_pp_txn_unit_txn_type ON pp_txn_unit(txn_id, unit_type);
 
         -- Cross-entry indices
         CREATE INDEX IF NOT EXISTS idx_pp_cross_entry_uuid ON pp_cross_entry(uuid);
@@ -1193,6 +1201,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "#,
         )?;
         log::info!("Migration: Created ai_user_template_param table");
+    }
+
+    // Migration: Add volume column to pp_price for historical volume data
+    if !column_exists(conn, "pp_price", "volume") {
+        conn.execute("ALTER TABLE pp_price ADD COLUMN volume INTEGER", [])?;
+        log::info!("Migration: Added volume column to pp_price");
     }
 
     // Migration: Create pp_quote_error table for quote fetch errors

@@ -227,11 +227,11 @@ fn get_security_returns(
     end_date: NaiveDate,
 ) -> Result<Vec<(String, f64)>> {
     let sql = r#"
-        SELECT date(date) as d, value
+        SELECT date as d, value
         FROM pp_price
         WHERE security_id = ?
-          AND date(date) >= ?
-          AND date(date) <= ?
+          AND date >= ?
+          AND date <= ?
         ORDER BY d
     "#;
 

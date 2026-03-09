@@ -4,22 +4,26 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, TrendingUp, TrendingDown, Building2, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
+import { X, TrendingUp, TrendingDown, LineChart, Table2, Sparkles, RefreshCw, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type AreaData, type Time } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
 import { SafeMarkdown } from '../common/SafeMarkdown';
 import { AIModelSelector } from '../common/AIModelSelector';
 import { formatDate, type SecurityData, type PriceData } from '../../lib/types';
 import { getPriceHistory, fetchLogosBatch, getCachedLogoData, fetchHistoricalPrices, forceReloadHistoricalPrices } from '../../lib/api';
+import { LogoImage } from '../common/SecurityLogo';
 import { useSettingsStore, type AiProvider } from '../../store';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useEscapeKey } from '../../lib/hooks';
+import { calculateAiCost } from '../../lib/ai-cost';
 
 interface ChartAnalysisResponse {
   analysis: string;
   provider: string;
   model: string;
   tokensUsed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 interface SecurityPriceModalProps {
@@ -99,6 +103,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
 
+  const baseCurrency = useSettingsStore((state) => state.baseCurrency);
   const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
   const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
@@ -125,13 +130,14 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
       case 'openai': return keys.openaiApiKey;
       case 'gemini': return keys.geminiApiKey;
       case 'perplexity': return keys.perplexityApiKey;
+      case 'openrouter': return keys.openrouterApiKey;
     }
   }, [aiProvider, keys]);
 
   // AI Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
-  const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number } | null>(null);
+  const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number; costDisplay?: string } | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isAiCollapsed, setIsAiCollapsed] = useState(true);
 
@@ -208,6 +214,8 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
 
       setAnalysis(result.analysis);
       setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
+      calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
+        .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
     } catch (err) {
       setAnalysisError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -473,18 +481,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
         <div className="flex items-center justify-between p-5 border-b border-border/50">
           <div className="flex items-center gap-4">
             {/* Logo */}
-            {logoUrl ? (
-              <img
-                src={logoUrl}
-                alt=""
-                className="w-12 h-12 rounded-xl object-contain bg-muted/50 p-1"
-                crossOrigin="anonymous"
-              />
-            ) : (
-              <div className="w-12 h-12 rounded-xl bg-muted/50 flex items-center justify-center">
-                <Building2 size={24} className="text-muted-foreground" />
-              </div>
-            )}
+            <LogoImage src={logoUrl} size={48} />
             <div>
               <h2 className="text-title">{security?.name || 'Kursverlauf'}</h2>
               <div className="flex items-center gap-3 text-sm text-muted-foreground mt-0.5">
@@ -695,7 +692,7 @@ export function SecurityPriceModal({ isOpen, onClose, security }: SecurityPriceM
                       <div className="flex items-center justify-between mt-1.5 px-1">
                         <span className="text-[10px] text-muted-foreground/40">Keine Anlageberatung</span>
                         <span className="text-[10px] text-muted-foreground/40 font-mono">
-                          {analysisInfo.model}{analysisInfo.tokens && ` · ${analysisInfo.tokens.toLocaleString()} Tokens`}
+                          {analysisInfo.model}{analysisInfo.tokens && ` · ${analysisInfo.tokens.toLocaleString()} Tokens`}{analysisInfo.costDisplay && ` · ${analysisInfo.costDisplay}`}
                         </span>
                       </div>
                     )}

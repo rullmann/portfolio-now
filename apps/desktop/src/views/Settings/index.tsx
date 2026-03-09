@@ -25,6 +25,7 @@ import {
   Camera,
   X,
   Share2,
+  Loader2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
@@ -33,6 +34,7 @@ import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots, validateAllSecurities, getValidationStatus, getUserProfilePicture, setUserProfilePicture } from '../../lib/api';
 import { AIProviderLogo } from '../../components/common/AIProviderLogo';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import { useApiKeyValidation, type ValidationResult } from '../../hooks/useApiKeyValidation';
 import type { ApiKeyType } from '../../lib/secureStorage';
 import { AttributeTypeManager } from '../../components/attributes';
 import { AiFeatureMatrix } from '../../components/settings';
@@ -54,6 +56,58 @@ const SETTINGS_SECTIONS = [
 ] as const;
 
 type SettingsSection = typeof SETTINGS_SECTIONS[number]['id'];
+
+function ApiKeyStatus({ provider, validationStates, compact = false }: {
+  provider: string;
+  validationStates: Record<string, ValidationResult>;
+  compact?: boolean;
+}) {
+  const result = validationStates[provider];
+  if (!result || result.state === 'idle') return null;
+
+  if (compact) {
+    switch (result.state) {
+      case 'validating':
+        return <Loader2 size={14} className="text-muted-foreground animate-spin shrink-0" />;
+      case 'valid':
+        return <CheckCircle2 size={14} className="text-green-600 shrink-0" />;
+      case 'invalid':
+        return (
+          <span title={result.error || 'Ungültig'}>
+            <AlertTriangle size={14} className="text-red-600 shrink-0" />
+          </span>
+        );
+      default:
+        return null;
+    }
+  }
+
+  switch (result.state) {
+    case 'validating':
+      return (
+        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+          <Loader2 size={12} className="animate-spin" />
+          Wird geprüft...
+        </p>
+      );
+    case 'valid':
+      return (
+        <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+          <CheckCircle2 size={12} />
+          API Key gültig
+        </p>
+      );
+    case 'invalid':
+      return (
+        <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+          <AlertTriangle size={12} />
+          API Key ungültig{result.error ? `: ${result.error}` : ''}
+        </p>
+      );
+    default:
+      return null;
+  }
+}
 
 export function SettingsView() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('general');
@@ -93,6 +147,8 @@ export function SettingsView() {
     setGeminiApiKey,
     perplexityApiKey,
     setPerplexityApiKey,
+    openrouterApiKey,
+    setOpenrouterApiKey,
     divvyDiaryApiKey,
     setDivvyDiaryApiKey,
     symbolValidation,
@@ -122,6 +178,9 @@ export function SettingsView() {
     setApiKey,
   } = useSecureApiKeys();
 
+  // API key validation
+  const { validationStates, validateKey } = useApiKeyValidation();
+
   // Use secure keys if available, fall back to store
   const effectiveBrandfetchApiKey = secureStorageAvailable ? secureKeys.brandfetchApiKey : brandfetchApiKey;
   const effectiveFinnhubApiKey = secureStorageAvailable ? secureKeys.finnhubApiKey : finnhubApiKey;
@@ -132,6 +191,7 @@ export function SettingsView() {
   const effectiveOpenaiApiKey = secureStorageAvailable ? secureKeys.openaiApiKey : openaiApiKey;
   const effectiveGeminiApiKey = secureStorageAvailable ? secureKeys.geminiApiKey : geminiApiKey;
   const effectivePerplexityApiKey = secureStorageAvailable ? secureKeys.perplexityApiKey : perplexityApiKey;
+  const effectiveOpenrouterApiKey = secureStorageAvailable ? secureKeys.openrouterApiKey : openrouterApiKey;
   const effectiveDivvyDiaryApiKey = secureStorageAvailable ? secureKeys.divvyDiaryApiKey : divvyDiaryApiKey;
   const effectiveTwitterClientId = secureStorageAvailable ? secureKeys.twitterClientId : '';
 
@@ -149,9 +209,12 @@ export function SettingsView() {
       case 'openai': setOpenaiApiKey(value); break;
       case 'gemini': setGeminiApiKey(value); break;
       case 'perplexity': setPerplexityApiKey(value); break;
+      case 'openrouter': setOpenrouterApiKey(value); break;
       case 'divvyDiary': setDivvyDiaryApiKey(value); break;
     }
-  }, [setApiKey, setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey, setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey, setPerplexityApiKey, setDivvyDiaryApiKey]);
+    // Trigger debounced validation
+    validateKey(keyType, value);
+  }, [setApiKey, setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey, setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey, setPerplexityApiKey, setOpenrouterApiKey, setDivvyDiaryApiKey, validateKey]);
 
   const [showBrandfetchKey, setShowBrandfetchKey] = useState(false);
   const [showFinnhubKey, setShowFinnhubKey] = useState(false);
@@ -189,6 +252,30 @@ export function SettingsView() {
     };
     loadProfilePicture();
   }, [setProfilePicture]);
+
+  // Validate existing keys on mount
+  useEffect(() => {
+    const keysToValidate: [string, string][] = [
+      ['brandfetch', effectiveBrandfetchApiKey],
+      ['finnhub', effectiveFinnhubApiKey],
+      ['coingecko', effectiveCoingeckoApiKey],
+      ['alphaVantage', effectiveAlphaVantageApiKey],
+      ['twelveData', effectiveTwelveDataApiKey],
+      ['anthropic', effectiveAnthropicApiKey],
+      ['openai', effectiveOpenaiApiKey],
+      ['gemini', effectiveGeminiApiKey],
+      ['perplexity', effectivePerplexityApiKey],
+      ['openrouter', effectiveOpenrouterApiKey],
+      ['divvyDiary', effectiveDivvyDiaryApiKey],
+    ];
+    for (const [provider, key] of keysToValidate) {
+      if (key) {
+        validateKey(provider, key);
+      }
+    }
+  // Only run once when keys are first loaded
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secureKeys]);
 
   // Handle profile picture upload
   const handleUploadProfilePicture = async () => {
@@ -352,6 +439,7 @@ export function SettingsView() {
             case 'openai': return effectiveOpenaiApiKey;
             case 'gemini': return effectiveGeminiApiKey;
             case 'perplexity': return effectivePerplexityApiKey;
+            case 'openrouter': return effectiveOpenrouterApiKey;
             default: return '';
           }
         })(),
@@ -389,7 +477,7 @@ export function SettingsView() {
   };
 
   // Check if any AI provider has an API key
-  const hasAnyAiKey = !!(effectiveAnthropicApiKey || effectiveOpenaiApiKey || effectiveGeminiApiKey || effectivePerplexityApiKey);
+  const hasAnyAiKey = !!(effectiveAnthropicApiKey || effectiveOpenaiApiKey || effectiveGeminiApiKey || effectivePerplexityApiKey || effectiveOpenrouterApiKey);
 
   // Handle chat context size change with validation
   const handleChatContextSizeChange = (value: string) => {
@@ -696,10 +784,7 @@ export function SettingsView() {
                     </button>
                   </div>
                   {effectiveFinnhubApiKey && (
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      {secureStorageAvailable && <Shield size={12} />}
-                      API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
-                    </p>
+                    <ApiKeyStatus provider="finnhub" validationStates={validationStates} />
                   )}
                 </div>
 
@@ -734,10 +819,7 @@ export function SettingsView() {
                     </button>
                   </div>
                   {effectiveCoingeckoApiKey ? (
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      {secureStorageAvailable && <Shield size={12} />}
-                      API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
-                    </p>
+                    <ApiKeyStatus provider="coingecko" validationStates={validationStates} />
                   ) : (
                     <p className="text-xs text-muted-foreground mt-1">
                       Ohne Key: max. 10-30 Anfragen/Minute. Mit Demo-Key: 30 Anfragen/Minute.
@@ -776,10 +858,7 @@ export function SettingsView() {
                     </button>
                   </div>
                   {effectiveAlphaVantageApiKey && (
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      {secureStorageAvailable && <Shield size={12} />}
-                      API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
-                    </p>
+                    <ApiKeyStatus provider="alphaVantage" validationStates={validationStates} />
                   )}
                 </div>
 
@@ -814,10 +893,7 @@ export function SettingsView() {
                     </button>
                   </div>
                   {effectiveTwelveDataApiKey ? (
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      {secureStorageAvailable && <Shield size={12} />}
-                      API Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
-                    </p>
+                    <ApiKeyStatus provider="twelveData" validationStates={validationStates} />
                   ) : (
                     <p className="text-xs text-muted-foreground mt-1">
                       Symbol-Format: NESN.SW wird automatisch zu NESN:SIX konvertiert.
@@ -889,7 +965,7 @@ export function SettingsView() {
                           />
                         </div>
                         {effectiveAnthropicApiKey ? (
-                          <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                          <ApiKeyStatus provider="anthropic" validationStates={validationStates} compact />
                         ) : (
                           <button
                             type="button"
@@ -921,7 +997,7 @@ export function SettingsView() {
                           />
                         </div>
                         {effectiveOpenaiApiKey ? (
-                          <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                          <ApiKeyStatus provider="openai" validationStates={validationStates} compact />
                         ) : (
                           <button
                             type="button"
@@ -953,7 +1029,7 @@ export function SettingsView() {
                           />
                         </div>
                         {effectiveGeminiApiKey ? (
-                          <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                          <ApiKeyStatus provider="gemini" validationStates={validationStates} compact />
                         ) : (
                           <button
                             type="button"
@@ -985,7 +1061,7 @@ export function SettingsView() {
                           />
                         </div>
                         {effectivePerplexityApiKey ? (
-                          <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                          <ApiKeyStatus provider="perplexity" validationStates={validationStates} compact />
                         ) : (
                           <button
                             type="button"
@@ -1003,6 +1079,38 @@ export function SettingsView() {
                           {showAiKeys.perplexity ? <EyeOff size={12} /> : <Eye size={12} />}
                         </button>
                       </div>
+
+                      {/* OpenRouter */}
+                      <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-background">
+                        <AIProviderLogo provider="openrouter" size={16} />
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type={showAiKeys.openrouter ? 'text' : 'password'}
+                            value={effectiveOpenrouterApiKey}
+                            onChange={(e) => handleSetApiKey('openrouter', e.target.value)}
+                            placeholder="OpenRouter API Key"
+                            className="w-full bg-transparent text-xs font-mono focus:outline-none"
+                          />
+                        </div>
+                        {effectiveOpenrouterApiKey ? (
+                          <ApiKeyStatus provider="openrouter" validationStates={validationStates} compact />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => open('https://openrouter.ai/keys')}
+                            className="text-xs text-primary hover:underline shrink-0"
+                          >
+                            Holen
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggleShowAiKey('openrouter')}
+                          className="p-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                        >
+                          {showAiKeys.openrouter ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1015,6 +1123,7 @@ export function SettingsView() {
                         openaiApiKey: effectiveOpenaiApiKey,
                         geminiApiKey: effectiveGeminiApiKey,
                         perplexityApiKey: effectivePerplexityApiKey,
+                        openrouterApiKey: effectiveOpenrouterApiKey,
                       }}
                     />
                   </div>
@@ -1147,10 +1256,7 @@ export function SettingsView() {
                   </button>
                 </div>
                 {effectiveDivvyDiaryApiKey && (
-                  <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                    {secureStorageAvailable && <Shield size={12} />}
-                    API-Key {secureStorageAvailable ? 'sicher ' : ''}gespeichert. Du kannst jetzt Portfolios zu DivvyDiary exportieren.
-                  </p>
+                  <ApiKeyStatus provider="divvyDiary" validationStates={validationStates} />
                 )}
               </div>
 
@@ -1187,10 +1293,7 @@ export function SettingsView() {
                     </button>
                   </div>
                   {effectiveBrandfetchApiKey && (
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      {secureStorageAvailable && <Shield size={12} />}
-                      Client ID {secureStorageAvailable ? 'sicher ' : ''}gespeichert.
-                    </p>
+                    <ApiKeyStatus provider="brandfetch" validationStates={validationStates} />
                   )}
                 </div>
 

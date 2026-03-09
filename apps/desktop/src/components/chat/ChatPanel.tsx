@@ -33,6 +33,7 @@ import type { ChatHistoryMessage, TransactionCreateCommand, PortfolioTransferCom
 import { formatSharesFromScaled, formatAmountFromScaled, getTransactionTypeLabel, formatDate } from '../../lib/types';
 import { DropdownMenu, DropdownItem } from '../common/DropdownMenu';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import { calculateAiCost } from '../../lib/ai-cost';
 
 // Image upload constants
 const MAX_IMAGE_SIZE_MB = 10;
@@ -65,6 +66,8 @@ interface PortfolioChatResponse {
   provider: string;
   model: string;
   tokensUsed: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
   suggestions?: SuggestedAction[];
   pendingQueries?: PendingQuery[];
 }
@@ -292,6 +295,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     return saved ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, parseInt(saved, 10))) : DEFAULT_WIDTH;
   });
   const [isResizing, setIsResizing] = useState(false);
+  const [lastResponseCost, setLastResponseCost] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -365,6 +369,8 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         return keys.geminiApiKey;
       case 'perplexity':
         return keys.perplexityApiKey;
+      case 'openrouter':
+        return keys.openrouterApiKey;
       default:
         return '';
     }
@@ -1252,6 +1258,16 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+
+      // Calculate and display cost
+      calculateAiCost(response.provider, response.model, response.inputTokens, response.outputTokens, response.tokensUsed, baseCurrency)
+        .then(c => {
+          if (c?.totalTokens) {
+            const parts = [`${c.totalTokens.toLocaleString()} Tokens`];
+            if (c.costDisplay) parts.push(c.costDisplay);
+            setLastResponseCost(parts.join(' · '));
+          }
+        });
 
       // Update conversation's messageCount and updatedAt in local state
       setConversations((prev) =>
@@ -2325,6 +2341,12 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               Bitte konfiguriere deinen {aiProvider.toUpperCase()} API-Key in den Einstellungen.
             </div>
           ) : (
+            <>
+            {lastResponseCost && (
+              <div className="text-[10px] text-muted-foreground/50 text-right px-1 font-mono">
+                {lastResponseCost}
+              </div>
+            )}
             <div className="flex gap-2 items-end">
               {/* Image upload button */}
               <button
@@ -2421,6 +2443,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                 </>
               )}
             </div>
+            </>
           )}
 
           {/* Model selector with Vision indicator */}

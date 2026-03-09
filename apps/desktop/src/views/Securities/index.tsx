@@ -24,6 +24,7 @@ import { SecurityFormModal, SecurityPriceModal, TransactionFormModal, StockSplit
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import { useSettingsStore } from '../../store';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 
 // Logo data with source tracking
 interface LogoData {
@@ -125,11 +126,7 @@ export function SecuritiesView() {
   // Get settings from store
   const aiEnabled = useSettingsStore((state) => state.aiEnabled);
   const syncOnlyHeldSecurities = useSettingsStore((state) => state.syncOnlyHeldSecurities);
-  const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
-  const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
-  const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
-  const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
-  const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
+  const { keys: secureKeys } = useSecureApiKeys();
 
   const loadQuoteErrors = useCallback(async () => {
     try {
@@ -179,7 +176,7 @@ export function SecuritiesView() {
           name: s.name || '',
         }));
 
-        const results = await fetchLogosBatch(brandfetchApiKey || '', securitiesToFetch);
+        const results = await fetchLogosBatch(secureKeys.brandfetchApiKey || '', securitiesToFetch);
         const newLogos = new Map<number, LogoData>();
         const toCacheMap = new Map<number, { url: string; domain: string }>();
 
@@ -219,7 +216,7 @@ export function SecuritiesView() {
     };
 
     loadLogos();
-  }, [dbSecurities, brandfetchApiKey]);
+  }, [dbSecurities, secureKeys.brandfetchApiKey]);
 
   // Handle logo load - cache fresh logos after they load in the browser
   const handleLogoLoad = useCallback(async (securityId: number, imgElement: HTMLImageElement) => {
@@ -470,10 +467,10 @@ export function SecuritiesView() {
 
     try {
       const apiKeys = {
-        finnhub: finnhubApiKey || undefined,
-        coingecko: coingeckoApiKey || undefined,
-        alphaVantage: alphaVantageApiKey || undefined,
-        twelveData: twelveDataApiKey || undefined,
+        finnhub: secureKeys.finnhubApiKey || undefined,
+        coingecko: secureKeys.coingeckoApiKey || undefined,
+        alphaVantage: secureKeys.alphaVantageApiKey || undefined,
+        twelveData: secureKeys.twelveDataApiKey || undefined,
       };
 
       await startSync(syncOnlyHeldSecurities, apiKeys);
@@ -492,10 +489,10 @@ export function SecuritiesView() {
 
     try {
       const apiKeys = {
-        finnhub: finnhubApiKey || undefined,
-        coingecko: coingeckoApiKey || undefined,
-        alphaVantage: alphaVantageApiKey || undefined,
-        twelveData: twelveDataApiKey || undefined,
+        finnhub: secureKeys.finnhubApiKey || undefined,
+        coingecko: secureKeys.coingeckoApiKey || undefined,
+        alphaVantage: secureKeys.alphaVantageApiKey || undefined,
+        twelveData: secureKeys.twelveDataApiKey || undefined,
       };
 
       const result = await syncSecurityPrices([securityId], apiKeys);
@@ -777,6 +774,7 @@ export function SecuritiesView() {
                                     src={security.customLogo}
                                     alt=""
                                     className="w-full h-full object-contain"
+                                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                   />
                                 ) : logoData ? (
                                   <img
@@ -789,9 +787,7 @@ export function SecuritiesView() {
                                         handleLogoLoad(security.id, e.currentTarget);
                                       }
                                     }}
-                                    onError={(e) => {
-                                      e.currentTarget.style.display = 'none';
-                                    }}
+                                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                   />
                                 ) : (
                                   <Building2 size={16} className="text-muted-foreground" />

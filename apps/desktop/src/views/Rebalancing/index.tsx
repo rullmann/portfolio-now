@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Building2, Target, Bell } from 'lucide-react';
+import { Scale, RefreshCw, Sparkles, AlertTriangle, X, ChevronDown, ChevronUp, Target, Bell } from 'lucide-react';
 import { SafeMarkdown } from '../../components/common/SafeMarkdown';
 import { getAllHoldings, suggestRebalanceWithAi } from '../../lib/api';
 import type { AggregatedHolding, AiRebalanceSuggestion } from '../../lib/types';
@@ -13,6 +13,7 @@ import { toast, useSettingsStore } from '../../store';
 import { AIProviderLogo } from '../../components/common';
 import { AllocationTargetModal } from '../../components/modals';
 import { AlertsPanel } from '../../components/alerts';
+import { LogoImage } from '../../components/common/SecurityLogo';
 
 interface HoldingWithTarget {
   securityId: number;
@@ -49,6 +50,7 @@ export function RebalancingView() {
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
+    openrouterApiKey,
     baseCurrency,
   } = useSettingsStore();
 
@@ -63,10 +65,12 @@ export function RebalancingView() {
         return !!geminiApiKey;
       case 'perplexity':
         return !!perplexityApiKey;
+      case 'openrouter':
+        return !!openrouterApiKey;
       default:
         return false;
     }
-  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey]);
+  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey, openrouterApiKey]);
 
   const getApiKey = () => {
     switch (aiProvider) {
@@ -78,6 +82,8 @@ export function RebalancingView() {
         return geminiApiKey || '';
       case 'perplexity':
         return perplexityApiKey || '';
+      case 'openrouter':
+        return openrouterApiKey || '';
       default:
         return '';
     }
@@ -329,17 +335,7 @@ export function RebalancingView() {
                     <tr key={h.securityName} className="border-b border-border last:border-0">
                       <td className="py-2">
                         <div className="flex items-center gap-2">
-                          {logo ? (
-                            <img
-                              src={logo}
-                              alt=""
-                              className="w-6 h-6 rounded-md object-contain bg-white flex-shrink-0"
-                            />
-                          ) : (
-                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
-                              <Building2 size={12} className="text-muted-foreground" />
-                            </div>
-                          )}
+                          <LogoImage src={logo} size={24} />
                           <span className="font-medium">{h.securityName}</span>
                         </div>
                       </td>
@@ -444,17 +440,7 @@ export function RebalancingView() {
                         key={t.securityName}
                         className="flex items-start gap-3 p-2 bg-muted/30 rounded-md"
                       >
-                        {logo ? (
-                          <img
-                            src={logo}
-                            alt=""
-                            className="w-5 h-5 rounded-md object-contain bg-white flex-shrink-0"
-                          />
-                        ) : (
-                          <div className="w-5 h-5 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
-                            <Building2 size={10} className="text-muted-foreground" />
-                          </div>
-                        )}
+                        <LogoImage src={logo} size={20} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 text-sm">
                             <span className="font-medium truncate">{t.securityName}</span>

@@ -381,6 +381,9 @@ async function fetchAndCacheLogo(
 
     const blob = await response.blob();
 
+    // Skip corrupt/empty responses
+    if (blob.size < 100) return;
+
     // Convert to base64
     const reader = new FileReader();
     reader.onload = async () => {

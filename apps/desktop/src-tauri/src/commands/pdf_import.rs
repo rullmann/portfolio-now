@@ -36,10 +36,12 @@ fn get_duplicate_check_types(txn_type: ParsedTransactionType) -> Vec<&'static st
     match txn_type {
         ParsedTransactionType::Buy => vec!["BUY", "DELIVERY_INBOUND"],
         ParsedTransactionType::Sell => vec!["SELL", "DELIVERY_OUTBOUND"],
-        ParsedTransactionType::TransferIn => vec!["DELIVERY_INBOUND"],
-        ParsedTransactionType::TransferOut => vec!["DELIVERY_OUTBOUND"],
+        ParsedTransactionType::TransferIn => vec!["DELIVERY_INBOUND", "BUY"],
+        ParsedTransactionType::TransferOut => vec!["DELIVERY_OUTBOUND", "SELL"],
         ParsedTransactionType::Dividend => vec!["DIVIDENDS"],
         ParsedTransactionType::Interest => vec!["INTEREST"],
+        ParsedTransactionType::Deposit => vec!["DEPOSIT"],
+        ParsedTransactionType::Withdrawal => vec!["REMOVAL"],
         _ => vec![],
     }
 }
@@ -90,6 +92,9 @@ pub struct PdfImportResult {
     pub securities_created: i32,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+    /// Security IDs affected by this import (for cache invalidation)
+    #[serde(skip)]
+    pub affected_security_ids: Vec<i64>,
 }
 
 /// Supported banks
@@ -355,7 +360,10 @@ pub async fn import_pdf_transactions(
     // Emit data changed event if import was successful
     if let Ok(ref import_result) = result {
         if import_result.transactions_imported > 0 {
-            emit_data_changed(&app, DataChangedPayload::import(vec![]));
+            emit_data_changed(
+                &app,
+                DataChangedPayload::import(import_result.affected_security_ids.clone()),
+            );
         }
     }
 
@@ -638,6 +646,11 @@ fn import_pdf_transactions_sync(
             }
         } else {
             // Account-only transaction (DIVIDEND, INTEREST, etc.)
+            // Track affected security for cache invalidation
+            if let Some(sec_id) = security_id {
+                affected_security_ids.insert(sec_id);
+            }
+
             let txn_type = effective_type.to_account_type();
             let amount_cents = if effective_type == ParsedTransactionType::Dividend {
                 dividend_amount_cents(txn)
@@ -703,6 +716,7 @@ fn import_pdf_transactions_sync(
         securities_created,
         errors,
         warnings,
+        affected_security_ids: affected_security_ids.into_iter().collect(),
     })
 }
 

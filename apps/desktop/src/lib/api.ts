@@ -813,6 +813,7 @@ export interface OutlierSummary {
 export interface PriceDataWithOutliers {
   date: string;
   value: number;
+  volume?: number;
   /** Whether this price is detected as an outlier (>75% daily change) */
   isOutlier: boolean;
   /** Percentage change from previous day */
@@ -1937,6 +1938,23 @@ export async function getEnhancedDividendCalendar(
   month?: number
 ): Promise<EnhancedMonthCalendarData[]> {
   return invoke<EnhancedMonthCalendarData[]>('get_enhanced_dividend_calendar', { year, month });
+}
+
+/** Result of syncing ex-dividends from DivvyDiary */
+export interface SyncExDividendsResult {
+  totalSecurities: number;
+  successful: number;
+  failed: number;
+  newDividends: number;
+  updatedDividends: number;
+  errors: string[];
+}
+
+/**
+ * Sync ex-dividend dates from DivvyDiary for all held securities with ISIN.
+ */
+export async function syncExDividends(): Promise<SyncExDividendsResult> {
+  return invoke<SyncExDividendsResult>('sync_ex_dividends');
 }
 
 // ============================================================================

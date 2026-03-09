@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Building2, Table2, LineChart as LineChartIcon, ArrowUpDown, ArrowUp, ArrowDown, Download, Layers, ChevronDown, ChevronRight, FileSpreadsheet, FileText } from 'lucide-react';
+import { Table2, LineChart as LineChartIcon, ArrowUpDown, ArrowUp, ArrowDown, Download, Layers, ChevronDown, ChevronRight, FileSpreadsheet, FileText } from 'lucide-react';
 import { createChart, AreaSeries, LineSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, LineData, AreaData, Time } from 'lightweight-charts';
 import type { AggregatedHolding, PortfolioData } from '../types';
@@ -19,7 +19,8 @@ import type { TaxonomyData, SecurityClassification } from '../../lib/types';
 import { formatNumber } from '../utils';
 import { getBaseCurrency, getPortfolioHistory, getTaxonomies, getAllSecurityClassifications } from '../../lib/api';
 import { useCachedLogos } from '../../lib/hooks';
-import { useSettingsStore } from '../../store';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import { LogoImage } from '../../components/common/SecurityLogo';
 import { SecurityDetailChartModal } from '../../components/modals';
 
 interface AssetStatementViewProps {
@@ -84,7 +85,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
   const [portfolioHistory, setPortfolioHistory] = useState<{ date: string; value: number }[]>([]);
   const [isLoadingChart, setIsLoadingChart] = useState(false);
   const [selectedHolding, setSelectedHolding] = useState<HoldingWithLogo | null>(null);
-  const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
+  const { keys: secureKeys } = useSecureApiKeys();
 
   // Grouping state
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -112,7 +113,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
   );
 
   // Use cached logos hook
-  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, secureKeys.brandfetchApiKey);
 
   // Fetch base currency
   useEffect(() => {
@@ -388,11 +389,13 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
 
     const container = chartContainerRef.current;
 
+    const isDark = document.documentElement.classList.contains('dark');
+
     // Create chart
     const chart = createChart(container, {
       layout: {
         background: { color: 'transparent' },
-        textColor: '#888',
+        textColor: isDark ? '#9ca3af' : '#6b7280',
       },
       grid: {
         vertLines: { color: 'rgba(128, 128, 128, 0.1)' },
@@ -653,16 +656,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                         {/* Name with Logo */}
                         <td className="py-2 px-3">
                           <div className="flex items-center gap-2">
-                            {holding.logoUrl ? (
-                              <img
-                                src={holding.logoUrl}
-                                alt=""
-                                className="w-6 h-6 rounded flex-shrink-0"
-                                crossOrigin="anonymous"
-                              />
-                            ) : (
-                              <Building2 size={20} className="text-muted-foreground flex-shrink-0" />
-                            )}
+                            <LogoImage src={holding.logoUrl} size={24} />
                             <span className="font-medium truncate" title={holding.name}>
                               {holding.name}
                             </span>
@@ -764,16 +758,7 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
                               {/* Name with Logo (indented) */}
                               <td className="py-2 px-3 pl-8">
                                 <div className="flex items-center gap-2">
-                                  {holding.logoUrl ? (
-                                    <img
-                                      src={holding.logoUrl}
-                                      alt=""
-                                      className="w-6 h-6 rounded flex-shrink-0"
-                                      crossOrigin="anonymous"
-                                    />
-                                  ) : (
-                                    <Building2 size={20} className="text-muted-foreground flex-shrink-0" />
-                                  )}
+                                  <LogoImage src={holding.logoUrl} size={24} />
                                   <span className="font-medium truncate" title={holding.name}>
                                     {holding.name}
                                   </span>

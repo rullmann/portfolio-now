@@ -292,7 +292,7 @@ export interface TradingAnalysis {
 // ============================================================================
 
 export function convertToOHLC(
-  priceData: Array<{ date: string; value: number }>,
+  priceData: Array<{ date: string; value: number; volume?: number }>,
   volatilityPercent: number = 1.5
 ): OHLCData[] {
   return priceData.map((d, i) => {
@@ -308,7 +308,7 @@ export function convertToOHLC(
       high,
       low,
       close,
-      volume: Math.floor(Math.random() * 1000000) + 100000,
+      volume: d.volume ?? Math.floor(Math.random() * 1000000) + 100000,
     };
   });
 }

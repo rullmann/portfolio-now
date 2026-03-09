@@ -6,8 +6,9 @@
 //! - Portfolio chat assistant with action commands
 
 use crate::ai::{
-    claude, gemini, openai, perplexity,
+    claude, gemini, openai, openrouter, perplexity,
     list_claude_models, list_openai_models, list_gemini_models, list_perplexity_models,
+    list_openrouter_models,
     get_model_upgrade, get_models_for_provider, has_vision_support, ModelInfo,
     AiModelInfo, AiError, ChartAnalysisRequest, ChartAnalysisResponse, AnnotationAnalysisResponse,
     EnhancedChartAnalysisRequest, EnhancedAnnotationAnalysisResponse,
@@ -46,6 +47,7 @@ pub async fn analyze_chart_with_ai(
         "openai" => openai::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
+        "openrouter" => openrouter::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
@@ -74,6 +76,9 @@ pub async fn get_ai_models(
         "perplexity" => list_perplexity_models(&api_key)
             .await
             .map_err(|e| e.to_string()),
+        "openrouter" => list_openrouter_models(&api_key)
+            .await
+            .map_err(|e| e.to_string()),
         _ => Err(format!("Unknown AI provider: {}", provider)),
     }
 }
@@ -99,6 +104,7 @@ pub async fn analyze_chart_with_annotations(
         "openai" => openai::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
+        "openrouter" => openrouter::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
@@ -130,6 +136,7 @@ pub async fn analyze_chart_enhanced(
         "openai" => openai::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
+        "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
@@ -221,6 +228,7 @@ pub async fn analyze_portfolio_with_ai(
                 "openai" => openai::analyze_opportunities(&model, &request.api_key, &context).await,
                 "gemini" => gemini::analyze_opportunities(&model, &request.api_key, &context).await,
                 "perplexity" => perplexity::analyze_opportunities(&model, &request.api_key, &context).await,
+                "openrouter" => openrouter::analyze_opportunities(&model, &request.api_key, &context).await,
                 _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
             }
         }
@@ -231,6 +239,7 @@ pub async fn analyze_portfolio_with_ai(
                 "openai" => openai::analyze_portfolio(&model, &request.api_key, &context).await,
                 "gemini" => gemini::analyze_portfolio(&model, &request.api_key, &context).await,
                 "perplexity" => perplexity::analyze_portfolio(&model, &request.api_key, &context).await,
+                "openrouter" => openrouter::analyze_portfolio(&model, &request.api_key, &context).await,
                 _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
             }
         }
@@ -292,6 +301,10 @@ pub async fn research_security_news(
             // OpenAI uses web_search_preview tool via Responses API
             openai::complete_text_with_web_search(&model, &api_key, &prompt).await
         }
+        "openrouter" => {
+            // OpenRouter uses text completion (web search depends on the underlying model)
+            openrouter::complete_text(&model, &api_key, &prompt).await
+        }
         _ => {
             return Err("Provider unterstützt keine Web-Suche. Bitte Perplexity oder OpenAI verwenden.".to_string());
         }
@@ -303,6 +316,8 @@ pub async fn research_security_news(
             provider: provider.clone(),
             model: model.clone(),
             tokens_used: None,
+            input_tokens: None,
+            output_tokens: None,
         }),
         Err(e) => Err(serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())),
     }
@@ -368,6 +383,7 @@ pub async fn chat_with_portfolio_assistant(
         "openai" => openai::chat(&model, &request.api_key, &request.messages, &context).await,
         "gemini" => gemini::chat(&model, &request.api_key, &request.messages, &context).await,
         "perplexity" => perplexity::chat(&model, &request.api_key, &request.messages, &context).await,
+        "openrouter" => openrouter::chat(&model, &request.api_key, &request.messages, &context).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 
@@ -1825,6 +1841,7 @@ pub async fn analyze_trading_setup_with_ai(
         "openai" => openai::complete_text(&model, &request.api_key, &prompt).await,
         "gemini" => gemini::complete_text(&model, &request.api_key, &prompt).await,
         "perplexity" => perplexity::complete_text(&model, &request.api_key, &prompt).await,
+        "openrouter" => openrouter::complete_text(&model, &request.api_key, &prompt).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 

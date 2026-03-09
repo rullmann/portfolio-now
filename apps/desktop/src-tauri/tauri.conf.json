@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.brandfetch.io; connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.perplexity.ai https://query1.finance.yahoo.com https://finnhub.io https://api.coingecko.com https://pro-api.coingecko.com https://www.alphavantage.co https://api.twelvedata.com https://api.kraken.com https://scanner.tradingview.com https://symbol-search.tradingview.com https://www.ecb.europa.eu https://cdn.brandfetch.io https://api.divvydiary.com https://api.x.com https://api.twitter.com https://upload.twitter.com; font-src 'self' data:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.brandfetch.io; connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.perplexity.ai https://query1.finance.yahoo.com https://finnhub.io https://api.coingecko.com https://pro-api.coingecko.com https://www.alphavantage.co https://api.twelvedata.com https://api.kraken.com https://scanner.tradingview.com https://symbol-search.tradingview.com https://www.ecb.europa.eu https://cdn.brandfetch.io https://api.divvydiary.com https://openrouter.ai https://api.x.com https://api.twitter.com https://upload.twitter.com; font-src 'self' data:"
     }
   },
   "bundle": {

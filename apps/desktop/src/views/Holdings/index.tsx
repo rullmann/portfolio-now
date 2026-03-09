@@ -5,12 +5,14 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Customized } from 'recharts';
-import { Building2, PieChart as PieChartIcon, Newspaper } from 'lucide-react';
+import { PieChart as PieChartIcon, Newspaper, TrendingUp, TrendingDown } from 'lucide-react';
 import type { AggregatedHolding, PortfolioData } from '../types';
 import { formatNumber } from '../utils';
 import { getBaseCurrency } from '../../lib/api';
 import { useCachedLogos } from '../../lib/hooks';
 import { useSettingsStore } from '../../store';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import { LogoImage } from '../../components/common/SecurityLogo';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 
 // Color palette similar to Portfolio Performance
@@ -51,7 +53,13 @@ interface ChartDataItem {
   currency: string;
   shares: number;
   logoUrl?: string;
-  [key: string]: string | number | undefined;
+  gainLoss: number | null;
+  gainLossPercent: number | null;
+  costBasis: number;
+  currentPrice: number | null;
+  purchasePrice: number | null;
+  dividendsTotal: number;
+  [key: string]: string | number | null | undefined;
 }
 
 type ViewMode = 'total' | 'byPortfolio';
@@ -128,7 +136,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
   const [selectedPortfolio, setSelectedPortfolio] = useState<number | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [newsModalHolding, setNewsModalHolding] = useState<AggregatedHolding | null>(null);
-  const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
+  const { keys: secureKeys } = useSecureApiKeys();
   const aiEnabled = useSettingsStore((state) => state.aiEnabled);
 
   // Prepare securities list for logo loading
@@ -142,7 +150,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
   );
 
   // Use cached logos hook
-  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, secureKeys.brandfetchApiKey);
 
   // Fetch base currency
   useEffect(() => {
@@ -183,6 +191,12 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
           currency: holding.currency,
           shares: holding.totalShares,
           logoUrl: holding.logoUrl,
+          gainLoss: holding.gainLoss ?? null,
+          gainLossPercent: holding.gainLossPercent ?? null,
+          costBasis: holding.costBasis,
+          currentPrice: holding.currentPrice,
+          purchasePrice: holding.purchasePrice ?? null,
+          dividendsTotal: holding.dividendsTotal,
         }));
     } else if (selectedPortfolio !== null) {
       const portfolioHoldings = holdingsWithLogos
@@ -212,6 +226,12 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
           currency: holding.currency,
           shares: holding.totalShares,
           logoUrl: holding.logoUrl,
+          gainLoss: holding.gainLoss ?? null,
+          gainLossPercent: holding.gainLossPercent ?? null,
+          costBasis: holding.costBasis,
+          currentPrice: holding.currentPrice,
+          purchasePrice: holding.purchasePrice ?? null,
+          dividendsTotal: holding.dividendsTotal,
         }));
     } else {
       return [];
@@ -233,11 +253,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
     return (
       <div className="bg-card border border-border rounded-lg p-3 shadow-lg z-50">
         <div className="flex items-center gap-2 mb-2">
-          {data.logoUrl ? (
-            <img src={data.logoUrl} alt="" className="w-6 h-6 rounded" crossOrigin="anonymous" />
-          ) : (
-            <Building2 size={24} className="text-muted-foreground" />
-          )}
+          <LogoImage src={data.logoUrl} size={24} />
           <span className="font-medium">{data.name}</span>
         </div>
         <div className="space-y-1 text-sm">
@@ -317,18 +333,47 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
         </div>
       </div>
 
-      {/* Main Content: Chart + Legend side by side */}
+      {/* Summary Cards */}
+      {(() => {
+        const totalGainLoss = chartData.reduce((sum, d) => sum + (d.gainLoss || 0), 0);
+        const totalCostBasis = chartData.reduce((sum, d) => sum + d.costBasis, 0);
+        const totalGainPercent = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
+        const totalDividends = chartData.reduce((sum, d) => sum + d.dividendsTotal, 0);
+        return (
+          <div className="grid grid-cols-4 gap-3 flex-shrink-0">
+            <div className="bg-card rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground mb-1">Marktwert</div>
+              <div className="text-lg font-semibold tabular-nums">{formatNumber(displayedTotal)} {baseCurrency}</div>
+            </div>
+            <div className="bg-card rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground mb-1">Einstandswert</div>
+              <div className="text-lg font-semibold tabular-nums">{formatNumber(totalCostBasis)} {baseCurrency}</div>
+            </div>
+            <div className="bg-card rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground mb-1">Gewinn / Verlust</div>
+              <div className={`text-lg font-semibold tabular-nums ${totalGainLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {totalGainLoss >= 0 ? '+' : ''}{formatNumber(totalGainLoss)} {baseCurrency}
+                <span className="text-sm ml-1">({totalGainPercent >= 0 ? '+' : ''}{totalGainPercent.toFixed(1)}%)</span>
+              </div>
+            </div>
+            <div className="bg-card rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground mb-1">Dividenden</div>
+              <div className="text-lg font-semibold tabular-nums">{formatNumber(totalDividends)} {baseCurrency}</div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Main Content: Chart + Table */}
       <div className="flex-1 min-h-0 flex gap-4">
-        {/* Chart Container */}
+        {/* Chart Container - compact */}
         <div
-          className="bg-card rounded-lg border border-border flex-1 min-w-0 relative p-2"
+          className="bg-card rounded-lg border border-border w-[320px] flex-shrink-0 relative p-2"
           role="img"
-          aria-label={`Donut-Diagramm zeigt ${chartData.length} Positionen mit Gesamtwert ${formatNumber(displayedTotal)} ${baseCurrency}`}
+          aria-label={`Donut-Diagramm zeigt ${chartData.length} Positionen`}
         >
-          {/* Screen reader summary */}
           <div className="sr-only">
             <h2>Vermögensverteilung</h2>
-            <p>Gesamtwert: {formatNumber(displayedTotal)} {baseCurrency}</p>
             <ul>
               {chartData.map((item) => (
                 <li key={item.securityId}>
@@ -345,7 +390,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
                 cx="50%"
                 cy="50%"
                 innerRadius="55%"
-                outerRadius="95%"
+                outerRadius="92%"
                 paddingAngle={1}
                 dataKey="value"
                 onMouseEnter={(_, index) => setHoveredIndex(index)}
@@ -370,7 +415,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
                   const cx = width / 2;
                   const cy = height / 2;
                   const minDim = Math.min(width, height);
-                  const outerRadius = minDim * 0.95 / 2;
+                  const outerRadius = minDim * 0.92 / 2;
                   const innerRadius = outerRadius * 0.55;
                   return (
                     <LogoLayer
@@ -390,78 +435,113 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
           {/* Center Total */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
             <div className="text-center">
-              <div className="text-sm text-muted-foreground">Gesamt</div>
-              <div className="text-2xl font-bold">{formatNumber(displayedTotal)}</div>
-              <div className="text-sm text-muted-foreground">{baseCurrency}</div>
+              <div className="text-xs text-muted-foreground">Gesamt</div>
+              <div className="text-xl font-bold tabular-nums">{formatNumber(displayedTotal)}</div>
+              <div className="text-xs text-muted-foreground">{baseCurrency}</div>
             </div>
           </div>
         </div>
 
-        {/* Legend */}
-        <div className="w-80 bg-card rounded-lg border border-border flex flex-col">
-          <div className="p-3 border-b border-border">
-            <h3 className="font-semibold text-sm">Positionen</h3>
+        {/* Holdings Table */}
+        <div className="flex-1 min-w-0 bg-card rounded-lg border border-border flex flex-col">
+          {/* Table Header */}
+          <div className="grid grid-cols-[minmax(0,2.5fr)_repeat(5,minmax(0,1fr))] gap-2 px-4 py-2.5 border-b border-border text-xs text-muted-foreground font-medium">
+            <div>Position</div>
+            <div className="text-right">Kurs</div>
+            <div className="text-right">Marktwert</div>
+            <div className="text-right">Einstand</div>
+            <div className="text-right">Gewinn/Verlust</div>
+            <div className="text-right">Anteil</div>
           </div>
-          <div className="flex-1 overflow-y-auto p-2">
-            {chartData.map((item, index) => (
-              <div
-                key={item.securityId}
-                className={`group flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
-                  hoveredIndex === index ? 'bg-accent' : 'hover:bg-accent/50'
-                }`}
-                onMouseEnter={() => setHoveredIndex(index)}
-                onMouseLeave={() => setHoveredIndex(null)}
-              >
-                {/* Color indicator */}
+
+          {/* Table Body */}
+          <div className="flex-1 overflow-y-auto">
+            {chartData.map((item, index) => {
+              const isPositive = (item.gainLoss ?? 0) >= 0;
+              return (
                 <div
-                  className="w-3 h-3 rounded-sm flex-shrink-0"
-                  style={{ backgroundColor: item.color }}
-                />
-
-                {/* Logo */}
-                {item.logoUrl ? (
-                  <img
-                    src={item.logoUrl}
-                    alt=""
-                    className="w-6 h-6 rounded flex-shrink-0"
-                    crossOrigin="anonymous"
-                  />
-                ) : (
-                  <Building2 size={24} className="text-muted-foreground flex-shrink-0" />
-                )}
-
-                {/* Name and details */}
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate" title={item.name}>
-                    {item.name}
+                  key={item.securityId}
+                  className={`group grid grid-cols-[minmax(0,2.5fr)_repeat(5,minmax(0,1fr))] gap-2 px-4 py-2.5 items-center cursor-pointer transition-colors border-b border-border/50 last:border-b-0 ${
+                    hoveredIndex === index ? 'bg-accent' : 'hover:bg-accent/50'
+                  }`}
+                  onMouseEnter={() => setHoveredIndex(index)}
+                  onMouseLeave={() => setHoveredIndex(null)}
+                >
+                  {/* Position: Color + Logo + Name + Shares */}
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <LogoImage src={item.logoUrl} size={28} />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-sm truncate" title={item.name}>
+                        {item.name}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {item.shares.toLocaleString('de-DE', { maximumFractionDigits: 2 })} Stk. · {item.currency}
+                      </div>
+                    </div>
+                    {aiEnabled && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const holding = dbHoldings.find(h => h.securityIds.includes(item.securityId));
+                          if (holding) setNewsModalHolding(holding);
+                        }}
+                        className="p-1 hover:bg-muted rounded-md transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                        title="Nachrichten recherchieren"
+                      >
+                        <Newspaper size={14} className="text-muted-foreground" />
+                      </button>
+                    )}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatNumber(item.value)} {baseCurrency}
+
+                  {/* Current Price */}
+                  <div className="text-right text-sm tabular-nums">
+                    {item.currentPrice != null ? formatNumber(item.currentPrice) : '–'}
+                  </div>
+
+                  {/* Market Value */}
+                  <div className="text-right text-sm font-medium tabular-nums">
+                    {formatNumber(item.value)}
+                  </div>
+
+                  {/* Cost Basis */}
+                  <div className="text-right text-sm tabular-nums text-muted-foreground">
+                    {formatNumber(item.costBasis)}
+                  </div>
+
+                  {/* Gain/Loss */}
+                  <div className="text-right">
+                    {item.gainLoss != null ? (
+                      <div className={`text-sm tabular-nums ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                        <div className="flex items-center justify-end gap-1">
+                          {isPositive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                          <span>{isPositive ? '+' : ''}{formatNumber(item.gainLoss)}</span>
+                        </div>
+                        <div className="text-xs">
+                          {isPositive ? '+' : ''}{(item.gainLossPercent ?? 0).toFixed(1)}%
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">–</span>
+                    )}
+                  </div>
+
+                  {/* Allocation % with bar */}
+                  <div className="text-right">
+                    <div className="text-sm font-medium tabular-nums">{item.percentValue.toFixed(1)}%</div>
+                    <div className="mt-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${Math.min(item.percentValue, 100)}%`, backgroundColor: item.color }}
+                      />
+                    </div>
                   </div>
                 </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-1">
-                  {aiEnabled && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const holding = dbHoldings.find(h => h.securityIds.includes(item.securityId));
-                        if (holding) setNewsModalHolding(holding);
-                      }}
-                      className="p-1 hover:bg-muted rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                      title="Nachrichten recherchieren"
-                    >
-                      <Newspaper size={14} className="text-muted-foreground" />
-                    </button>
-                  )}
-                  {/* Percentage */}
-                  <div className="text-sm font-medium tabular-nums">
-                    {item.percentValue.toFixed(1)}%
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

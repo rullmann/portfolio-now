@@ -556,11 +556,11 @@ fn insert_security(tx: &rusqlite::Transaction, import_id: i64, security: &Securi
         |row| row.get(0),
     )?;
 
-    // Insert prices
+    // Insert prices (volume=NULL for PP file imports)
     for price in &security.prices {
         tx.execute(
-            "INSERT OR REPLACE INTO pp_price (security_id, date, value)
-             VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume)
+             VALUES (?1, ?2, ?3, NULL)",
             params![security_id, price.date.to_string(), price.value],
         )?;
     }

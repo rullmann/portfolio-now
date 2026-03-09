@@ -106,6 +106,27 @@ export function PerplexityLogo({ size = 24, className = '' }: LogoProps) {
 }
 
 /**
+ * OpenRouter logo
+ */
+export function OpenRouterLogo({ size = 24, className = '' }: LogoProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path
+        d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm-1 14.93c-3.09-.49-5.5-2.7-6.29-5.58C5.97 13.27 7.86 13 10 13h4c2.14 0 4.03.27 5.29 1.35-.79 2.88-3.2 5.09-6.29 5.58z"
+        fill="#6366F1"
+      />
+    </svg>
+  );
+}
+
+/**
  * Get the appropriate logo component for a provider
  */
 export function AIProviderLogo({
@@ -113,7 +134,7 @@ export function AIProviderLogo({
   size = 24,
   className = ''
 }: {
-  provider: 'claude' | 'openai' | 'gemini' | 'perplexity';
+  provider: string;
   size?: number;
   className?: string;
 }) {
@@ -126,15 +147,20 @@ export function AIProviderLogo({
       return <GeminiLogo size={size} className={className} />;
     case 'perplexity':
       return <PerplexityLogo size={size} className={className} />;
+    case 'openrouter':
+      return <OpenRouterLogo size={size} className={className} />;
+    default:
+      return null;
   }
 }
 
 /**
  * Provider display names
  */
-export const AI_PROVIDER_NAMES = {
+export const AI_PROVIDER_NAMES: Record<string, string> = {
   claude: 'Claude',
   openai: 'OpenAI',
   gemini: 'Gemini',
   perplexity: 'Perplexity',
-} as const;
+  openrouter: 'OpenRouter',
+};

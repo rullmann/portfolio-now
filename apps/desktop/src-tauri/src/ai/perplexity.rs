@@ -63,8 +63,10 @@ struct ResponseMessage {
     content: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct Usage {
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
     total_tokens: u32,
 }
 
@@ -204,6 +206,8 @@ pub async fn analyze(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -302,6 +306,8 @@ pub async fn analyze_with_custom_prompt(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -405,6 +411,8 @@ pub async fn analyze_with_annotations(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -511,6 +519,8 @@ pub async fn analyze_enhanced(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -619,6 +629,8 @@ pub async fn analyze_portfolio(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -709,6 +721,8 @@ pub async fn analyze_opportunities(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -927,6 +941,8 @@ pub async fn chat(
             provider: "Perplexity".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
             suggestions: Vec::new(),
             pending_queries: Vec::new(),
         });

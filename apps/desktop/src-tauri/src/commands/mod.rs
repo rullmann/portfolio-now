@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod ai_helpers;
+pub mod api_keys;
 pub mod alerts;
 pub mod attributes;
 pub mod chat;

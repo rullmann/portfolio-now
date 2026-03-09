@@ -3,6 +3,7 @@
  * Uses the global logo cache to display security logos efficiently.
  */
 
+import { useState, useEffect } from 'react';
 import { Building2 } from 'lucide-react';
 import type { CachedLogo } from '../../lib/hooks';
 
@@ -15,31 +16,70 @@ interface SecurityLogoProps {
   size?: number;
   /** Additional CSS classes */
   className?: string;
+  /** Custom logo URL (from DB), takes priority over cached logos */
+  customLogoUrl?: string | null;
 }
 
 /**
  * Display a security logo with fallback icon.
- *
- * Usage:
- * ```tsx
- * const { logos } = useCachedLogos(securities, brandfetchApiKey);
- * <SecurityLogo securityId={123} logos={logos} size={32} />
- * ```
+ * Uses the global logo cache (useCachedLogos) for logo lookup.
  */
-export function SecurityLogo({ securityId, logos, size = 28, className = '' }: SecurityLogoProps) {
+export function SecurityLogo({ securityId, logos, size = 28, className = '', customLogoUrl }: SecurityLogoProps) {
+  const [hasError, setHasError] = useState(false);
   const logoData = logos.get(securityId);
+  const effectiveUrl = customLogoUrl || logoData?.url;
 
-  if (logoData?.url) {
+  useEffect(() => {
+    setHasError(false);
+  }, [effectiveUrl]);
+
+  if (effectiveUrl && !hasError) {
     return (
       <img
-        src={logoData.url}
+        src={effectiveUrl}
         alt=""
         className={`rounded-md object-contain bg-white flex-shrink-0 ${className}`}
         style={{ width: size, height: size }}
         crossOrigin="anonymous"
-        onError={(e) => {
-          e.currentTarget.style.display = 'none';
-        }}
+        onError={() => setHasError(true)}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`rounded-md bg-muted flex items-center justify-center flex-shrink-0 ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <Building2 size={size * 0.5} className="text-muted-foreground" />
+    </div>
+  );
+}
+
+/**
+ * Simple logo image with error fallback.
+ * For views that have a direct URL string instead of the cachedLogos Map.
+ */
+export function LogoImage({ src, size = 28, className = '' }: {
+  src?: string | null;
+  size?: number;
+  className?: string;
+}) {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  if (src && !hasError) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className={`rounded-md object-contain bg-white flex-shrink-0 ${className}`}
+        style={{ width: size, height: size }}
+        crossOrigin="anonymous"
+        onError={() => setHasError(true)}
       />
     );
   }

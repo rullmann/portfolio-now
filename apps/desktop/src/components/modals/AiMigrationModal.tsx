@@ -23,6 +23,7 @@ const PROVIDER_NAMES: Record<AiProvider, string> = {
   openai: 'OpenAI',
   gemini: 'Gemini',
   perplexity: 'Perplexity',
+  openrouter: 'OpenRouter',
 };
 
 export function AiMigrationModal() {

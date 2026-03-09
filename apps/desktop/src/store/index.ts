@@ -199,7 +199,7 @@ export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-3-flas
 
 // AI Feature Types for individual configuration
 export type AiFeatureId = 'chartAnalysis' | 'portfolioInsights' | 'chatAssistant' | 'pdfOcr' | 'csvImport' | 'quoteAssistant' | 'newsResearch';
-export type AiProvider = 'claude' | 'openai' | 'gemini' | 'perplexity';
+export type AiProvider = 'claude' | 'openai' | 'gemini' | 'perplexity' | 'openrouter';
 
 export interface AiFeatureConfig {
   provider: AiProvider;
@@ -209,9 +209,10 @@ export interface AiFeatureConfig {
 // Default model per provider
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
   claude: 'claude-sonnet-4-5-20250514',
-  openai: 'gpt-4o',
+  openai: 'gpt-5-mini',
   gemini: 'gemini-2.5-flash',
   perplexity: 'sonar-pro',
+  openrouter: 'anthropic/claude-sonnet-4.5',
 };
 
 // Feature definitions with metadata
@@ -234,90 +235,122 @@ export const AI_FEATURES: AiFeatureDefinition[] = [
   { id: 'newsResearch', name: 'Nachrichten-Recherche', description: 'Aktuelle Nachrichten und Analysten-Ratings per Web-Suche', icon: 'Newspaper', requiresVision: false, requiresWebSearch: true },
 ];
 
-// AI Models - Updated January 2026 (Vision-only)
-// Sources:
-// - Claude: https://platform.claude.com/docs/en/about-claude/models/overview
-// - OpenAI: https://platform.openai.com/docs/models
-// - Gemini: https://ai.google.dev/gemini-api/docs/gemini-3
-// - Perplexity: https://docs.perplexity.ai/guides/model-cards
-export const AI_MODELS = {
-  claude: [
-    // Note: Opus 4.5 has NO vision support in API yet
-    { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', description: 'Beste Qualität mit Vision' },
-    { id: 'claude-haiku-4-5-20251015', name: 'Claude Haiku 4.5', description: 'Schnell & günstig' },
-  ],
-  openai: [
-    { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Neuestes GPT-5, schnell & günstig' },
-    { id: 'gpt-4.1', name: 'GPT-4.1', description: '1M Kontext' },
-    { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship Multimodal' },
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell & günstig' },
-  ],
-  gemini: [
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Schnell & günstig, Free Tier' },
-    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Beste Qualität (stabil)' },
-    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'Neuestes Modell (Preview)' },
-    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Neuestes Pro (Preview)' },
-  ],
-  perplexity: [
-    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Vision + Web-Suche' },
-    { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
-  ],
-} as const;
-
-// Web-Search-capable AI Models (for features requiring web search like News Research)
-export const WEB_SEARCH_AI_MODELS: Partial<Record<AiProvider, Array<{ id: string; name: string; description: string }>>> = {
-  openai: [
-    { id: 'gpt-4o', name: 'GPT-4o', description: 'Multimodal + Web-Suche' },
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell + Web-Suche' },
-    { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Neuestes GPT-5 + Web-Suche' },
-  ],
-  perplexity: [
-    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Beste Qualität + Web-Suche' },
-    { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche' },
-  ],
-};
-
-// Vision model type from backend
-export interface VisionModel {
+// AI Model info type (shared between static fallback and dynamic API)
+export interface AiModelInfo {
   id: string;
   name: string;
   description: string;
+  supportsVision?: boolean;
+  supportsWebSearch?: boolean;
+  maxOutputTokens?: number;
+  contextWindow?: number;
+  pricingInput?: number;    // USD per 1M input tokens
+  pricingOutput?: number;   // USD per 1M output tokens
+  deprecationDate?: string; // ISO date, e.g. "2026-06-01"
 }
 
-// Cache for vision models loaded from backend
-const visionModelCache: Record<string, VisionModel[]> = {};
+// Static fallback models — used when no API key available or API call fails
+// These are intentionally minimal; the real list comes from `get_ai_models` API
+export const AI_MODELS_FALLBACK: Record<AiProvider, AiModelInfo[]> = {
+  claude: [
+    { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', description: 'Beste Qualität mit Vision', supportsVision: true, maxOutputTokens: 64000, contextWindow: 200000, pricingInput: 3.0, pricingOutput: 15.0 },
+    { id: 'claude-haiku-4-5-20251015', name: 'Claude Haiku 4.5', description: 'Schnell & günstig', supportsVision: true, maxOutputTokens: 64000, contextWindow: 200000, pricingInput: 1.0, pricingOutput: 5.0 },
+  ],
+  openai: [
+    { id: 'o3', name: 'o3', description: 'Smartest, Vision + Web-Suche', supportsVision: true, supportsWebSearch: true, maxOutputTokens: 100000, contextWindow: 200000, pricingInput: 2.0, pricingOutput: 8.0 },
+    { id: 'o4-mini', name: 'o4-mini', description: 'Schnell, Vision + Web-Suche', supportsVision: true, supportsWebSearch: true, maxOutputTokens: 100000, contextWindow: 200000, pricingInput: 1.10, pricingOutput: 4.40 },
+    { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Neuestes GPT-5, schnell & günstig', supportsVision: true, maxOutputTokens: 128000, contextWindow: 400000, pricingInput: 0.25, pricingOutput: 2.0 },
+    { id: 'gpt-4.1', name: 'GPT-4.1', description: '1M Kontext', supportsVision: false, maxOutputTokens: 32768, contextWindow: 1000000, pricingInput: 2.0, pricingOutput: 8.0 },
+    { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship Multimodal', supportsVision: true, maxOutputTokens: 16384, contextWindow: 128000, pricingInput: 2.50, pricingOutput: 10.0 },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Schnell & günstig', supportsVision: true, maxOutputTokens: 16384, contextWindow: 128000, pricingInput: 0.15, pricingOutput: 0.60 },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Schnell & günstig, Free Tier', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Beste Qualität (stabil)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 1.25, pricingOutput: 10.0 },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'Neuestes Modell (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Neuestes Pro (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 1.25, pricingOutput: 10.0 },
+  ],
+  perplexity: [
+    { id: 'sonar-pro', name: 'Sonar Pro', description: 'Vision + Web-Suche', supportsVision: true, supportsWebSearch: true, maxOutputTokens: 128000, contextWindow: 200000, pricingInput: 3.0, pricingOutput: 15.0 },
+    { id: 'sonar', name: 'Sonar', description: 'Schnell + Web-Suche', supportsVision: true, supportsWebSearch: true, maxOutputTokens: 128000, contextWindow: 200000, pricingInput: 1.0, pricingOutput: 1.0 },
+  ],
+  openrouter: [
+    { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', description: 'via OpenRouter', supportsVision: true, maxOutputTokens: 64000, contextWindow: 200000, pricingInput: 3.0, pricingOutput: 15.0 },
+    { id: 'openai/gpt-4o', name: 'GPT-4o', description: 'via OpenRouter', supportsVision: true, maxOutputTokens: 16384, contextWindow: 128000, pricingInput: 2.50, pricingOutput: 10.0 },
+    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'via OpenRouter', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
+  ],
+};
+
+// Backwards-compat alias (used in migration code and AiFeatureMatrix)
+export const AI_MODELS = AI_MODELS_FALLBACK;
+
+// ============================================================================
+// Dynamic Model Loading — fetches live models from provider APIs
+// ============================================================================
+
+interface ModelCache {
+  models: AiModelInfo[];
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const modelCache: Record<string, ModelCache> = {};
 
 /**
- * Get vision-capable models for a provider from the backend registry.
- * Uses caching to avoid repeated API calls.
- * Falls back to AI_MODELS if backend is unavailable.
+ * Fetch live models from a provider API via `get_ai_models` Tauri command.
+ * Results are cached for 5 minutes. Falls back to static list on error.
  */
-export async function getVisionModels(provider: string): Promise<VisionModel[]> {
-  // Return cached result if available
-  if (visionModelCache[provider]) {
-    return visionModelCache[provider];
+export async function fetchModelsForProvider(provider: AiProvider, apiKey: string): Promise<AiModelInfo[]> {
+  const cacheKey = provider;
+  const cached = modelCache[cacheKey];
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.models;
   }
 
   try {
-    const models = await invoke<VisionModel[]>('get_vision_models', { provider });
-    visionModelCache[provider] = models;
-    return models;
+    const raw = await invoke<AiModelInfo[]>('get_ai_models', { provider, apiKey });
+    // Sort: default model first, then alphabetically
+    const defaultId = DEFAULT_MODELS[provider];
+    const sorted = raw.sort((a, b) => {
+      if (a.id === defaultId) return -1;
+      if (b.id === defaultId) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    modelCache[cacheKey] = { models: sorted, timestamp: Date.now() };
+    return sorted;
   } catch (error) {
-    console.warn(`Failed to load vision models from backend for ${provider}, using fallback:`, error);
-    // Fallback to static AI_MODELS
-    const fallback = AI_MODELS[provider as keyof typeof AI_MODELS];
-    return fallback ? [...fallback] : [];
+    console.warn(`Failed to fetch live models for ${provider}, using fallback:`, error);
+    return [...AI_MODELS_FALLBACK[provider]];
   }
 }
 
-/**
- * Clear the vision model cache (e.g., after settings change).
- */
-export function clearVisionModelCache(): void {
-  Object.keys(visionModelCache).forEach(key => delete visionModelCache[key]);
+/** Clear the model cache (e.g. after API key change) */
+export function clearModelCache(provider?: AiProvider): void {
+  if (provider) {
+    delete modelCache[provider];
+  } else {
+    Object.keys(modelCache).forEach(key => delete modelCache[key]);
+  }
 }
 
-// Deprecated model mappings - auto-upgrade to replacements (January 2026)
+/** Get cached models synchronously (for components that can't await) */
+export function getCachedModels(provider: AiProvider): AiModelInfo[] {
+  const cached = modelCache[provider];
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.models;
+  }
+  return [...AI_MODELS_FALLBACK[provider]];
+}
+
+// Legacy exports for backwards compatibility
+export const WEB_SEARCH_AI_MODELS = {} as Partial<Record<AiProvider, AiModelInfo[]>>; // unused, web search derived from supportsWebSearch
+export type VisionModel = AiModelInfo;
+export async function getVisionModels(provider: string): Promise<AiModelInfo[]> {
+  return getCachedModels(provider as AiProvider).filter(m => m.supportsVision !== false);
+}
+export function clearVisionModelCache(): void { clearModelCache(); }
+
+// Deprecated model mappings — maps old/removed model IDs to current defaults
 const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
   perplexity: {
     'sonar-reasoning': 'sonar-pro',
@@ -325,7 +358,6 @@ const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
     'sonar-deep-research': 'sonar-pro',
   },
   claude: {
-    // Opus 4.5 has no vision - map to Sonnet 4.5
     'claude-opus-4-5-20251101': 'claude-sonnet-4-5-20250514',
     'claude-3-opus-20240229': 'claude-sonnet-4-5-20250514',
     'claude-3-sonnet-20240229': 'claude-sonnet-4-5-20250514',
@@ -336,34 +368,38 @@ const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
     'claude-2.1': 'claude-sonnet-4-5-20250514',
   },
   openai: {
-    // o-series has no vision - map to vision models
-    'o3': 'gpt-4.1',
-    'o3-pro': 'gpt-4.1',
-    'o4-mini': 'gpt-4o-mini',
     'o1': 'gpt-4o',
     'o1-preview': 'gpt-4o',
     'o1-mini': 'gpt-4o-mini',
-    // Old models
     'gpt-4-vision-preview': 'gpt-4o',
-    'gpt-4-turbo': 'gpt-4.1',
+    'gpt-4-turbo': 'gpt-4o',
     'gpt-4-turbo-preview': 'gpt-4o',
+    'gpt-4': 'gpt-4o',
   },
   gemini: {
-    // Old models map to stable 2.5 versions
     'gemini-pro-vision': 'gemini-2.5-flash',
     'gemini-2.0-flash': 'gemini-2.5-flash',
     'gemini-2.0-flash-exp': 'gemini-2.5-flash',
     'gemini-1.5-pro': 'gemini-2.5-pro',
     'gemini-1.5-flash': 'gemini-2.5-flash',
-    // Invalid model names (without -preview suffix)
     'gemini-3-flash': 'gemini-2.5-flash',
     'gemini-3-pro': 'gemini-2.5-pro',
   },
 };
 
-// Get upgraded model if deprecated
+/** Get upgraded model if deprecated; also checks if model exists in fallback list */
 function getUpgradedModel(provider: string, model: string): string | null {
-  return DEPRECATED_MODELS[provider]?.[model] || null;
+  // Explicit deprecated mapping
+  const mapped = DEPRECATED_MODELS[provider]?.[model];
+  if (mapped) return mapped;
+
+  // If model is not in the fallback list, migrate to provider default
+  const fallback = AI_MODELS_FALLBACK[provider as AiProvider];
+  if (fallback && !fallback.some(m => m.id === model)) {
+    return DEFAULT_MODELS[provider as AiProvider] || null;
+  }
+
+  return null;
 }
 
 interface SettingsState {
@@ -410,8 +446,8 @@ interface SettingsState {
   // AI Analysis Settings
   aiEnabled: boolean; // Global toggle to disable all AI features (keeps API keys)
   setAiEnabled: (enabled: boolean) => void;
-  aiProvider: 'claude' | 'openai' | 'gemini' | 'perplexity';
-  setAiProvider: (provider: 'claude' | 'openai' | 'gemini' | 'perplexity') => void;
+  aiProvider: AiProvider;
+  setAiProvider: (provider: AiProvider) => void;
   aiModel: string;
   setAiModel: (model: string) => void;
   anthropicApiKey: string;
@@ -422,6 +458,8 @@ interface SettingsState {
   setGeminiApiKey: (key: string) => void;
   perplexityApiKey: string;
   setPerplexityApiKey: (key: string) => void;
+  openrouterApiKey: string;
+  setOpenrouterApiKey: (key: string) => void;
 
   // External Services API Keys
   divvyDiaryApiKey: string;
@@ -526,11 +564,7 @@ export const useSettingsStore = create<SettingsState>()(
       aiProvider: 'claude',
       setAiProvider: (provider) => set({
         aiProvider: provider,
-        // Reset model to default for new provider
-        aiModel: provider === 'claude' ? 'claude-sonnet-4-5-20250514'
-          : provider === 'openai' ? 'gpt-5-mini'
-          : provider === 'gemini' ? 'gemini-2.5-flash'
-          : 'sonar-pro',
+        aiModel: DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250514',
       }),
       aiModel: 'claude-sonnet-4-5-20250514',
       setAiModel: (model) => set({ aiModel: model }),
@@ -542,6 +576,8 @@ export const useSettingsStore = create<SettingsState>()(
       setGeminiApiKey: (key) => set({ geminiApiKey: key }),
       perplexityApiKey: '',
       setPerplexityApiKey: (key) => set({ perplexityApiKey: key }),
+      openrouterApiKey: '',
+      setOpenrouterApiKey: (key) => set({ openrouterApiKey: key }),
 
       // External Services API Keys
       divvyDiaryApiKey: '',
@@ -604,7 +640,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'portfolio-settings',
-      version: 11, // v11: Added newsResearch to aiFeatureSettings
+      version: 12, // v12: Added OpenRouter as AI provider
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<SettingsState>;
 
@@ -690,6 +726,9 @@ export const useSettingsStore = create<SettingsState>()(
           }
         }
 
+        // Migration v12: OpenRouter added as AI provider (no data migration needed)
+        // openrouterApiKey defaults to '' via store initializer
+
         return state as SettingsState;
       },
       merge: (persistedState, currentState) => {
@@ -714,11 +753,24 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }
 
-        // Validate model exists in current list
-        const validModels = AI_MODELS[provider].map(m => m.id) as string[];
+        // Auto-upgrade deprecated models in aiFeatureSettings
+        if (merged.aiFeatureSettings) {
+          for (const featureId of Object.keys(merged.aiFeatureSettings) as AiFeatureId[]) {
+            const config = merged.aiFeatureSettings[featureId];
+            if (config) {
+              const upgraded = getUpgradedModel(config.provider, config.model);
+              if (upgraded) {
+                console.log(`Auto-upgrading ${featureId} model ${config.model} to ${upgraded}`);
+                merged.aiFeatureSettings[featureId] = { ...config, model: upgraded };
+              }
+            }
+          }
+        }
+
+        // Validate model exists in fallback list
+        const validModels = AI_MODELS_FALLBACK[provider as AiProvider]?.map(m => m.id) || [];
         if (!validModels.includes(merged.aiModel)) {
-          const defaultModel = AI_MODELS[provider][0].id;
-          // Track migration if model was invalid
+          const defaultModel = DEFAULT_MODELS[provider as AiProvider] || validModels[0];
           if (!merged.pendingModelMigration && originalModel !== defaultModel) {
             merged.pendingModelMigration = {
               from: originalModel,
@@ -764,6 +816,8 @@ export const useSettingsStore = create<SettingsState>()(
           setGeminiApiKey,
           perplexityApiKey,
           setPerplexityApiKey,
+          openrouterApiKey,
+          setOpenrouterApiKey,
           divvyDiaryApiKey,
           setDivvyDiaryApiKey,
           // Keep the rest
@@ -780,6 +834,7 @@ export const useSettingsStore = create<SettingsState>()(
         void openaiApiKey; void setOpenaiApiKey;
         void geminiApiKey; void setGeminiApiKey;
         void perplexityApiKey; void setPerplexityApiKey;
+        void openrouterApiKey; void setOpenrouterApiKey;
         void divvyDiaryApiKey; void setDivvyDiaryApiKey;
         void pendingModelMigration; void clearPendingModelMigration;
         void pendingFeatureMigration; void setPendingFeatureMigration; void clearPendingFeatureMigration;

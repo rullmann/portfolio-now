@@ -14,6 +14,7 @@ import { useEscapeKey } from '../../lib/hooks/useEscapeKey';
 import { AIModelSelector } from '../common/AIModelSelector';
 import { SafeMarkdown } from '../common/SafeMarkdown';
 import { RateLimiter } from '../../lib/imageOptimization';
+import { calculateAiCost } from '../../lib/ai-cost';
 
 interface NewsResearchModalProps {
   isOpen: boolean;
@@ -42,17 +43,20 @@ interface NewsResearchResponse {
   provider: string;
   model: string;
   tokensUsed: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: NewsResearchModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<NewsResearchResponse | null>(null);
+  const [costDisplay, setCostDisplay] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [parsedError, setParsedError] = useState<AiError | null>(null);
   const [retryCountdown, setRetryCountdown] = useState(0);
 
   const { keys } = useSecureApiKeys();
-  const { aiFeatureSettings, language } = useSettingsStore();
+  const { aiFeatureSettings, language, baseCurrency } = useSettingsStore();
 
   // Temporary selection (not persisted unless "save as default")
   const [tempSelection, setTempSelection] = useState<{ provider: AiProvider; model: string } | null>(null);
@@ -122,6 +126,8 @@ export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: N
       });
 
       setResult(response);
+      calculateAiCost(response.provider, response.model, response.inputTokens, response.outputTokens, response.tokensUsed, baseCurrency)
+        .then(c => c?.costDisplay && setCostDisplay(c.costDisplay));
     } catch (err) {
       const errorStr = String(err);
       // Try to parse as AiError JSON
@@ -278,6 +284,7 @@ export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: N
               <>
                 {' '} | {result.provider} / {result.model}
                 {result.tokensUsed && ` | ${result.tokensUsed.toLocaleString()} Tokens`}
+                {costDisplay && ` · ${costDisplay}`}
               </>
             )}
           </span>

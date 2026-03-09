@@ -48,6 +48,7 @@ export type ApiKeyType =
   | 'openai'
   | 'gemini'
   | 'perplexity'
+  | 'openrouter'
   | 'divvyDiary'
   | 'twitterClientId';
 
@@ -117,6 +118,7 @@ export async function getAllApiKeys(): Promise<Record<ApiKeyType, string>> {
     'openai',
     'gemini',
     'perplexity',
+    'openrouter',
     'divvyDiary',
     'twitterClientId',
   ];
@@ -131,6 +133,7 @@ export async function getAllApiKeys(): Promise<Record<ApiKeyType, string>> {
     openai: '',
     gemini: '',
     perplexity: '',
+    openrouter: '',
     divvyDiary: '',
     twitterClientId: '',
   };

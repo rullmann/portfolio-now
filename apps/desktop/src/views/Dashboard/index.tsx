@@ -7,7 +7,6 @@ import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   TrendingUp,
   Database,
-  Building2,
   RefreshCw,
   ArrowUpRight,
   ArrowDownRight,
@@ -35,7 +34,9 @@ import type { AggregatedHolding, PortfolioData } from '../types';
 import { formatNumber } from '../utils';
 import { getBaseCurrency, calculatePerformance } from '../../lib/api';
 import { useQuoteSync } from '../../hooks/useQuoteSync';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useCachedLogos } from '../../lib/hooks';
+import { SecurityLogo } from '../../components/common/SecurityLogo';
 import type { PerformanceResult } from '../../lib/types';
 import { PortfolioInsightsModal } from '../../components/modals/PortfolioInsightsModal';
 
@@ -52,10 +53,11 @@ function PortfolioInsightsCard({ onOpenInsights }: PortfolioInsightsCardProps) {
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
+    openrouterApiKey,
   } = useSettingsStore();
 
   // Check if AI is configured (has at least one API key)
-  const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey);
+  const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey || openrouterApiKey);
   const aiConfigured = aiEnabled && hasAnyAiApiKey;
 
   if (!aiConfigured) {
@@ -182,11 +184,13 @@ function PortfolioChart({
 
     const container = chartContainerRef.current;
 
+    const isDark = document.documentElement.classList.contains('dark');
+
     // Create chart with theme-aware colors
     const chart = createChart(container, {
       layout: {
         background: { color: 'transparent' },
-        textColor: '#888',
+        textColor: isDark ? '#9ca3af' : '#6b7280',
         fontFamily: 'Geist Mono, ui-monospace, monospace',
       },
       grid: {
@@ -374,11 +378,7 @@ export function DashboardView({
   onImportPP,
   onRefresh,
 }: DashboardViewProps) {
-  const brandfetchApiKey = useSettingsStore((state) => state.brandfetchApiKey);
-  const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
-  const coingeckoApiKey = useSettingsStore((state) => state.coingeckoApiKey);
-  const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
-  const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
+  const { keys: secureKeys } = useSecureApiKeys();
   const syncOnlyHeldSecurities = useSettingsStore((state) => state.syncOnlyHeldSecurities);
   const autoUpdateInterval = useSettingsStore((state) => state.autoUpdateInterval);
   const setAutoUpdateInterval = useSettingsStore((state) => state.setAutoUpdateInterval);
@@ -409,10 +409,10 @@ export function DashboardView({
     setSyncStatus('Sync...');
     try {
       const apiKeys = {
-        finnhub: finnhubApiKey || undefined,
-        coingecko: coingeckoApiKey || undefined,
-        alphaVantage: alphaVantageApiKey || undefined,
-        twelveData: twelveDataApiKey || undefined,
+        finnhub: secureKeys.finnhubApiKey || undefined,
+        coingecko: secureKeys.coingeckoApiKey || undefined,
+        alphaVantage: secureKeys.alphaVantageApiKey || undefined,
+        twelveData: secureKeys.twelveDataApiKey || undefined,
       };
       await startSync(syncOnlyHeldSecurities, apiKeys);
       setLastSyncTime(new Date());
@@ -426,10 +426,7 @@ export function DashboardView({
     }
   }, [
     isSyncing,
-    finnhubApiKey,
-    coingeckoApiKey,
-    alphaVantageApiKey,
-    twelveDataApiKey,
+    secureKeys,
     syncOnlyHeldSecurities,
     onRefresh,
     setLastSyncTime,
@@ -485,7 +482,7 @@ export function DashboardView({
     [dbHoldings]
   );
 
-  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
+  const { logos: cachedLogos } = useCachedLogos(securitiesForLogos, secureKeys.brandfetchApiKey);
 
   useEffect(() => {
     getBaseCurrency()
@@ -610,7 +607,7 @@ export function DashboardView({
         <div className="flex gap-2 flex-shrink-0">
           {/* Portfolio Value - Hero Card */}
           <div
-            className="card-elevated p-5 flex-[2] min-w-[280px] cursor-help animate-fade-up"
+            className="card-elevated p-5 flex-[2] min-w-[280px] cursor-default animate-fade-up"
             style={{ background: 'var(--gradient-subtle)' }}
             title="Gesamtwert deines Portfolios
 
@@ -675,7 +672,7 @@ Der Gewinn/Verlust zeigt die Differenz zum Einstand (Anschaffungskosten)."
 
           {/* Metric Cards — staggered entrance */}
           <div
-            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-1"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-default animate-fade-up-delay-1"
             title="Tagesperformance
 
 Zeigt die Wertänderung deines Portfolios seit dem letzten Handelstag.
@@ -706,7 +703,7 @@ Hinweis: Berücksichtigt nur Kursänderungen, keine Ein-/Auszahlungen am selben 
           </div>
 
           <div
-            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-2"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-default animate-fade-up-delay-2"
             title="TTWROR (True Time-Weighted Rate of Return)
 
 Misst die reine Anlageperformance unabhängig von Ein- und Auszahlungen.
@@ -734,7 +731,7 @@ Beispiel: Wenn du 1.000€ investierst und der Markt um 10% steigt, ist der TTWR
           </div>
 
           <div
-            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-3"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-default animate-fade-up-delay-3"
             title="IRR (Internal Rate of Return / Interner Zinsfuß)
 
 Misst deine persönliche Rendite unter Berücksichtigung WANN du Geld ein- oder ausgezahlt hast.
@@ -762,7 +759,7 @@ Beispiel: Wenn du vor einem Crash mehr investiert hast, ist dein IRR niedriger a
           </div>
 
           <div
-            className="card-surface p-3 px-4 min-w-[100px] cursor-help animate-fade-up-delay-4"
+            className="card-surface p-3 px-4 min-w-[100px] cursor-default animate-fade-up-delay-4"
             title="Einstand (Cost Basis)
 
 Deine gesamten Anschaffungskosten nach der FIFO-Methode (First In, First Out).
@@ -785,7 +782,7 @@ Verwendung:
 
           {/* Top 3 Performer */}
           <div
-            className="card-surface p-3 px-4 min-w-[180px] cursor-help animate-fade-up-delay-4"
+            className="card-surface p-3 px-4 min-w-[180px] cursor-default animate-fade-up-delay-4"
             title="Top 3 Performer
 
 Die drei Positionen mit der besten prozentualen Performance (unrealisierter Gewinn/Verlust).
@@ -803,19 +800,11 @@ Berechnung:
                 .sort((a, b) => (b.gainLossPercent || 0) - (a.gainLossPercent || 0))
                 .slice(0, 3)
                 .map((holding, index) => {
-                  const cachedLogo = cachedLogos.get(holding.securityIds[0]);
-                  const logoUrl = holding.customLogo || cachedLogo?.url;
                   const gainPercent = holding.gainLossPercent || 0;
                   return (
                     <div key={holding.securityIds[0]} className="flex items-center gap-2">
                       <span className="text-[10px] text-muted-foreground w-3 font-mono">{index + 1}.</span>
-                      <div className="w-5 h-5 rounded bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
-                        {logoUrl ? (
-                          <img src={logoUrl} alt="" className="w-full h-full object-contain" />
-                        ) : (
-                          <Building2 size={10} className="text-muted-foreground" />
-                        )}
-                      </div>
+                      <SecurityLogo securityId={holding.securityIds[0]} logos={cachedLogos} size={20} customLogoUrl={holding.customLogo} />
                       <span className="text-[11px] font-medium truncate flex-1 max-w-[80px]">
                         {holding.name}
                       </span>
@@ -835,7 +824,7 @@ Berechnung:
 
           {/* Auto-Update */}
           <div
-            className="card-surface p-3 px-4 flex flex-col justify-between min-w-[110px] cursor-help animate-fade-up-delay-4"
+            className="card-surface p-3 px-4 flex flex-col justify-between min-w-[110px] cursor-default animate-fade-up-delay-4"
             title="Automatische Kursaktualisierung
 
 Lädt aktuelle Kurse für deine Wertpapiere automatisch im gewählten Intervall.
@@ -963,8 +952,6 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
             </div>
             <div className="flex-1 overflow-y-auto -mx-4 px-4 space-y-0.5">
               {holdingsByValue.map((holding) => {
-                const cachedLogo = cachedLogos.get(holding.securityIds[0]);
-                const logoUrl = holding.customLogo || cachedLogo?.url;
                 const percent =
                   totalValue > 0 ? ((holding.currentValue || 0) / totalValue) * 100 : 0;
                 const gainPercent = holding.gainLossPercent || 0;
@@ -978,13 +965,7 @@ Tipp: API-Keys in den Einstellungen hinterlegen für bessere Abdeckung."
                     key={holding.securityIds[0]}
                     className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-muted/30 transition-all duration-150 cursor-pointer group"
                   >
-                    <div className="w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
-                      {logoUrl ? (
-                        <img src={logoUrl} alt="" className="w-full h-full object-contain" />
-                      ) : (
-                        <Building2 size={12} className="text-muted-foreground" />
-                      )}
-                    </div>
+                    <SecurityLogo securityId={holding.securityIds[0]} logos={cachedLogos} size={28} customLogoUrl={holding.customLogo} />
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate group-hover:text-primary transition-colors">
                         {holding.name}

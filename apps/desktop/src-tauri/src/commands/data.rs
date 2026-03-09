@@ -422,6 +422,7 @@ pub fn get_transactions(
 pub struct PriceData {
     pub date: String,
     pub value: f64,
+    pub volume: Option<i64>,
 }
 
 /// Extended price data with outlier detection
@@ -430,6 +431,7 @@ pub struct PriceData {
 pub struct PriceDataWithOutliers {
     pub date: String,
     pub value: f64,
+    pub volume: Option<i64>,
     /// Whether this price is detected as an outlier (>75% daily change)
     pub is_outlier: bool,
     /// Percentage change from previous day (None for first data point)
@@ -529,6 +531,7 @@ pub fn detect_outliers(prices: &[PriceData]) -> PriceHistoryWithOutliers {
         result_prices.push(PriceDataWithOutliers {
             date: price.date.clone(),
             value: price.value,
+            volume: price.volume,
             is_outlier,
             change_percent,
         });
@@ -559,6 +562,7 @@ fn filter_outliers(prices: &[PriceDataWithOutliers]) -> Vec<PriceData> {
         .map(|p| PriceData {
             date: p.date.clone(),
             value: p.value,
+            volume: p.volume,
         })
         .collect()
 }
@@ -628,7 +632,7 @@ fn get_prices_for_security_internal(security_id: i64) -> anyhow::Result<Vec<Pric
         .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
 
     let mut stmt = conn.prepare(
-        "SELECT date, value FROM pp_price WHERE security_id = ? ORDER BY date ASC",
+        "SELECT date, value, volume FROM pp_price WHERE security_id = ? ORDER BY date ASC",
     )?;
 
     let mut prices = Vec::new();
@@ -639,6 +643,7 @@ fn get_prices_for_security_internal(security_id: i64) -> anyhow::Result<Vec<Pric
         prices.push(PriceData {
             date: row.get(0)?,
             value: prices::to_decimal(value_raw),
+            volume: row.get(2)?,
         });
     }
 
@@ -658,7 +663,7 @@ pub fn get_price_history(
         .ok_or_else(|| "Database not initialized".to_string())?;
 
     let mut sql =
-        String::from("SELECT date, value FROM pp_price WHERE security_id = ?1");
+        String::from("SELECT date, value, volume FROM pp_price WHERE security_id = ?1");
 
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(security_id)];
 
@@ -683,6 +688,7 @@ pub fn get_price_history(
         prices.push(PriceData {
             date: row.get(0).map_err(|e| e.to_string())?,
             value: prices::to_decimal(value_raw),
+            volume: row.get(2).map_err(|e| e.to_string())?,
         });
     }
 

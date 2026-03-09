@@ -80,6 +80,7 @@ export function Header({
     openaiApiKey,
     geminiApiKey,
     perplexityApiKey,
+    openrouterApiKey,
     profilePicture,
     userName,
   } = useSettingsStore();
@@ -101,7 +102,7 @@ export function Header({
   const [selectedNewsSecurity, setSelectedNewsSecurity] = useState<AggregatedHolding | null>(null);
 
   // Check if AI is configured (has at least one API key)
-  const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey);
+  const hasAnyAiApiKey = !!(anthropicApiKey || openaiApiKey || geminiApiKey || perplexityApiKey || openrouterApiKey);
   const aiConfigured = aiEnabled && hasAnyAiApiKey;
 
   const brandfetchApiKey = secureKeys.brandfetchApiKey ?? null;

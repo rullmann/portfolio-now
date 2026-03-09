@@ -8,7 +8,7 @@ use super::{
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
     get_fallback, parse_retry_delay, calculate_backoff_delay, normalize_markdown_response,
-    REQUEST_TIMEOUT_SECS, MAX_RETRIES,
+    REQUEST_TIMEOUT_SECS, MAX_RETRIES, MAX_TOKENS, MAX_TOKENS_INSIGHTS, MAX_TOKENS_CHAT,
 };
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -21,9 +21,19 @@ fn api_url(model: &str, api_key: &str) -> String {
     )
 }
 
+/// Gemini generation config for controlling output token limits
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationConfig {
+    max_output_tokens: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GenerateContentRequest {
     contents: Vec<Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GenerationConfig>,
 }
 
 #[derive(Serialize)]
@@ -67,8 +77,12 @@ struct ResponsePart {
     text: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct UsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: Option<u32>,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: Option<u32>,
     #[serde(rename = "totalTokenCount")]
     total_token_count: Option<u32>,
 }
@@ -137,6 +151,7 @@ pub async fn analyze(
                 },
             ],
         }],
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -201,6 +216,8 @@ pub async fn analyze(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -239,6 +256,7 @@ pub async fn analyze_with_custom_prompt(
                 },
             ],
         }],
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -297,6 +315,8 @@ pub async fn analyze_with_custom_prompt(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -336,6 +356,7 @@ pub async fn ocr_pdf(
                 },
             ],
         }],
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS * 2 }), // PDF OCR needs more
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -394,6 +415,8 @@ pub async fn ocr_pdf(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -432,6 +455,7 @@ pub async fn analyze_with_annotations(
                 },
             ],
         }],
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -495,6 +519,8 @@ pub async fn analyze_with_annotations(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -534,6 +560,7 @@ pub async fn analyze_enhanced(
                 },
             ],
         }],
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -599,6 +626,8 @@ pub async fn analyze_enhanced(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -615,6 +644,8 @@ struct TextGenerateContentRequest {
     contents: Vec<TextContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<SystemInstruction>,
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GenerationConfig>,
 }
 
 #[derive(Serialize)]
@@ -657,6 +688,7 @@ pub async fn analyze_portfolio(
             }],
         }],
         system_instruction: None,
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_INSIGHTS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -717,6 +749,8 @@ pub async fn analyze_portfolio(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -747,6 +781,7 @@ pub async fn analyze_opportunities(
             }],
         }],
         system_instruction: None,
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_INSIGHTS }),
     };
 
     let api_endpoint = api_url(model, api_key);
@@ -807,6 +842,8 @@ pub async fn analyze_opportunities(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
         });
     }
 
@@ -815,10 +852,13 @@ pub async fn analyze_opportunities(
 
 /// Request body for multimodal chat (with system instruction)
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MultimodalChatRequest {
     contents: Vec<Content>,
-    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<SystemInstruction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GenerationConfig>,
 }
 
 /// Chat with portfolio assistant using Gemini
@@ -887,6 +927,7 @@ pub async fn chat(
                         text: build_chat_system_prompt(context),
                     }],
                 }),
+                generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_CHAT }),
             };
 
             client.post(&api_endpoint).json(&request_body).send().await
@@ -909,6 +950,7 @@ pub async fn chat(
                         text: build_chat_system_prompt(context),
                     }],
                 }),
+                generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_CHAT }),
             };
 
             client.post(&api_endpoint).json(&request_body).send().await
@@ -971,6 +1013,8 @@ pub async fn chat(
             provider: "Gemini".to_string(),
             model: model.to_string(),
             tokens_used: data.usage_metadata.and_then(|u| u.total_token_count),
+            input_tokens: data.usage_metadata.and_then(|u| u.prompt_token_count),
+            output_tokens: data.usage_metadata.and_then(|u| u.candidates_token_count),
             suggestions: Vec::new(),
             pending_queries: Vec::new(),
         });
@@ -1003,6 +1047,7 @@ pub async fn complete_text(
             }],
         }],
         system_instruction: None,
+        generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_INSIGHTS }),
     };
 
     let api_endpoint = api_url(model, api_key);

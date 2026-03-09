@@ -85,7 +85,7 @@ export function usePortfolioBatchAnalysis(): UseBatchAnalysisResult {
     abortRequested,
   } = usePortfolioAnalysisStore();
 
-  const { aiProvider, aiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey } =
+  const { aiProvider, aiModel, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey, openrouterApiKey } =
     useSettingsStore();
 
   const abortRef = useRef(false);
@@ -101,8 +101,10 @@ export function usePortfolioBatchAnalysis(): UseBatchAnalysisResult {
         return geminiApiKey;
       case 'perplexity':
         return perplexityApiKey;
+      case 'openrouter':
+        return openrouterApiKey;
     }
-  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey]);
+  }, [aiProvider, anthropicApiKey, openaiApiKey, geminiApiKey, perplexityApiKey, openrouterApiKey]);
 
   // Parse trend from AI response
   const parseTrendFromResponse = (

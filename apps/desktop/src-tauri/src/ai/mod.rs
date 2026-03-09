@@ -20,6 +20,7 @@ use once_cell::sync::Lazy;
 pub mod claude;
 pub mod gemini;
 pub mod openai;
+pub mod openrouter;
 pub mod perplexity;
 
 // Core modules
@@ -216,6 +217,11 @@ pub use command_parser::{
 
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+
+/// Check if a model ID is deprecated (exists in DEPRECATED_MODELS)
+fn is_deprecated_model(model_id: &str) -> bool {
+    models::DEPRECATED_MODELS.iter().any(|(old, _)| *old == model_id)
+}
 use serde::Deserialize;
 
 /// Fetch available models from Claude API
@@ -248,6 +254,12 @@ pub async fn list_claude_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
     struct ClaudeModel {
         id: String,
         display_name: Option<String>,
+        #[serde(default)]
+        input_token_limit: Option<u32>,
+        #[serde(default)]
+        output_token_limit: Option<u32>,
+        #[serde(default)]
+        deprecation_date: Option<String>,
     }
 
     #[derive(Deserialize)]
@@ -257,15 +269,25 @@ pub async fn list_claude_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
 
     let data: ClaudeModelsResponse = response.json().await?;
 
-    // Filter to vision-capable models (claude-3 and newer support vision)
+    // Claude pricing per 1M tokens (USD) — pattern-based for date-variant IDs
+    fn claude_pricing(id: &str) -> (Option<f64>, Option<f64>) {
+        if id.contains("opus") { return (Some(5.0), Some(25.0)); }
+        if id.contains("sonnet") { return (Some(3.0), Some(15.0)); }
+        if id.contains("haiku") { return (Some(1.0), Some(5.0)); }
+        (None, None)
+    }
+
+    // Include all claude models (claude-3+, claude-sonnet-4+, claude-opus-4+, claude-haiku-4+, future versions)
+    // Filter out deprecated models that have been superseded
     let models: Vec<AiModelInfo> = data
         .data
         .into_iter()
         .filter(|m| {
-            m.id.contains("claude-3") ||
-            m.id.contains("claude-sonnet-4") ||
-            m.id.contains("claude-opus-4") ||
-            m.id.contains("claude-haiku-4")
+            m.id.starts_with("claude-") &&
+            !m.id.contains("claude-2") &&
+            !m.id.contains("claude-1") &&
+            !m.id.contains("instant") &&
+            !is_deprecated_model(&m.id)
         })
         .map(|m| {
             let description = if m.id.contains("opus") {
@@ -277,11 +299,18 @@ pub async fn list_claude_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
             } else {
                 "Vision-fähig"
             };
+            let (pi, po) = claude_pricing(&m.id);
             AiModelInfo {
                 name: m.display_name.unwrap_or_else(|| m.id.clone()),
                 id: m.id,
                 description: description.to_string(),
                 supports_vision: true,
+                supports_web_search: false,
+                max_output_tokens: m.output_token_limit,
+                context_window: m.input_token_limit,
+                pricing_input: pi,
+                pricing_output: po,
+                deprecation_date: m.deprecation_date,
             }
         })
         .collect();
@@ -324,31 +353,73 @@ pub async fn list_openai_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
 
     let data: OpenAIModelsResponse = response.json().await?;
 
-    // Filter to vision-capable chat models (o3/o4 are reasoning-only, no vision)
-    let vision_models = ["gpt-4o", "gpt-4-turbo", "gpt-4.1"];
+    // OpenAI /v1/models doesn't return token limits or pricing, so we use hardcoded lookups
+    fn openai_limits(id: &str) -> (Option<u32>, Option<u32>) {
+        // (max_output_tokens, context_window)
+        if id.starts_with("o3") { return (Some(100_000), Some(200_000)); }
+        if id.starts_with("o4") { return (Some(100_000), Some(200_000)); }
+        if id.starts_with("gpt-5") { return (Some(128_000), Some(400_000)); }
+        if id.starts_with("gpt-4.1") { return (Some(32_768), Some(1_000_000)); }
+        if id.starts_with("gpt-4o-mini") { return (Some(16_384), Some(128_000)); }
+        if id.starts_with("gpt-4o") { return (Some(16_384), Some(128_000)); }
+        (None, None)
+    }
+
+    fn openai_pricing(id: &str) -> (Option<f64>, Option<f64>) {
+        // (input $/1M, output $/1M)
+        if id.starts_with("o3") { return (Some(2.0), Some(8.0)); }
+        if id.starts_with("o4") { return (Some(1.10), Some(4.40)); }
+        if id.starts_with("gpt-5") && id.contains("mini") { return (Some(0.25), Some(2.0)); }
+        if id.starts_with("gpt-5") { return (Some(2.0), Some(8.0)); }
+        if id.starts_with("gpt-4.1") { return (Some(2.0), Some(8.0)); }
+        if id.starts_with("gpt-4o-mini") { return (Some(0.15), Some(0.60)); }
+        if id.starts_with("gpt-4o") { return (Some(2.50), Some(10.0)); }
+        (None, None)
+    }
+
+    // Include all relevant chat/reasoning models, exclude deprecated
+    let allowed_prefixes = ["gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4-mini"];
     let models: Vec<AiModelInfo> = data
         .data
         .into_iter()
         .filter(|m| {
-            vision_models.iter().any(|v| m.id.starts_with(v)) &&
+            allowed_prefixes.iter().any(|v| m.id.starts_with(v)) &&
             !m.id.contains("audio") &&
-            !m.id.contains("realtime")
+            !m.id.contains("realtime") &&
+            !m.id.contains("transcribe") &&
+            !m.id.contains("tts") &&
+            !is_deprecated_model(&m.id)
         })
         .map(|m| {
-            let description = if m.id.contains("mini") {
+            let is_reasoning = m.id.starts_with("o3") || m.id.starts_with("o4");
+            let has_web_search = is_reasoning; // o3/o4-mini support web search via tool
+            let description = if m.id.contains("mini") && m.id.starts_with("gpt-5") {
+                "Neuestes GPT-5, schnell & günstig"
+            } else if m.id.contains("mini") {
                 "Schnell & günstig"
-            } else if m.id.starts_with("o3") || m.id.starts_with("o4") {
-                "Reasoning-Modell"
+            } else if m.id.starts_with("o3") {
+                "Smartest, Vision + Web-Suche"
+            } else if m.id.starts_with("o4") {
+                "Schnell, Vision + Web-Suche"
             } else if m.id.contains("4.1") {
-                "Neuestes, 1M Kontext"
+                "1M Kontext"
             } else {
                 "Multimodal"
             };
+            let (max_output, ctx) = openai_limits(&m.id);
+            let (pi, po) = openai_pricing(&m.id);
+            let supports_vision = !m.id.contains("4.1"); // GPT-4.1 is text-only
             AiModelInfo {
                 name: m.id.clone(),
                 id: m.id,
                 description: description.to_string(),
-                supports_vision: true,
+                supports_vision,
+                supports_web_search: has_web_search,
+                max_output_tokens: max_output,
+                context_window: ctx,
+                pricing_input: pi,
+                pricing_output: po,
+                deprecation_date: None,
             }
         })
         .collect();
@@ -383,6 +454,10 @@ pub async fn list_gemini_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
         name: String,
         display_name: Option<String>,
         supported_generation_methods: Option<Vec<String>>,
+        #[serde(default)]
+        input_token_limit: Option<u32>,
+        #[serde(default)]
+        output_token_limit: Option<u32>,
     }
 
     #[derive(Deserialize)]
@@ -392,19 +467,31 @@ pub async fn list_gemini_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
 
     let data: GeminiModelsResponse = response.json().await?;
 
-    // Filter to models that support generateContent (i.e., can process images)
+    // Gemini pricing per 1M tokens (USD) — pattern-based
+    fn gemini_pricing(id: &str) -> (Option<f64>, Option<f64>) {
+        if id.contains("flash") && id.contains("lite") { return (Some(0.075), Some(0.30)); }
+        if id.contains("flash") { return (Some(0.30), Some(2.50)); }
+        if id.contains("pro") { return (Some(1.25), Some(10.0)); }
+        (None, None)
+    }
+
+    // Filter to models that support generateContent — no hardcoded version filter
     let models: Vec<AiModelInfo> = data
         .models
         .into_iter()
         .filter(|m| {
-            // Only include gemini models that support generateContent
             m.supported_generation_methods
                 .as_ref()
                 .map(|methods| methods.contains(&"generateContent".to_string()))
                 .unwrap_or(false)
-                && (m.name.contains("gemini-2") || m.name.contains("gemini-3"))
+                && m.name.contains("gemini")
                 && !m.name.contains("aqa")
                 && !m.name.contains("embedding")
+                && !m.name.contains("bisection")
+                // Exclude very old models (1.0, 1.5)
+                && !m.name.contains("gemini-1.0")
+                && !m.name.contains("gemini-1.5")
+                && !is_deprecated_model(&m.name.replace("models/", ""))
         })
         .map(|m| {
             // Extract model ID from "models/gemini-xxx" format
@@ -416,11 +503,18 @@ pub async fn list_gemini_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
             } else {
                 "Vision-fähig"
             };
+            let (pi, po) = gemini_pricing(&id);
             AiModelInfo {
                 name: m.display_name.unwrap_or_else(|| id.clone()),
                 id,
                 description: description.to_string(),
                 supports_vision: true,
+                supports_web_search: false,
+                max_output_tokens: m.output_token_limit,
+                context_window: m.input_token_limit,
+                pricing_input: pi,
+                pricing_output: po,
+                deprecation_date: None,
             }
         })
         .collect();
@@ -439,12 +533,29 @@ pub async fn list_perplexity_models(_api_key: &str) -> Result<Vec<AiModelInfo>> 
             name: "Sonar Pro".to_string(),
             description: "Beste Qualität + Web-Suche".to_string(),
             supports_vision: true,
+            supports_web_search: true,
+            max_output_tokens: Some(128_000),
+            context_window: Some(200_000),
+            pricing_input: Some(3.0),
+            pricing_output: Some(15.0),
+            deprecation_date: None,
         },
         AiModelInfo {
             id: "sonar".to_string(),
             name: "Sonar".to_string(),
             description: "Schnell + Web-Suche".to_string(),
             supports_vision: true,
+            supports_web_search: true,
+            max_output_tokens: Some(128_000),
+            context_window: Some(200_000),
+            pricing_input: Some(1.0),
+            pricing_output: Some(1.0),
+            deprecation_date: None,
         },
     ])
+}
+
+/// Fetch available models from OpenRouter API
+pub async fn list_openrouter_models(api_key: &str) -> Result<Vec<AiModelInfo>> {
+    openrouter::list_models(api_key).await
 }

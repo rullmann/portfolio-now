@@ -729,8 +729,8 @@ async fn fetch_prices_for_security(security_id: i64) {
 
                 // Also insert into price history
                 let _ = conn.execute(
-                    "INSERT OR REPLACE INTO pp_price (security_id, date, value) VALUES (?1, ?2, ?3)",
-                    params![security_id, date_str, price_scaled],
+                    "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume) VALUES (?1, ?2, ?3, ?4)",
+                    params![security_id, date_str, price_scaled, volume],
                 );
 
                 log::info!(
@@ -759,8 +759,8 @@ async fn fetch_prices_for_security(security_id: i64) {
 
                     if conn
                         .execute(
-                            "INSERT OR IGNORE INTO pp_price (security_id, date, value) VALUES (?1, ?2, ?3)",
-                            params![security_id, date_str, price_scaled],
+                            "INSERT OR IGNORE INTO pp_price (security_id, date, value, volume) VALUES (?1, ?2, ?3, ?4)",
+                            params![security_id, date_str, price_scaled, quote.volume],
                         )
                         .is_ok()
                     {

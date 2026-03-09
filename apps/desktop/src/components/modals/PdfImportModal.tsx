@@ -132,6 +132,8 @@ export function PdfImportModal({ isOpen, onClose, onSuccess, initialFilePath }: 
         return keys.geminiApiKey;
       case 'perplexity':
         return keys.perplexityApiKey;
+      case 'openrouter':
+        return keys.openrouterApiKey;
       default:
         return '';
     }

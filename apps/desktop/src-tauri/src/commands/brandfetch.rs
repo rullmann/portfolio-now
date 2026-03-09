@@ -507,6 +507,11 @@ pub fn get_cached_logo_data(domain: String) -> Option<String> {
 
     if path.exists() {
         let data = std::fs::read(&path).ok()?;
+        if data.len() < 100 {
+            // Corrupt or empty file — delete and return None
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
         let base64_str = base64::engine::general_purpose::STANDARD.encode(&data);
         Some(format!("data:image/png;base64,{}", base64_str))
     } else {
@@ -531,6 +536,11 @@ pub fn save_logo_to_cache(domain: String, base64_data: String) -> Result<String,
     // Decode base64
     let bytes = base64::engine::general_purpose::STANDARD.decode(data_str)
         .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    // Validate minimum size — reject corrupt/empty data
+    if bytes.len() < 100 {
+        return Err("Logo data too small (< 100 bytes), likely corrupt".to_string());
+    }
 
     // Write to file
     std::fs::write(&path, &bytes)
@@ -618,6 +628,12 @@ pub async fn reload_all_logos(
                 if response.status().is_success() {
                     match response.bytes().await {
                         Ok(bytes) => {
+                            // Validate minimum size
+                            if bytes.len() < 100 {
+                                log::debug!("Logo too small for {} ({} bytes), skipping", domain, bytes.len());
+                                continue;
+                            }
+
                             // Save to cache
                             let cache_dir = match get_logo_cache_dir() {
                                 Ok(dir) => dir,

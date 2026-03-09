@@ -790,7 +790,7 @@ pub fn import_prices_csv(
         let price_scaled = (price.unwrap() * 100_000_000.0) as i64;
 
         let result = conn.execute(
-            "INSERT OR REPLACE INTO pp_price (security_id, date, value) VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume) VALUES (?, ?, ?, NULL)",
             rusqlite::params![security_id, date.unwrap().to_string(), price_scaled],
         );
 
@@ -1065,7 +1065,7 @@ CSV-INHALT:
 pub async fn analyze_csv_with_ai(
     request: AiCsvAnalysisRequest,
 ) -> Result<AiCsvAnalysisResponse, String> {
-    use crate::ai::{claude, openai, gemini, perplexity, get_model_upgrade, ChatMessage,
+    use crate::ai::{claude, openai, gemini, openrouter, perplexity, get_model_upgrade, ChatMessage,
         PortfolioInsightsContext, FeesAndTaxesSummary, InvestmentSummary};
 
     // Auto-upgrade deprecated models
@@ -1136,6 +1136,7 @@ pub async fn analyze_csv_with_ai(
         "openai" => openai::chat(&model, &request.api_key, &messages, &empty_context).await,
         "gemini" => gemini::chat(&model, &request.api_key, &messages, &empty_context).await,
         "perplexity" => perplexity::chat(&model, &request.api_key, &messages, &empty_context).await,
+        "openrouter" => openrouter::chat(&model, &request.api_key, &messages, &empty_context).await,
         _ => return Err(format!("Unbekannter Anbieter: {}", request.provider)),
     };
 

@@ -253,7 +253,7 @@ export function ReportsView() {
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={monthlyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#6b728033" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v.toFixed(0)}€`} />
                   <Tooltip formatter={(value) => [typeof value === 'number' ? `${value.toFixed(2)}€` : '-']} />
@@ -424,13 +424,13 @@ export function ReportsView() {
                       </td>
                       <td className="py-3 px-4 text-right">{item.saleCount}</td>
                       <td className="py-3 px-4 text-right">
-                        {formatCurrency(item.totalProceeds )}
+                        {formatCurrency(item.totalProceeds, gainsData.currency)}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        {formatCurrency(item.totalCostBasis )}
+                        {formatCurrency(item.totalCostBasis, gainsData.currency)}
                       </td>
                       <td className={`py-3 px-4 text-right font-medium ${item.totalGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(item.totalGain )}
+                        {formatCurrency(item.totalGain, gainsData.currency)}
                       </td>
                     </tr>
                   ))}

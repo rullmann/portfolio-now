@@ -32,6 +32,7 @@ import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { AiProvider } from '../../store';
 import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
 import { saveAnnotations, getAnnotations } from '../../lib/api';
+import { calculateAiCost } from '../../lib/ai-cost';
 import { ShareToXButton } from './ShareToXButton';
 
 // Local SecurityData type (simplified version used in ChartsView)
@@ -48,6 +49,8 @@ interface ChartAnalysisResponse {
   provider: string;
   model: string;
   tokensUsed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 // Structured AI error from backend
@@ -83,7 +86,7 @@ export function AIAnalysisPanel({
 }: AIAnalysisPanelProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
-  const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number } | null>(null);
+  const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number; costDisplay?: string } | null>(null);
   const [error, setError] = useState<AiError | null>(null);
   const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -104,6 +107,7 @@ export function AIAnalysisPanel({
     aiEnabled,
     aiFeatureSettings,
     setAiFeatureSetting,
+    baseCurrency,
   } = useSettingsStore();
 
   // Secure API keys
@@ -137,6 +141,8 @@ export function AIAnalysisPanel({
         return keys.geminiApiKey;
       case 'perplexity':
         return keys.perplexityApiKey;
+      case 'openrouter':
+        return keys.openrouterApiKey;
     }
   }, [aiProvider, keys]);
 
@@ -546,11 +552,9 @@ export function AIAnalysisPanel({
           setTrendInfo(result.trend);
           setAlerts(result.alerts || []);
           setRiskReward(result.riskReward || null);
-          setAnalysisInfo({
-            provider: result.provider,
-            model: result.model,
-            tokens: result.tokensUsed,
-          });
+          setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
+          calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
+            .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
 
           // Notify parent about new annotations
           onAnnotationsChange?.(annotationsWithIds);
@@ -614,11 +618,9 @@ export function AIAnalysisPanel({
           setTrendInfo(result.trend);
           setAlerts([]); // Clear alerts when using standard endpoint
           setRiskReward(null);
-          setAnalysisInfo({
-            provider: result.provider,
-            model: result.model,
-            tokens: result.tokensUsed,
-          });
+          setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
+          calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
+            .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
 
           // Notify parent about new annotations
           onAnnotationsChange?.(annotationsWithIds);
@@ -675,11 +677,9 @@ export function AIAnalysisPanel({
         setAnalysis(result.analysis);
         setAnnotations([]);
         setTrendInfo(null);
-        setAnalysisInfo({
-          provider: result.provider,
-          model: result.model,
-          tokens: result.tokensUsed,
-        });
+        setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
+        calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
+          .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
 
         // Clear annotations when using text mode
         onAnnotationsChange?.([]);
@@ -1155,6 +1155,7 @@ export function AIAnalysisPanel({
                 <span className="text-xs text-muted-foreground">
                   {analysisInfo.model}
                   {analysisInfo.tokens && ` | ${analysisInfo.tokens.toLocaleString()} Tokens`}
+                  {analysisInfo.costDisplay && ` · ${analysisInfo.costDisplay}`}
                 </span>
               )}
             </div>

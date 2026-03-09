@@ -283,7 +283,11 @@ pub fn get_dividend_patterns() -> Result<Vec<DividendPattern>, String> {
     let conn = conn_guard
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
+    get_dividend_patterns_with_conn(conn)
+}
 
+/// Internal: Analyze dividend patterns using an existing connection (avoids Mutex deadlock)
+fn get_dividend_patterns_with_conn(conn: &rusqlite::Connection) -> Result<Vec<DividendPattern>, String> {
     // Get securities with dividend history (last 3 years)
     let three_years_ago = chrono::Utc::now()
         .date_naive()
@@ -441,8 +445,8 @@ pub fn estimate_annual_dividends(year: Option<i32>) -> Result<DividendForecast, 
         )
         .unwrap_or_else(|_| "EUR".to_string());
 
-    // Get patterns
-    let patterns = get_dividend_patterns()?;
+    // Get patterns (use internal function to avoid Mutex deadlock)
+    let patterns = get_dividend_patterns_with_conn(conn)?;
 
     // Get current holdings
     let mut holdings_stmt = conn
@@ -504,11 +508,65 @@ pub fn estimate_annual_dividends(year: Option<i32>) -> Result<DividendForecast, 
             .insert(*month, *amount);
     }
 
-    // Build forecasts
+    // Get ex-dividend entries for this year from pp_ex_dividend (DivvyDiary etc.)
+    let mut ex_div_stmt = conn
+        .prepare(
+            r#"
+            SELECT e.security_id, s.name, s.isin, e.ex_date, e.pay_date, e.amount, e.currency,
+                   e.frequency, e.is_confirmed
+            FROM pp_ex_dividend e
+            JOIN pp_security s ON s.id = e.security_id
+            WHERE e.ex_date >= ?1 AND e.ex_date <= ?2
+              AND e.amount IS NOT NULL AND e.amount > 0
+            ORDER BY e.ex_date
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    struct ExDivEntry {
+        security_id: i64,
+        security_name: String,
+        security_isin: Option<String>,
+        month: u32,
+        amount_per_share: f64,
+        currency: String,
+        frequency: Option<String>,
+        is_confirmed: bool,
+    }
+
+    let ex_div_entries: Vec<ExDivEntry> = ex_div_stmt
+        .query_map([&year_start, &year_end], |row| {
+            let ex_date: String = row.get(3)?;
+            let month = NaiveDate::parse_from_str(&ex_date, "%Y-%m-%d")
+                .map(|d| d.month())
+                .unwrap_or(1);
+            Ok(ExDivEntry {
+                security_id: row.get(0)?,
+                security_name: row.get(1)?,
+                security_isin: row.get(2)?,
+                month,
+                amount_per_share: row.get(5)?,
+                currency: row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "EUR".to_string()),
+                frequency: row.get(7)?,
+                is_confirmed: row.get::<_, i32>(8)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Group ex-div entries by security
+    let mut ex_div_by_security: HashMap<i64, Vec<&ExDivEntry>> = HashMap::new();
+    for entry in &ex_div_entries {
+        ex_div_by_security.entry(entry.security_id).or_default().push(entry);
+    }
+
+    // Build forecasts from patterns (historical transaction data)
     let mut total_estimated = 0.0;
     let mut total_received = 0.0;
     let mut month_estimates: HashMap<u32, (f64, f64)> = HashMap::new(); // (estimated, received)
     let mut security_forecasts: Vec<SecurityForecast> = Vec::new();
+    let mut covered_securities: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     for pattern in patterns {
         let shares_held = holdings.get(&pattern.security_id).copied().unwrap_or(0.0);
@@ -516,13 +574,54 @@ pub fn estimate_annual_dividends(year: Option<i32>) -> Result<DividendForecast, 
             continue;
         }
 
+        covered_securities.insert(pattern.security_id);
         let sec_received = received_map.get(&pattern.security_id);
 
-        // Estimate payments per month based on pattern
+        // Check if we have ex-div data for this security — prefer it over pattern estimates
+        let ex_divs = ex_div_by_security.get(&pattern.security_id);
+
         let mut expected_payments: Vec<ExpectedPayment> = Vec::new();
         let mut sec_estimated_annual = 0.0;
 
+        // Merge ex-dividend data with pattern months:
+        // - Use ex-div amounts where available (more accurate, announced)
+        // - Fill remaining pattern months with pattern estimates (e.g. Q3/Q4 not yet announced)
+        let ex_div_months: std::collections::HashSet<u32> = ex_divs
+            .map(|entries| entries.iter().map(|e| e.month).collect())
+            .unwrap_or_default();
+
+        // First: add ex-dividend entries (announced amounts)
+        if let Some(ex_entries) = ex_divs {
+            for ex in ex_entries {
+                let estimated_amount = ex.amount_per_share * shares_held;
+                let actual = sec_received.and_then(|m| m.get(&ex.month)).copied();
+                let is_received = actual.is_some();
+
+                expected_payments.push(ExpectedPayment {
+                    month: ex.month,
+                    estimated_amount,
+                    is_received,
+                    actual_amount: actual,
+                });
+
+                if is_received {
+                    total_received += actual.unwrap_or(0.0);
+                    let entry = month_estimates.entry(ex.month).or_insert((0.0, 0.0));
+                    entry.1 += actual.unwrap_or(0.0);
+                } else {
+                    sec_estimated_annual += estimated_amount;
+                    let entry = month_estimates.entry(ex.month).or_insert((0.0, 0.0));
+                    entry.0 += estimated_amount;
+                }
+            }
+        }
+
+        // Second: fill in pattern months NOT covered by ex-div data
         for &month in &pattern.payment_months {
+            if ex_div_months.contains(&month) {
+                continue; // already handled above
+            }
+
             let estimated_amount = pattern.avg_per_share * shares_held;
             let actual = sec_received.and_then(|m| m.get(&month)).copied();
             let is_received = actual.is_some();
@@ -552,6 +651,84 @@ pub fn estimate_annual_dividends(year: Option<i32>) -> Result<DividendForecast, 
             security_name: pattern.security_name.clone(),
             security_isin: pattern.security_isin.clone(),
             pattern,
+            shares_held,
+            estimated_annual: sec_estimated_annual,
+            expected_payments,
+        });
+    }
+
+    // Add securities that have ex-dividend data but NO historical pattern
+    // (e.g. user never received a dividend yet, but DivvyDiary knows upcoming ones)
+    for (sec_id, ex_entries) in &ex_div_by_security {
+        if covered_securities.contains(sec_id) {
+            continue;
+        }
+
+        let shares_held = holdings.get(sec_id).copied().unwrap_or(0.0);
+        if shares_held <= 0.0 {
+            continue;
+        }
+
+        let first = &ex_entries[0];
+        let mut expected_payments: Vec<ExpectedPayment> = Vec::new();
+        let mut sec_estimated_annual = 0.0;
+
+        // Collect unique payment months from ex-div entries
+        let mut payment_months: Vec<u32> = ex_entries.iter().map(|e| e.month).collect();
+        payment_months.sort();
+        payment_months.dedup();
+
+        let avg_per_share = if !ex_entries.is_empty() {
+            ex_entries.iter().map(|e| e.amount_per_share).sum::<f64>() / ex_entries.len() as f64
+        } else {
+            0.0
+        };
+
+        let sec_received = received_map.get(sec_id);
+
+        for ex in ex_entries.iter() {
+            let estimated_amount = ex.amount_per_share * shares_held;
+            let actual = sec_received.and_then(|m| m.get(&ex.month)).copied();
+            let is_received = actual.is_some();
+
+            expected_payments.push(ExpectedPayment {
+                month: ex.month,
+                estimated_amount,
+                is_received,
+                actual_amount: actual,
+            });
+
+            if is_received {
+                total_received += actual.unwrap_or(0.0);
+                let entry = month_estimates.entry(ex.month).or_insert((0.0, 0.0));
+                entry.1 += actual.unwrap_or(0.0);
+            } else {
+                sec_estimated_annual += estimated_amount;
+                let entry = month_estimates.entry(ex.month).or_insert((0.0, 0.0));
+                entry.0 += estimated_amount;
+            }
+        }
+
+        total_estimated += sec_estimated_annual;
+
+        let frequency_str = first.frequency.clone()
+            .unwrap_or_else(|| detect_frequency(&payment_months, ex_entries.len()));
+
+        security_forecasts.push(SecurityForecast {
+            security_id: *sec_id,
+            security_name: first.security_name.clone(),
+            security_isin: first.security_isin.clone(),
+            pattern: DividendPattern {
+                security_id: *sec_id,
+                security_name: first.security_name.clone(),
+                security_isin: first.security_isin.clone(),
+                frequency: frequency_str,
+                payment_months,
+                avg_per_share,
+                recent_amounts: ex_entries.iter().map(|e| e.amount_per_share).collect(),
+                growth_rate: None,
+                currency: first.currency.clone(),
+            },
             shares_held,
             estimated_annual: sec_estimated_annual,
             expected_payments,
@@ -1224,4 +1401,182 @@ pub fn get_enhanced_dividend_calendar(
     result.sort_by_key(|m| m.month);
 
     Ok(result)
+}
+
+// ============================================================================
+// DivvyDiary Dividend Sync
+// ============================================================================
+
+/// Result of syncing ex-dividends from DivvyDiary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncExDividendsResult {
+    pub total_securities: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub new_dividends: usize,
+    pub updated_dividends: usize,
+    pub errors: Vec<String>,
+}
+
+/// Sync ex-dividend dates from DivvyDiary for all held securities with ISIN
+#[command]
+pub async fn sync_ex_dividends() -> Result<SyncExDividendsResult, String> {
+    use super::divvydiary;
+
+    // Step 1: Get all held securities with ISIN (provider-agnostic)
+    let securities = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard
+            .as_ref()
+            .ok_or_else(|| "Database not initialized".to_string())?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT DISTINCT s.id, s.isin
+                FROM pp_security s
+                JOIN pp_txn t ON t.security_id = s.id
+                WHERE t.owner_type = 'portfolio'
+                  AND s.isin IS NOT NULL
+                  AND s.isin != ''
+                GROUP BY s.id
+                HAVING SUM(CASE
+                    WHEN t.txn_type IN ('BUY','TRANSFER_IN','DELIVERY_INBOUND') THEN t.shares
+                    WHEN t.txn_type IN ('SELL','TRANSFER_OUT','DELIVERY_OUTBOUND') THEN -t.shares
+                    ELSE 0
+                END) > 0
+                "#,
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        rows
+    };
+
+    let total_securities = securities.len();
+    let mut successful = 0usize;
+    let mut failed = 0usize;
+    let mut new_dividends = 0usize;
+    let mut updated_dividends = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    // Only fetch dividends from the last 2 years onwards
+    let today = chrono::Utc::now().date_naive();
+    let min_date = today
+        .checked_sub_months(chrono::Months::new(24))
+        .unwrap_or(today);
+
+    // Step 2: Fetch dividends from DivvyDiary for each security
+    for (sec_id, isin) in &securities {
+        match divvydiary::fetch_dividends_for_isin(isin, min_date).await {
+            Ok((entries, frequency)) => {
+                if entries.is_empty() {
+                    successful += 1;
+                    continue;
+                }
+
+                // Upsert into database
+                let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+                let conn = conn_guard
+                    .as_ref()
+                    .ok_or_else(|| "Database not initialized".to_string())?;
+
+                for entry in &entries {
+                    // Normalize GBX/GBp to GBP (divide amount by 100)
+                    let (amount, currency) = if entry.currency == "GBp" || entry.currency == "GBX" {
+                        (entry.amount / 100.0, "GBP".to_string())
+                    } else {
+                        (entry.amount, entry.currency.clone())
+                    };
+
+                    let is_confirmed = if entry.forecast { 0i32 } else { 1i32 };
+
+                    // Check if entry already exists (for new vs updated counting)
+                    let existing: bool = conn
+                        .query_row(
+                            "SELECT COUNT(*) > 0 FROM pp_ex_dividend WHERE security_id = ?1 AND ex_date = ?2",
+                            rusqlite::params![sec_id, entry.ex_date],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(false);
+
+                    let result = conn.execute(
+                        r#"
+                        INSERT INTO pp_ex_dividend (security_id, ex_date, pay_date, amount, currency, frequency, source, is_confirmed)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'DivvyDiary', ?7)
+                        ON CONFLICT(security_id, ex_date) DO UPDATE SET
+                            pay_date = COALESCE(excluded.pay_date, pay_date),
+                            amount = excluded.amount,
+                            currency = excluded.currency,
+                            frequency = excluded.frequency,
+                            source = 'DivvyDiary',
+                            is_confirmed = excluded.is_confirmed,
+                            updated_at = datetime('now')
+                        WHERE source IN ('DivvyDiary', 'Yahoo Finance') OR source IS NULL
+                        "#,
+                        rusqlite::params![
+                            sec_id,
+                            entry.ex_date,
+                            entry.pay_date,
+                            amount,
+                            currency,
+                            frequency,
+                            is_confirmed,
+                        ],
+                    );
+
+                    match result {
+                        Ok(changes) => {
+                            if changes > 0 {
+                                if existing {
+                                    updated_dividends += 1;
+                                } else {
+                                    new_dividends += 1;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to upsert dividend for {} on {}: {}", isin, entry.ex_date, e);
+                        }
+                    }
+                }
+
+                successful += 1;
+            }
+            Err(e) => {
+                let err_msg = format!("{}: {}", isin, e);
+                log::warn!("Failed to fetch dividends for {}: {}", isin, e);
+                errors.push(err_msg);
+                failed += 1;
+            }
+        }
+
+        // Rate limit: 300ms between requests
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+
+    log::info!(
+        "DivvyDiary dividend sync complete: {}/{} securities, {} new, {} updated, {} errors",
+        successful, total_securities, new_dividends, updated_dividends, failed
+    );
+
+    Ok(SyncExDividendsResult {
+        total_securities,
+        successful,
+        failed,
+        new_dividends,
+        updated_dividends,
+        errors,
+    })
 }

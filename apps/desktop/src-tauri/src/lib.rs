@@ -180,6 +180,7 @@ pub fn run() {
             commands::dividends::delete_ex_dividend,
             commands::dividends::get_upcoming_ex_dividends,
             commands::dividends::get_enhanced_dividend_calendar,
+            commands::dividends::sync_ex_dividends,
             // German Tax (DE)
             tax::get_tax_settings,
             tax::save_tax_settings,
@@ -436,6 +437,8 @@ pub fn run() {
             commands::indicators::score_setup,
             commands::indicators::calculate_risk,
             commands::indicators::full_trading_analysis,
+            // API Key Validation
+            commands::api_keys::validate_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

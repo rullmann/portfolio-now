@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { TrendingUp, TrendingDown, Calendar, Building2, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Calendar, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -18,6 +18,8 @@ import { estimateAnnualDividends, getCachedLogoData, fetchLogosBatch, getSecurit
 import type { DividendForecast as ForecastData } from '../../lib/api';
 import type { SecurityData } from '../../lib/types';
 import { useSettingsStore } from '../../store';
+import { SecurityLogo } from '../../components/common/SecurityLogo';
+import type { CachedLogo } from '../../lib/hooks';
 
 interface Props {
   selectedYear: number;
@@ -29,7 +31,7 @@ export function DividendForecast({ selectedYear }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
-  const [logos, setLogos] = useState<Map<number, string>>(new Map());
+  const [logos, setLogos] = useState<Map<number, CachedLogo>>(new Map());
 
   const { brandfetchApiKey } = useSettingsStore();
 
@@ -56,15 +58,15 @@ export function DividendForecast({ selectedYear }: Props) {
 
           if (toFetch.length > 0) {
             const results = await fetchLogosBatch(brandfetchApiKey || '', toFetch);
-            const newLogos = new Map<number, string>();
+            const newLogos = new Map<number, CachedLogo>();
 
             for (const result of results) {
               if (result.domain) {
                 const cached = await getCachedLogoData(result.domain);
                 if (cached) {
-                  newLogos.set(result.securityId, cached);
+                  newLogos.set(result.securityId, { url: cached, isLocal: true, domain: result.domain });
                 } else if (result.logoUrl) {
-                  newLogos.set(result.securityId, result.logoUrl);
+                  newLogos.set(result.securityId, { url: result.logoUrl, isLocal: false, domain: result.domain });
                 }
               }
             }
@@ -104,28 +106,6 @@ export function DividendForecast({ selectedYear }: Props) {
       case 'IRREGULAR': return 'Unregelmäßig';
       default: return freq;
     }
-  };
-
-  const SecurityLogo = ({ securityId, size = 24 }: { securityId: number; size?: number }) => {
-    const logoUrl = logos.get(securityId);
-    if (logoUrl) {
-      return (
-        <img
-          src={logoUrl}
-          alt=""
-          className="rounded-sm object-contain bg-white flex-shrink-0"
-          style={{ width: size, height: size }}
-        />
-      );
-    }
-    return (
-      <div
-        className="rounded-sm bg-muted flex items-center justify-center flex-shrink-0"
-        style={{ width: size, height: size }}
-      >
-        <Building2 size={size * 0.6} className="text-muted-foreground" />
-      </div>
-    );
   };
 
   if (isLoading) {
@@ -210,7 +190,7 @@ export function DividendForecast({ selectedYear }: Props) {
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#6b728033" />
               <XAxis dataKey="month" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v.toFixed(0)}€`} />
               <Tooltip
@@ -254,7 +234,7 @@ export function DividendForecast({ selectedYear }: Props) {
                     <tr key={sec.securityId} className="border-b border-border last:border-0 hover:bg-muted/30">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
-                          <SecurityLogo securityId={sec.securityId} size={32} />
+                          <SecurityLogo securityId={sec.securityId} logos={logos} size={32} />
                           <div>
                             <div className="font-medium">{sec.securityName}</div>
                             {sec.securityIsin && (

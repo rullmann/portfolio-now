@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Calendar, Building2, Plus, Pencil, Trash2, Bell } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, Plus, Pencil, Trash2, Bell, RefreshCw } from 'lucide-react';
 import {
   getDividendCalendar,
   getCachedLogoData,
@@ -14,10 +14,13 @@ import {
   createExDividend,
   updateExDividend,
   deleteExDividend,
+  syncExDividends,
 } from '../../lib/api';
 import type { MonthCalendarData, CalendarDividend, EnhancedMonthCalendarData, DividendCalendarEvent, ExDividend, ExDividendRequest } from '../../lib/api';
 import type { SecurityData } from '../../lib/types';
 import { useSettingsStore, toast } from '../../store';
+import { SecurityLogo } from '../../components/common/SecurityLogo';
+import type { CachedLogo } from '../../lib/hooks';
 
 interface Props {
   selectedYear: number;
@@ -61,11 +64,12 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
   const [enhancedData, setEnhancedData] = useState<EnhancedMonthCalendarData[]>([]);
   const [upcomingExDivs, setUpcomingExDivs] = useState<ExDividend[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
-  const [logos, setLogos] = useState<Map<number, string>>(new Map());
+  const [logos, setLogos] = useState<Map<number, CachedLogo>>(new Map());
   const [calendarMode, setCalendarMode] = useState<CalendarMode>('enhanced');
   const [securities, setSecurities] = useState<SecurityData[]>([]);
   const [showExDivForm, setShowExDivForm] = useState(false);
   const [editingExDiv, setEditingExDiv] = useState<ExDividend | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const { brandfetchApiKey } = useSettingsStore();
 
@@ -104,15 +108,15 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
 
           if (toFetch.length > 0) {
             const results = await fetchLogosBatch(brandfetchApiKey || '', toFetch);
-            const newLogos = new Map<number, string>();
+            const newLogos = new Map<number, CachedLogo>();
 
             for (const result of results) {
               if (result.domain) {
                 const cached = await getCachedLogoData(result.domain);
                 if (cached) {
-                  newLogos.set(result.securityId, cached);
+                  newLogos.set(result.securityId, { url: cached, isLocal: true, domain: result.domain });
                 } else if (result.logoUrl) {
-                  newLogos.set(result.securityId, result.logoUrl);
+                  newLogos.set(result.securityId, { url: result.logoUrl, isLocal: false, domain: result.domain });
                 }
               }
             }
@@ -232,28 +236,6 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
     }
   };
 
-  const SecurityLogo = ({ securityId, size = 20 }: { securityId: number; size?: number }) => {
-    const logoUrl = logos.get(securityId);
-    if (logoUrl) {
-      return (
-        <img
-          src={logoUrl}
-          alt=""
-          className="rounded-sm object-contain bg-white flex-shrink-0"
-          style={{ width: size, height: size }}
-        />
-      );
-    }
-    return (
-      <div
-        className="rounded-sm bg-muted flex items-center justify-center flex-shrink-0"
-        style={{ width: size, height: size }}
-      >
-        <Building2 size={size * 0.6} className="text-muted-foreground" />
-      </div>
-    );
-  };
-
   // Get event type label in German
   const getEventTypeLabel = (type: string): string => {
     switch (type) {
@@ -290,6 +272,28 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
     }
   };
 
+  // Sync ex-dividends from Yahoo Finance
+  const handleSyncDividends = async () => {
+    setIsSyncing(true);
+    try {
+      const result = await syncExDividends();
+      if (result.newDividends > 0 || result.updatedDividends > 0) {
+        toast.success(`${result.newDividends} neue, ${result.updatedDividends} aktualisierte Dividendentermine geladen`);
+      } else {
+        toast.info('Keine neuen Dividendentermine gefunden');
+      }
+      if (result.errors.length > 0) {
+        toast.warning(`${result.failed} von ${result.totalSecurities} Wertpapieren fehlgeschlagen`);
+      }
+      await reloadData();
+    } catch (err) {
+      toast.error('Fehler beim Synchronisieren der Ex-Dividenden');
+      console.error(err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Mode Toggle & Actions */}
@@ -317,16 +321,27 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
           </button>
         </div>
 
-        <button
-          onClick={() => {
-            setEditingExDiv(null);
-            setShowExDivForm(true);
-          }}
-          className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm hover:bg-primary/90 transition-colors"
-        >
-          <Plus size={16} />
-          Ex-Dividende eintragen
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncDividends}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-3 py-1.5 border border-border rounded-md text-sm hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Dividendentermine von DivvyDiary laden"
+          >
+            <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Synchronisiere...' : 'Termine laden'}
+          </button>
+          <button
+            onClick={() => {
+              setEditingExDiv(null);
+              setShowExDivForm(true);
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm hover:bg-primary/90 transition-colors"
+          >
+            <Plus size={16} />
+            Ex-Dividende eintragen
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
@@ -448,7 +463,7 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                                   className="flex items-center gap-1 bg-green-100 dark:bg-green-900/30 rounded px-1 py-0.5 text-xs"
                                   title={`${d.securityName}: ${formatCurrency(d.amount, d.currency)}`}
                                 >
-                                  <SecurityLogo securityId={d.securityId} size={14} />
+                                  <SecurityLogo securityId={d.securityId} logos={logos} size={14} />
                                   <span className="truncate flex-1 text-green-700 dark:text-green-400">
                                     {formatCurrency(d.amount, d.currency)}
                                   </span>
@@ -513,7 +528,7 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                                     title={`${getEventTypeLabel(e.eventType)}: ${e.securityName}${e.amount ? ` - ${formatCurrency(e.amount, e.currency || 'EUR')}` : ''}`}
                                   >
                                     <div className={`w-1.5 h-1.5 rounded-full ${colors.dot} flex-shrink-0`} />
-                                    <SecurityLogo securityId={e.securityId} size={14} />
+                                    <SecurityLogo securityId={e.securityId} logos={logos} size={14} />
                                     <span className={`truncate flex-1 ${colors.text}`}>
                                       {e.securityName.split(' ')[0]}
                                     </span>
@@ -554,7 +569,7 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                 className="flex items-center justify-between bg-white dark:bg-amber-950/30 rounded-md p-2"
               >
                 <div className="flex items-center gap-3">
-                  <SecurityLogo securityId={exDiv.securityId} size={24} />
+                  <SecurityLogo securityId={exDiv.securityId} logos={logos} size={24} />
                   <div>
                     <div className="font-medium text-sm">{exDiv.securityName}</div>
                     <div className="text-xs text-muted-foreground">
@@ -613,7 +628,7 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
                   <div key={idx} className="flex items-center justify-between p-3 hover:bg-muted/30">
                     <div className="flex items-center gap-3">
                       <div className={`w-2 h-2 rounded-full ${colors.dot}`} />
-                      <SecurityLogo securityId={e.securityId} size={28} />
+                      <SecurityLogo securityId={e.securityId} logos={logos} size={28} />
                       <div>
                         <div className="font-medium">{e.securityName}</div>
                         <div className="text-xs text-muted-foreground">
@@ -646,7 +661,7 @@ export function DividendCalendar({ selectedYear, onYearChange }: Props) {
             {monthData.dividends.map((d, idx) => (
               <div key={idx} className="flex items-center justify-between p-3 hover:bg-muted/30">
                 <div className="flex items-center gap-3">
-                  <SecurityLogo securityId={d.securityId} size={28} />
+                  <SecurityLogo securityId={d.securityId} logos={logos} size={28} />
                   <div>
                     <div className="font-medium">{d.securityName}</div>
                     <div className="text-xs text-muted-foreground">{d.date}</div>

@@ -1,6 +1,7 @@
 /**
  * Drawing Tools Component
  * Canvas overlay for drawing trendlines, horizontal lines, and Fibonacci retracements
+ * Uses price/time coordinates so drawings stay in place when zooming/scrolling
  */
 
 import { useRef, useEffect, useState, useCallback } from 'react';
@@ -12,7 +13,7 @@ import {
   MousePointer,
   X,
 } from 'lucide-react';
-import type { IChartApi } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 
 // ============================================================================
 // Types
@@ -21,8 +22,8 @@ import type { IChartApi } from 'lightweight-charts';
 export type DrawingTool = 'select' | 'trendline' | 'horizontal' | 'fibonacci';
 
 export interface Point {
-  x: number; // pixel
-  y: number; // pixel
+  x: number; // pixel (transient, for rendering)
+  y: number; // pixel (transient, for rendering)
   time?: string;
   price?: number;
 }
@@ -33,12 +34,12 @@ export interface Drawing {
   points: Point[];
   color: string;
   lineWidth: number;
-  // Fibonacci specific
   fibLevels?: number[];
 }
 
 export interface DrawingToolsProps {
   chartApi: IChartApi | null;
+  mainSeries: ISeriesApi<'Candlestick'> | null;
   width: number;
   height: number;
   enabled: boolean;
@@ -70,26 +71,41 @@ function generateId(): string {
   return `drawing-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function pointsToPrice(
+/** Convert pixel coordinates to price/time using chart API */
+function pixelToLogical(
   chartApi: IChartApi | null,
-  point: Point
+  mainSeries: ISeriesApi<'Candlestick'> | null,
+  px: number,
+  py: number,
 ): { time: string; price: number } | null {
-  if (!chartApi) return null;
-
+  if (!chartApi || !mainSeries) return null;
   try {
     const timeScale = chartApi.timeScale();
+    const time = timeScale.coordinateToTime(px);
+    if (time === null || time === undefined) return null;
+    const price = mainSeries.coordinateToPrice(py);
+    if (price === null || price === undefined) return null;
+    return { time: String(time), price: price as number };
+  } catch {
+    return null;
+  }
+}
 
-    // Convert x to time
-    const time = timeScale.coordinateToTime(point.x);
-    if (time === null) return null;
-
-    // Note: lightweight-charts v5 doesn't expose direct pixel-to-price conversion
-    // We store pixel coordinates and convert time only
-    // Price conversion would require access to the series data
-    return {
-      time: String(time),
-      price: point.y, // Store y as pixel coordinate, not actual price
-    };
+/** Convert price/time back to pixel coordinates */
+function logicalToPixel(
+  chartApi: IChartApi | null,
+  mainSeries: ISeriesApi<'Candlestick'> | null,
+  time: string | undefined,
+  price: number | undefined,
+): { x: number; y: number } | null {
+  if (!chartApi || !mainSeries || !time || price === undefined) return null;
+  try {
+    const timeScale = chartApi.timeScale();
+    const x = timeScale.timeToCoordinate(time as unknown as import('lightweight-charts').Time);
+    if (x === null || x === undefined) return null;
+    const y = mainSeries.priceToCoordinate(price);
+    if (y === null || y === undefined) return null;
+    return { x: x as number, y: y as number };
   } catch {
     return null;
   }
@@ -101,6 +117,7 @@ function pointsToPrice(
 
 export function DrawingTools({
   chartApi,
+  mainSeries,
   width,
   height,
   enabled,
@@ -115,29 +132,46 @@ export function DrawingTools({
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
 
+  // Sync initialDrawings when they change (e.g. security switch)
+  useEffect(() => {
+    setDrawings(initialDrawings);
+  }, [initialDrawings]);
+
+  // ============================================================================
+  // Coordinate Conversion Helpers
+  // ============================================================================
+
+  /** Convert a stored point (with time/price) to current pixel position */
+  const toPixel = useCallback(
+    (point: Point): { x: number; y: number } | null => {
+      if (point.time && point.price !== undefined) {
+        return logicalToPixel(chartApi, mainSeries, point.time, point.price);
+      }
+      // Fallback: use raw pixel (for in-progress drawing before saving)
+      return { x: point.x, y: point.y };
+    },
+    [chartApi, mainSeries],
+  );
+
   // ============================================================================
   // Drawing Functions
   // ============================================================================
 
   const drawLine = useCallback(
-    (ctx: CanvasRenderingContext2D, start: Point, end: Point, color: string, lineWidth: number, dashed = false) => {
+    (ctx: CanvasRenderingContext2D, start: { x: number; y: number }, end: { x: number; y: number }, color: string, lineWidth: number, dashed = false) => {
       ctx.beginPath();
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
-      if (dashed) {
-        ctx.setLineDash([5, 5]);
-      } else {
-        ctx.setLineDash([]);
-      }
+      ctx.setLineDash(dashed ? [5, 5] : []);
       ctx.moveTo(start.x, start.y);
       ctx.lineTo(end.x, end.y);
       ctx.stroke();
     },
-    []
+    [],
   );
 
   const drawHorizontalLine = useCallback(
-    (ctx: CanvasRenderingContext2D, y: number, color: string, lineWidth: number) => {
+    (ctx: CanvasRenderingContext2D, y: number, price: number | undefined, color: string, lineWidth: number) => {
       ctx.beginPath();
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
@@ -147,26 +181,27 @@ export function DrawingTools({
       ctx.stroke();
 
       // Draw price label
-      const priceData = pointsToPrice(chartApi, { x: 0, y });
-      if (priceData) {
+      if (price !== undefined) {
         ctx.fillStyle = color;
         ctx.font = '11px monospace';
-        ctx.fillText(priceData.price.toFixed(2), width - 60, y - 4);
+        ctx.fillText(price.toFixed(2), width - 70, y - 4);
       }
     },
-    [width, chartApi]
+    [width],
   );
 
   const drawFibonacci = useCallback(
-    (ctx: CanvasRenderingContext2D, start: Point, end: Point, color: string) => {
+    (ctx: CanvasRenderingContext2D, start: { x: number; y: number }, end: { x: number; y: number }, startPrice: number, endPrice: number, color: string) => {
       const minY = Math.min(start.y, end.y);
       const maxY = Math.max(start.y, end.y);
       const range = maxY - minY;
+      const minPrice = Math.min(startPrice, endPrice);
+      const priceRange = Math.abs(endPrice - startPrice);
 
-      // Draw levels
       FIBONACCI_LEVELS.forEach((level) => {
         const y = maxY - range * level;
         const levelColor = FIBONACCI_COLORS[level] || color;
+        const levelPrice = minPrice + priceRange * level;
 
         ctx.beginPath();
         ctx.strokeStyle = levelColor;
@@ -176,13 +211,13 @@ export function DrawingTools({
         ctx.lineTo(Math.max(start.x, end.x), y);
         ctx.stroke();
 
-        // Label
+        // Label with level % and price
         ctx.fillStyle = levelColor;
         ctx.font = '10px monospace';
-        ctx.fillText(`${(level * 100).toFixed(1)}%`, Math.max(start.x, end.x) + 5, y + 3);
+        ctx.fillText(`${(level * 100).toFixed(1)}% (${levelPrice.toFixed(2)})`, Math.max(start.x, end.x) + 5, y + 3);
       });
 
-      // Draw vertical lines
+      // Vertical boundary lines
       ctx.beginPath();
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
@@ -193,20 +228,21 @@ export function DrawingTools({
       ctx.lineTo(end.x, maxY);
       ctx.stroke();
     },
-    []
+    [],
   );
 
   const drawHandle = useCallback(
-    (ctx: CanvasRenderingContext2D, point: Point, isSelected: boolean) => {
+    (ctx: CanvasRenderingContext2D, point: { x: number; y: number }, isSelected: boolean) => {
       ctx.beginPath();
       ctx.fillStyle = isSelected ? '#2563eb' : '#ffffff';
       ctx.strokeStyle = '#2563eb';
       ctx.lineWidth = 2;
+      ctx.setLineDash([]);
       ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     },
-    []
+    [],
   );
 
   // ============================================================================
@@ -220,50 +256,54 @@ export function DrawingTools({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Draw all saved drawings
     [...drawings, currentDrawing].filter(Boolean).forEach((drawing) => {
       if (!drawing) return;
 
       const isSelected = drawing.id === selectedDrawingId;
       const isHovered = drawing.id === hoveredDrawingId;
       const color = isSelected || isHovered ? '#3b82f6' : drawing.color;
-      const lineWidth = isSelected || isHovered ? drawing.lineWidth + 1 : drawing.lineWidth;
+      const lw = isSelected || isHovered ? drawing.lineWidth + 1 : drawing.lineWidth;
+
+      // Convert stored points to pixels
+      const pixelPoints = drawing.points
+        .map((p) => toPixel(p))
+        .filter((p): p is { x: number; y: number } => p !== null);
 
       switch (drawing.type) {
         case 'trendline':
-          if (drawing.points.length >= 2) {
-            drawLine(ctx, drawing.points[0], drawing.points[1], color, lineWidth);
+          if (pixelPoints.length >= 2) {
+            drawLine(ctx, pixelPoints[0], pixelPoints[1], color, lw);
             if (isSelected) {
-              drawHandle(ctx, drawing.points[0], true);
-              drawHandle(ctx, drawing.points[1], true);
+              drawHandle(ctx, pixelPoints[0], true);
+              drawHandle(ctx, pixelPoints[1], true);
             }
-          } else if (drawing.points.length === 1 && currentDrawing) {
-            // Drawing in progress - show start point
-            drawHandle(ctx, drawing.points[0], true);
+          } else if (pixelPoints.length === 1 && currentDrawing) {
+            drawHandle(ctx, pixelPoints[0], true);
           }
           break;
 
         case 'horizontal':
-          if (drawing.points.length >= 1) {
-            drawHorizontalLine(ctx, drawing.points[0].y, color, lineWidth);
+          if (pixelPoints.length >= 1) {
+            drawHorizontalLine(ctx, pixelPoints[0].y, drawing.points[0].price, color, lw);
             if (isSelected) {
-              drawHandle(ctx, { x: 50, y: drawing.points[0].y }, true);
+              drawHandle(ctx, { x: 50, y: pixelPoints[0].y }, true);
             }
           }
           break;
 
         case 'fibonacci':
-          if (drawing.points.length >= 2) {
-            drawFibonacci(ctx, drawing.points[0], drawing.points[1], color);
+          if (pixelPoints.length >= 2) {
+            const p0Price = drawing.points[0].price ?? 0;
+            const p1Price = drawing.points[1].price ?? 0;
+            drawFibonacci(ctx, pixelPoints[0], pixelPoints[1], p0Price, p1Price, color);
             if (isSelected) {
-              drawHandle(ctx, drawing.points[0], true);
-              drawHandle(ctx, drawing.points[1], true);
+              drawHandle(ctx, pixelPoints[0], true);
+              drawHandle(ctx, pixelPoints[1], true);
             }
-          } else if (drawing.points.length === 1 && currentDrawing) {
-            drawHandle(ctx, drawing.points[0], true);
+          } else if (pixelPoints.length === 1 && currentDrawing) {
+            drawHandle(ctx, pixelPoints[0], true);
           }
           break;
       }
@@ -279,6 +319,7 @@ export function DrawingTools({
     drawHorizontalLine,
     drawFibonacci,
     drawHandle,
+    toPixel,
   ]);
 
   // ============================================================================
@@ -290,41 +331,47 @@ export function DrawingTools({
     if (!canvas) return { x: 0, y: 0 };
 
     const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    // Enrich with logical coordinates
+    const logical = pixelToLogical(chartApi, mainSeries, px, py);
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: px,
+      y: py,
+      time: logical?.time,
+      price: logical?.price,
     };
-  }, []);
+  }, [chartApi, mainSeries]);
 
   const findDrawingAtPoint = useCallback(
-    (point: Point): Drawing | null => {
-      // Check drawings in reverse order (top to bottom)
+    (point: { x: number; y: number }): Drawing | null => {
       for (let i = drawings.length - 1; i >= 0; i--) {
         const drawing = drawings[i];
+        const pixelPoints = drawing.points
+          .map((p) => toPixel(p))
+          .filter((p): p is { x: number; y: number } => p !== null);
 
         switch (drawing.type) {
           case 'trendline':
-            if (drawing.points.length >= 2) {
-              const [p1, p2] = drawing.points;
-              // Check if point is near the line
-              const dist = pointToLineDistance(point, p1, p2);
+            if (pixelPoints.length >= 2) {
+              const dist = pointToLineDistance(point, pixelPoints[0], pixelPoints[1]);
               if (dist < 10) return drawing;
             }
             break;
 
           case 'horizontal':
-            if (drawing.points.length >= 1) {
-              if (Math.abs(point.y - drawing.points[0].y) < 10) return drawing;
+            if (pixelPoints.length >= 1) {
+              if (Math.abs(point.y - pixelPoints[0].y) < 10) return drawing;
             }
             break;
 
           case 'fibonacci':
-            if (drawing.points.length >= 2) {
-              const [p1, p2] = drawing.points;
-              const minX = Math.min(p1.x, p2.x);
-              const maxX = Math.max(p1.x, p2.x);
-              const minY = Math.min(p1.y, p2.y);
-              const maxY = Math.max(p1.y, p2.y);
+            if (pixelPoints.length >= 2) {
+              const minX = Math.min(pixelPoints[0].x, pixelPoints[1].x);
+              const maxX = Math.max(pixelPoints[0].x, pixelPoints[1].x);
+              const minY = Math.min(pixelPoints[0].y, pixelPoints[1].y);
+              const maxY = Math.max(pixelPoints[0].y, pixelPoints[1].y);
               if (point.x >= minX - 10 && point.x <= maxX + 10 && point.y >= minY - 10 && point.y <= maxY + 10) {
                 return drawing;
               }
@@ -334,7 +381,7 @@ export function DrawingTools({
       }
       return null;
     },
-    [drawings]
+    [drawings, toPixel],
   );
 
   const handleMouseDown = useCallback(
@@ -360,15 +407,19 @@ export function DrawingTools({
 
       if (activeTool === 'horizontal') {
         // Horizontal line only needs one point
-        setDrawings((prev) => [...prev, newDrawing]);
-        onDrawingsChange?.([...drawings, newDrawing]);
+        const completed = { ...newDrawing };
+        setDrawings((prev) => {
+          const next = [...prev, completed];
+          onDrawingsChange?.(next);
+          return next;
+        });
         setActiveTool('select');
       } else {
         setCurrentDrawing(newDrawing);
         setIsDrawing(true);
       }
     },
-    [enabled, activeTool, getMousePosition, findDrawingAtPoint, drawings, onDrawingsChange]
+    [enabled, activeTool, getMousePosition, findDrawingAtPoint, onDrawingsChange],
   );
 
   const handleMouseMove = useCallback(
@@ -378,18 +429,16 @@ export function DrawingTools({
       const point = getMousePosition(e);
 
       if (isDrawing && currentDrawing) {
-        // Update current drawing's second point
         setCurrentDrawing({
           ...currentDrawing,
           points: [currentDrawing.points[0], point],
         });
       } else if (activeTool === 'select') {
-        // Check for hover
         const drawing = findDrawingAtPoint(point);
         setHoveredDrawingId(drawing?.id || null);
       }
     },
-    [enabled, isDrawing, currentDrawing, activeTool, getMousePosition, findDrawingAtPoint]
+    [enabled, isDrawing, currentDrawing, activeTool, getMousePosition, findDrawingAtPoint],
   );
 
   const handleMouseUp = useCallback(
@@ -398,28 +447,32 @@ export function DrawingTools({
 
       const point = getMousePosition(e);
 
-      // Complete the drawing
       const completedDrawing: Drawing = {
         ...currentDrawing,
         points: [currentDrawing.points[0], point],
       };
 
-      setDrawings((prev) => [...prev, completedDrawing]);
-      onDrawingsChange?.([...drawings, completedDrawing]);
+      setDrawings((prev) => {
+        const next = [...prev, completedDrawing];
+        onDrawingsChange?.(next);
+        return next;
+      });
       setCurrentDrawing(null);
       setIsDrawing(false);
       setActiveTool('select');
     },
-    [enabled, isDrawing, currentDrawing, getMousePosition, drawings, onDrawingsChange]
+    [enabled, isDrawing, currentDrawing, getMousePosition, onDrawingsChange],
   );
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedDrawingId) {
-          const newDrawings = drawings.filter((d) => d.id !== selectedDrawingId);
-          setDrawings(newDrawings);
-          onDrawingsChange?.(newDrawings);
+          setDrawings((prev) => {
+            const next = prev.filter((d) => d.id !== selectedDrawingId);
+            onDrawingsChange?.(next);
+            return next;
+          });
           setSelectedDrawingId(null);
         }
       } else if (e.key === 'Escape') {
@@ -428,7 +481,7 @@ export function DrawingTools({
         setActiveTool('select');
       }
     },
-    [selectedDrawingId, drawings, onDrawingsChange]
+    [selectedDrawingId, onDrawingsChange],
   );
 
   // ============================================================================
@@ -454,6 +507,18 @@ export function DrawingTools({
     }
   }, [width, height, renderDrawings]);
 
+  // Re-render drawings when chart view changes (scroll/zoom)
+  useEffect(() => {
+    if (!chartApi || !enabled) return;
+
+    const timeScale = chartApi.timeScale();
+    const handler = () => renderDrawings();
+    timeScale.subscribeVisibleTimeRangeChange(handler);
+    return () => {
+      try { timeScale.unsubscribeVisibleTimeRangeChange(handler); } catch { /* chart may be disposed */ }
+    };
+  }, [chartApi, enabled, renderDrawings]);
+
   // ============================================================================
   // Actions
   // ============================================================================
@@ -466,17 +531,19 @@ export function DrawingTools({
 
   const deleteSelected = useCallback(() => {
     if (selectedDrawingId) {
-      const newDrawings = drawings.filter((d) => d.id !== selectedDrawingId);
-      setDrawings(newDrawings);
-      onDrawingsChange?.(newDrawings);
+      setDrawings((prev) => {
+        const next = prev.filter((d) => d.id !== selectedDrawingId);
+        onDrawingsChange?.(next);
+        return next;
+      });
       setSelectedDrawingId(null);
     }
-  }, [selectedDrawingId, drawings, onDrawingsChange]);
+  }, [selectedDrawingId, onDrawingsChange]);
 
   if (!enabled) return null;
 
   return (
-    <div className="absolute inset-0 pointer-events-none">
+    <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 20 }}>
       {/* Toolbar */}
       <div className="absolute top-2 left-2 flex gap-1 bg-card/90 backdrop-blur-sm border border-border rounded-lg p-1 pointer-events-auto z-10">
         <button
@@ -559,7 +626,7 @@ export function DrawingTools({
 // Utility Functions
 // ============================================================================
 
-function pointToLineDistance(point: Point, lineStart: Point, lineEnd: Point): number {
+function pointToLineDistance(point: { x: number; y: number }, lineStart: { x: number; y: number }, lineEnd: { x: number; y: number }): number {
   const A = point.x - lineStart.x;
   const B = point.y - lineStart.y;
   const C = lineEnd.x - lineStart.x;

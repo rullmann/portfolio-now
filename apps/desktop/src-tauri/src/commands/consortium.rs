@@ -660,9 +660,9 @@ fn get_combined_value_history(
 ) -> Vec<(String, f64)> {
     // Get all unique dates with prices in range
     let dates_sql = r#"
-        SELECT DISTINCT date(date) as d
+        SELECT DISTINCT date as d
         FROM pp_price
-        WHERE date(date) >= ? AND date(date) <= ?
+        WHERE date >= ? AND date <= ?
         ORDER BY d
     "#;
 
@@ -904,9 +904,9 @@ fn get_single_portfolio_value_history(
     end_date: NaiveDate,
 ) -> Vec<(String, f64)> {
     let dates_sql = r#"
-        SELECT DISTINCT date(date) as d
+        SELECT DISTINCT date as d
         FROM pp_price
-        WHERE date(date) >= ? AND date(date) <= ?
+        WHERE date >= ? AND date <= ?
         ORDER BY d
     "#;
 

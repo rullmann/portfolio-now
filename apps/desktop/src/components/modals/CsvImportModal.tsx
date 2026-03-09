@@ -113,6 +113,7 @@ export function CsvImportModal({ isOpen, onClose, onSuccess }: CsvImportModalPro
       case 'openai': return keys.openaiApiKey;
       case 'gemini': return keys.geminiApiKey;
       case 'perplexity': return keys.perplexityApiKey;
+      case 'openrouter': return keys.openrouterApiKey;
       default: return '';
     }
   };

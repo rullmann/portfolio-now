@@ -98,8 +98,10 @@ struct ResponseMessage {
     content: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct Usage {
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
     total_tokens: u32,
 }
 
@@ -163,8 +165,10 @@ struct ResponsesContent {
 }
 
 /// Usage stats from Responses API
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct ResponsesUsage {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
     total_tokens: u32,
 }
 
@@ -307,6 +311,8 @@ pub async fn analyze(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -407,6 +413,8 @@ pub async fn analyze_with_custom_prompt(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -512,6 +520,8 @@ pub async fn analyze_with_annotations(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -620,6 +630,8 @@ pub async fn analyze_enhanced(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -729,6 +741,8 @@ pub async fn analyze_portfolio(
                 provider: "OpenAI".to_string(),
                 model: model.to_string(),
                 tokens_used: data.usage.map(|u| u.total_tokens),
+                input_tokens: data.usage.and_then(|u| u.input_tokens),
+                output_tokens: data.usage.and_then(|u| u.output_tokens),
             });
         }
 
@@ -791,6 +805,8 @@ pub async fn analyze_portfolio(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -879,6 +895,8 @@ pub async fn analyze_opportunities(
                 provider: "OpenAI".to_string(),
                 model: model.to_string(),
                 tokens_used: data.usage.map(|u| u.total_tokens),
+                input_tokens: data.usage.and_then(|u| u.input_tokens),
+                output_tokens: data.usage.and_then(|u| u.output_tokens),
             });
         }
 
@@ -941,6 +959,8 @@ pub async fn analyze_opportunities(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
         });
     }
 
@@ -1070,6 +1090,8 @@ pub async fn chat(
                 provider: "OpenAI".to_string(),
                 model: model.to_string(),
                 tokens_used: data.usage.map(|u| u.total_tokens),
+                input_tokens: data.usage.and_then(|u| u.input_tokens),
+                output_tokens: data.usage.and_then(|u| u.output_tokens),
                 suggestions: Vec::new(),
                 pending_queries: Vec::new(),
             });
@@ -1194,6 +1216,8 @@ pub async fn chat(
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),
+            input_tokens: data.usage.and_then(|u| u.prompt_tokens),
+            output_tokens: data.usage.and_then(|u| u.completion_tokens),
             suggestions: Vec::new(),
             pending_queries: Vec::new(),
         });

@@ -67,7 +67,7 @@ struct ResponseContent {
     text: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct Usage {
     input_tokens: u32,
     output_tokens: u32,
@@ -213,6 +213,8 @@ pub async fn analyze(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -317,6 +319,8 @@ pub async fn analyze_with_custom_prompt(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -427,6 +431,8 @@ pub async fn ocr_pdf(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -537,6 +543,8 @@ pub async fn analyze_with_annotations(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -650,6 +658,8 @@ pub async fn analyze_enhanced(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -765,6 +775,8 @@ pub async fn analyze_portfolio(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -860,6 +872,8 @@ pub async fn analyze_opportunities(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
         });
     }
 
@@ -1038,6 +1052,8 @@ pub async fn chat(
             provider: "Claude".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.input_tokens + u.output_tokens),
+            input_tokens: data.usage.map(|u| u.input_tokens),
+            output_tokens: data.usage.map(|u| u.output_tokens),
             suggestions: Vec::new(),
             pending_queries: Vec::new(),
         });

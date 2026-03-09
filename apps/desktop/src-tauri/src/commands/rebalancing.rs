@@ -2,7 +2,7 @@
 //!
 //! Calculate and execute portfolio rebalancing based on target allocations.
 
-use crate::ai::{claude, gemini, openai, perplexity, AiError, get_model_upgrade};
+use crate::ai::{claude, gemini, openai, openrouter, perplexity, AiError, get_model_upgrade};
 use crate::db;
 use crate::events::{emit_data_changed, DataChangedPayload};
 use crate::pp::common::{prices, shares};
@@ -756,6 +756,7 @@ pub async fn suggest_rebalance_with_ai(
         "openai" => openai::complete_text(&model, &request.api_key, &prompt).await,
         "gemini" => gemini::complete_text(&model, &request.api_key, &prompt).await,
         "perplexity" => perplexity::complete_text(&model, &request.api_key, &prompt).await,
+        "openrouter" => openrouter::complete_text(&model, &request.api_key, &prompt).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
     };
 

@@ -72,6 +72,8 @@ export interface TradingViewChartProps {
   annotations?: ChartAnnotationWithId[];
   /** Callback when an annotation is clicked */
   onAnnotationClick?: (annotation: ChartAnnotationWithId) => void;
+  /** Callback when chart API is ready (for drawing tools integration) */
+  onChartReady?: (api: IChartApi, mainSeries: ISeriesApi<'Candlestick'>) => void;
 }
 
 // ============================================================================
@@ -111,6 +113,7 @@ export function TradingViewChart({
   logScale = false,
   annotations = [],
   onAnnotationClick,
+  onChartReady,
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -740,6 +743,11 @@ export function TradingViewChart({
 
     chart.timeScale().fitContent();
 
+    // Notify parent that chart is ready (for drawing tools)
+    if (onChartReady) {
+      onChartReady(chart, candlestickSeries);
+    }
+
     // Resize observer - handle both width and height
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
@@ -758,7 +766,7 @@ export function TradingViewChart({
         chartRef.current = null;
       }
     };
-  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations]);
+  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations, onChartReady]);
 
   // Early return for no data
   if (!data || data.length < 2) {

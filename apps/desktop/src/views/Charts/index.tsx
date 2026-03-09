@@ -11,6 +11,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, Component, type ReactNode } from 'react';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Search,
@@ -131,6 +132,7 @@ interface EnrichedSecurity extends SecurityData {
 interface PriceData {
   date: string;
   value: number;
+  volume?: number;
 }
 
 type TimeRange = '1M' | '3M' | '6M' | '1Y' | '2Y' | '5Y' | 'MAX';
@@ -207,6 +209,11 @@ export function ChartsView() {
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   // Track saved drawing IDs to detect deletions
   const savedDrawingIds = useRef<Set<string>>(new Set());
+
+  // Chart API for drawing tools coordinate conversion
+  const [chartApiState, setChartApiState] = useState<IChartApi | null>(null);
+  const [mainSeriesState, setMainSeriesState] = useState<ISeriesApi<'Candlestick'> | null>(null);
+  const [chartContainerSize, setChartContainerSize] = useState({ width: 800, height: 500 });
 
   // Outlier detection state
   const [outlierSummary, setOutlierSummary] = useState<OutlierSummary | null>(null);
@@ -592,6 +599,29 @@ export function ChartsView() {
     // Update tracked IDs
     savedDrawingIds.current = new Set(newDrawings.map(d => d.id));
   }, [selectedSecurity?.id]);
+
+  // Chart ready callback for drawing tools
+  const handleChartReady = useCallback((api: IChartApi, series: ISeriesApi<'Candlestick'>) => {
+    setChartApiState(api);
+    setMainSeriesState(series);
+  }, []);
+
+  // Track chart container size for drawing canvas
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: w, height: h } = entry.contentRect;
+        if (w > 0 && h > 0) {
+          setChartContainerSize({ width: w, height: h });
+        }
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   // Handle ESC key for fullscreen
   useEffect(() => {
@@ -1095,13 +1125,16 @@ export function ChartsView() {
                         symbol={selectedSecurity?.ticker || selectedSecurity?.name}
                         logScale={useLogScale}
                         annotations={chartAnnotations}
+                        onChartReady={handleChartReady}
                       />
                     </ChartErrorBoundary>
                     {/* Drawing Tools Overlay */}
                     <DrawingTools
-                      chartApi={null}
-                      width={chartContainerRef.current?.clientWidth || 800}
-                      height={500}
+                      key={selectedSecurity?.id}
+                      chartApi={chartApiState}
+                      mainSeries={mainSeriesState}
+                      width={chartContainerSize.width}
+                      height={chartContainerSize.height}
                       enabled={isDrawingMode}
                       initialDrawings={drawings}
                       onDrawingsChange={handleDrawingsChange}

@@ -5,6 +5,58 @@ All notable changes to Portfolio Now will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-03-07
+
+### Added
+- **AI-Kostenanzeige pro Anfrage**: Tatsächliche Kosten jeder KI-Anfrage in der Basiswährung anzeigen
+  - Alle 5 Provider liefern jetzt `input_tokens` + `output_tokens` getrennt zurück (statt nur `total_tokens`)
+  - Kostenberechnung: Input-Tokens × Input-Preis + Output-Tokens × Output-Preis, konvertiert via EZB-Wechselkurs
+  - Anzeige in 5 Komponenten: Chart-Analyse, Portfolio Insights, Security-Kurs-Modal, Nachrichten-Recherche, Chat
+  - Format: `model | 1.697 Tokens · €0,03`
+  - Neuer Helper `lib/ai-cost.ts` mit gecachtem USD→Basiswährung Wechselkurs
+- **AI-Modell-Pricing in Dropdowns**: Kosten pro 1M Tokens in der Basiswährung
+  - `AIModelSelector`: Zeigt Pricing-Badge (€3/€15) mit Währungsumrechnung beim Dropdown-Öffnen
+  - `AI_MODELS_FALLBACK`: Alle 17 statischen Modelle haben jetzt `pricingInput`/`pricingOutput` (USD/1M Tokens)
+  - Wechselkurs wird einmal gecacht, Fallback auf USD wenn nicht verfügbar
+- **Dynamische Token-Limits & Pricing aus Provider-APIs**
+  - Claude API: `output_token_limit`, `input_token_limit`, `deprecation_date` direkt aus `/v1/models`
+  - Gemini API: `outputTokenLimit`, `inputTokenLimit` aus Modell-Metadaten
+  - OpenRouter API: `context_length`, `pricing.prompt/completion` (per-Token → per-1M umgerechnet)
+  - OpenAI/Perplexity: Hardcodierte Lookup-Tabellen (APIs liefern keine Limits/Pricing)
+- **Deprecation-Warnings**: Modelle mit Ablaufdatum < 30 Tage bekommen Amber-Warnung, abgelaufene sind deaktiviert
+- **Cache-Invalidation**: Model-Cache wird automatisch gelöscht wenn API-Key geändert wird
+- **Token-Limit-Spalte in AiFeatureMatrix**: Zeigt max. Output-Tokens pro gewähltem Modell, "Modelle neu laden"-Button
+
+### Fixed
+- **Deprecated AI-Modelle im Dropdown**: Provider-APIs gaben veraltete Modelle zurück (claude-3-haiku-20240307, gemini-2.0-flash etc.) — jetzt gegen `DEPRECATED_MODELS`-Liste gefiltert in allen `list_*_models()` Funktionen
+- **GPT-4.1 fälschlich als Vision-Modell**: War hardcoded `supports_vision: true`, ist aber text-only → jetzt korrekt `false`
+- **aiFeatureSettings-Migration fehlte**: Deprecated Modelle in per-Feature-Einstellungen wurden beim App-Start nicht migriert — nur das globale `aiModel`. Jetzt werden alle Feature-Modelle automatisch auf Nachfolger umgestellt
+- **Gemini fehlende maxOutputTokens**: `generationConfig.maxOutputTokens` fehlte komplett in allen 9 Gemini-API-Anfragen → unkontrollierte Output-Länge. Jetzt korrekt gesetzt (4096 für Analyse, 3000 für Insights, 8192 für Chat/PDF)
+- **AI JSON-Truncation**: `MAX_TOKENS` von 1500 auf 4096 erhöht — Enhanced Chart Analysis JSON wurde abgeschnitten ("EOF while parsing a string")
+- **Dashboard Fragezeichen-Cursor**: `cursor-help` auf 7 Dashboard-Kacheln durch `cursor-default` ersetzt
+
+## [0.1.12] - 2026-03-06
+
+### Added
+- **Dynamische AI-Modellauswahl**: Modelle werden live von Provider-APIs geladen statt hardcodiert
+  - `AIModelSelector`: Fetcht bei Dropdown-Öffnung aktuelle Modelle von Claude, OpenAI, Gemini, Perplexity, OpenRouter
+  - `AiFeatureMatrix`: Lädt Modelle beim Mount für alle konfigurierten Provider
+  - 5-Minuten-Cache verhindert unnötige API-Calls, Fallback auf statische Liste bei Fehler/Offline
+  - Neue Modelle (Claude 4.6, Gemini 3.1 etc.) erscheinen automatisch ohne App-Update
+- **Capability-Badges im Model-Selector**: Visuelle Badges pro Modell
+  - `PRO` (lila) für Top-Modelle (Opus, Pro, o3), `FAST` (blau) für schnelle Modelle (Haiku, Mini, Flash)
+  - Eye-Icon (grün) für Vision-Fähigkeit, Globe-Icon (cyan) für Web-Suche
+  - Feature-spezifische "Empfohlen"-Badge (amber/gold) mit kontextabhängiger Logik pro KI-Funktion
+- **Holdings/Bestand View Redesign**: Bessere Darstellung der Portfolio-Allokation
+  - 4 Summary-Cards (Marktwert, Einstandswert, Gewinn/Verlust, Dividenden) am oberen Rand
+  - Kompaktes Donut-Diagramm (320px) links statt übergroßem Chart
+  - Detaillierte Tabelle rechts mit Kurs, Marktwert, Einstand, Gewinn/Verlust (farbcodiert mit Trend-Icons), Anteil mit Mini-Balken
+
+### Fixed
+- **AI-Modelle nicht auswählbar**: `fetchModelsForProvider()` wurde nie aufgerufen — `getCachedModels()` gibt Array-Kopie zurück, Referenzvergleich war immer true → sofortiger Return mit statischer Liste
+- **OpenAI DEFAULT_MODELS Mismatch**: Frontend hatte `gpt-4o`, Rust hatte `gpt-5-mini` — synchronisiert auf `gpt-5-mini`
+- **WEB_SEARCH_AI_MODELS leer**: War `{}` — Web-Search-Filter nutzt jetzt `supportsWebSearch`-Flag der dynamisch geladenen Modelle
+
 ## [0.1.11] - 2026-02-15
 
 ### Added

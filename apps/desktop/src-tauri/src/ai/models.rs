@@ -195,6 +195,7 @@ pub const FALLBACK_CHAINS: &[(&str, &[&str])] = &[
     ("openai", &["gpt-5-mini", "o3", "gpt-4o", "gpt-4o-mini"]),
     ("gemini", &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"]),
     ("perplexity", &["sonar-pro", "sonar"]),
+    ("openrouter", &["anthropic/claude-sonnet-4.5", "openai/gpt-4o", "google/gemini-2.5-flash"]),
 ];
 
 // ============================================================================
@@ -207,6 +208,7 @@ pub const DEFAULT_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-5-mini"),
     ("gemini", "gemini-2.5-flash"),
     ("perplexity", "sonar-pro"),
+    ("openrouter", "anthropic/claude-sonnet-4.5"),
 ];
 
 // ============================================================================

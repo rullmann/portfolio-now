@@ -431,7 +431,7 @@ function CorrelationMatrixView({ data }: { data: CorrelationMatrix }) {
   const getCorrelationColor = (value: number) => {
     if (value >= 0.7) return 'bg-red-500';
     if (value >= 0.3) return 'bg-orange-400';
-    if (value >= -0.3) return 'bg-gray-300';
+    if (value >= -0.3) return 'bg-gray-300 dark:bg-gray-600';
     if (value >= -0.7) return 'bg-blue-400';
     return 'bg-blue-600';
   };
@@ -496,7 +496,7 @@ function CorrelationMatrixView({ data }: { data: CorrelationMatrix }) {
             <span>-0.5</span>
           </div>
           <div className="flex items-center gap-1">
-            <div className="w-4 h-4 bg-gray-300 rounded"></div>
+            <div className="w-4 h-4 bg-gray-300 dark:bg-gray-600 rounded"></div>
             <span>0</span>
           </div>
           <div className="flex items-center gap-1">
@@ -530,7 +530,7 @@ function CorrelationMatrixView({ data }: { data: CorrelationMatrix }) {
                     ? 'bg-red-500/20 text-red-600'
                     : pair.correlation <= -0.5
                     ? 'bg-blue-500/20 text-blue-600'
-                    : 'bg-gray-500/20 text-gray-600'
+                    : 'bg-gray-500/20 text-gray-600 dark:text-gray-400'
                 }`}
               >
                 {pair.correlation >= 0 ? '+' : ''}

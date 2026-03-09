@@ -1,9 +1,9 @@
-//! DivvyDiary export functionality
+//! DivvyDiary integration
 //!
-//! Uploads portfolio holdings and transaction history to DivvyDiary
-//! API endpoint: https://api.divvydiary.com/portfolios/{id}/import
-//!
-//! Based on Portfolio Performance's DivvyDiaryUploader.java
+//! - Export: Upload portfolio holdings and transaction history
+//!   API endpoint: https://api.divvydiary.com/portfolios/{id}/import
+//! - Dividends: Fetch ex-dividend dates and amounts per ISIN
+//!   API endpoint: https://api.divvydiary.com/symbols/{isin}
 
 use crate::db;
 use crate::fifo;
@@ -433,4 +433,69 @@ fn format_datetime(date: &str) -> String {
     } else {
         format!("{}T12:00:00.000Z", &date[..10])
     }
+}
+
+// ============================================================================
+// DivvyDiary Dividend Data Fetching
+// ============================================================================
+
+/// Response from GET /symbols/{isin}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DivvyDiarySymbolResponse {
+    dividend_frequency: Option<String>,
+    #[serde(default)]
+    dividends: Vec<DivvyDiaryDividendEntry>,
+}
+
+/// Single dividend entry from DivvyDiary
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DivvyDiaryDividendEntry {
+    pub ex_date: String,
+    pub pay_date: Option<String>,
+    pub amount: f64,
+    pub currency: String,
+    pub forecast: bool,
+}
+
+/// Fetch dividend events for a security by ISIN from DivvyDiary.
+/// Returns filtered dividends (only those with ex_date >= min_date) and the dividend frequency.
+pub async fn fetch_dividends_for_isin(
+    isin: &str,
+    min_date: NaiveDate,
+) -> Result<(Vec<DivvyDiaryDividendEntry>, Option<String>), String> {
+    let url = format!("{}/symbols/{}", DIVVYDIARY_API_BASE, isin);
+    log::debug!("Fetching DivvyDiary dividends for ISIN {} from {}", isin, url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed for {}: {}", isin, e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} for ISIN {}", status, isin));
+    }
+
+    let data: DivvyDiarySymbolResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response for {}: {}", isin, e))?;
+
+    // Filter dividends by min_date
+    let filtered: Vec<DivvyDiaryDividendEntry> = data
+        .dividends
+        .into_iter()
+        .filter(|d| {
+            NaiveDate::parse_from_str(&d.ex_date, "%Y-%m-%d")
+                .map(|date| date >= min_date)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    Ok((filtered, data.dividend_frequency))
 }

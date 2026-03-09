@@ -102,6 +102,7 @@ export function TradingAnalysisPanel({
       openai: keys.openaiApiKey,
       gemini: keys.geminiApiKey,
       perplexity: keys.perplexityApiKey,
+      openrouter: keys.openrouterApiKey,
     };
     const apiKey = apiKeyMap[provider];
     if (!apiKey) return;

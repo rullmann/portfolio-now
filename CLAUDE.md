@@ -303,6 +303,41 @@ fifo::get_cost_basis_by_security_id_converted(conn, base_currency) -> HashMap<i6
 
 **Defaults:** Claude → claude-sonnet-4-5-20250514, OpenAI → gpt-5-mini, Gemini → gemini-2.5-flash, Perplexity → sonar-pro
 
+### AI-Kostenanzeige
+
+Jede AI-Anfrage zeigt nach Abschluss die tatsächlichen Kosten in der Basiswährung an.
+
+**Backend:** Alle Response-Structs haben `input_tokens` + `output_tokens` (getrennt, für korrekte Kostenberechnung).
+**Frontend:** `lib/ai-cost.ts` → `calculateAiCost()` berechnet Kosten aus Token-Counts × Model-Pricing, konvertiert via `getLatestExchangeRate()`.
+
+| Komponente | Anzeige-Format |
+|-----------|---------------|
+| AIAnalysisPanel | `model \| 1.697 Tokens · €0,03` |
+| SecurityPriceModal | `model · 1.697 Tokens · €0,03` |
+| PortfolioInsightsModal | `(1.697 Tokens · €0,03)` |
+| NewsResearchModal | `\| 1.697 Tokens · €0,03` |
+| ChatPanel | Subtile Zeile über Eingabefeld |
+
+**Pricing-Daten:** Statisch in `AI_MODELS_FALLBACK` (USD/1M Tokens) + dynamisch von Provider-APIs (OpenRouter). AIModelSelector zeigt Pricing-Badge in Basiswährung.
+
+### Deprecated Model Lifecycle
+
+Veraltete Modelle werden automatisch erkannt und migriert:
+
+| Schicht | Mechanismus | Datei |
+|---------|-------------|-------|
+| **Rust** | `DEPRECATED_MODELS` Array (old→new Mapping) | `ai/models.rs` |
+| **Rust** | `is_deprecated_model()` filtert Provider-API-Ergebnisse | `ai/mod.rs` |
+| **Frontend** | `DEPRECATED_MODELS` Map + `getUpgradedModel()` | `store/index.ts` |
+| **Frontend** | Zustand `merge` migriert `aiModel` + alle `aiFeatureSettings` | `store/index.ts` |
+
+**Ablauf bei neuem Deprecated Model:**
+1. Eintrag in `DEPRECATED_MODELS` in Rust (`ai/models.rs`) UND Frontend (`store/index.ts`)
+2. `list_*_models()` filtert automatisch via `is_deprecated_model()`
+3. Beim App-Start migriert Zustand `merge` gespeicherte Settings automatisch
+
+**GPT-4.1 Sonderfall:** Kein Vision-Support → `supports_vision` explizit `false` in `openai.rs`
+
 ### Unterstützte Banken (PDF Import)
 
 **DE (24):** Baader Bank, Comdirect, Commerzbank, Consorsbank, DAB, Deutsche Bank, DKB, DZ Bank, ebase, flatex, GenoBroker, ING-DiBa, MLP Bank, OLB, OnVista, Postbank, Quirion, S Broker, Santander, Scalable Capital, Targobank, Trade Republic, 1822direkt
@@ -337,7 +372,7 @@ pp_portfolio (id, uuid, name, reference_account_id, is_retired, attributes)
 pp_txn (id, uuid, owner_type, owner_id, security_id, txn_type, date, amount, currency, shares, note, other_account_id, other_portfolio_id)
 pp_txn_unit (id, txn_id, unit_type, amount, currency, forex_amount, forex_currency, exchange_rate)
 pp_cross_entry (id, entry_type, from_txn_id, to_txn_id, portfolio_txn_id, account_txn_id)
-pp_price (security_id, date, value PRIMARY KEY)
+pp_price (security_id, date, value, volume PRIMARY KEY)
 pp_latest_price (security_id PRIMARY KEY, date, value, high, low, volume)
 pp_exchange_rate (base_currency, target_currency, date, rate PRIMARY KEY)
 pp_fifo_lot (id, security_id, portfolio_id, purchase_txn_id, purchase_date, original_shares, remaining_shares, gross_amount, net_amount, currency)

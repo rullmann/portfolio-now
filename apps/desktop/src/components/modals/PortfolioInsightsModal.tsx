@@ -16,6 +16,7 @@ import { AIProviderLogo } from '../common/AIProviderLogo';
 import { AIModelSelector, SafeMarkdown } from '../common';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useEscapeKey } from '../../lib/hooks';
+import { calculateAiCost } from '../../lib/ai-cost';
 
 /** Analysis mode selection */
 type AnalysisMode = 'select' | 'insights' | 'opportunities';
@@ -32,6 +33,8 @@ interface PortfolioInsightsResponse {
   provider: string;
   model: string;
   tokensUsed: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 interface LoadingStep {
@@ -171,6 +174,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PortfolioInsightsResponse | null>(null);
+  const [costDisplay, setCostDisplay] = useState<string>('');
   const [steps, setSteps] = useState<LoadingStep[]>([
     { id: 'holdings', label: 'Holdings laden', status: 'pending' },
     { id: 'analysis', label: 'KI-Analyse', status: 'pending' },
@@ -210,6 +214,8 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
         return keys.geminiApiKey;
       case 'perplexity':
         return keys.perplexityApiKey;
+      case 'openrouter':
+        return keys.openrouterApiKey;
       default:
         return '';
     }
@@ -273,6 +279,8 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
 
       updateStep('analysis', 'done');
       setResult(response);
+      calculateAiCost(response.provider, response.model, response.inputTokens, response.outputTokens, response.tokensUsed, baseCurrency)
+        .then(c => c?.costDisplay && setCostDisplay(c.costDisplay));
     } catch (err) {
       updateStep('analysis', 'error');
       const errorMessage = typeof err === 'string' ? err : String(err);
@@ -470,7 +478,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
                 <AIProviderLogo provider={aiProvider} size={16} />
                 <span>
                   {result.model}
-                  {result.tokensUsed && ` (${result.tokensUsed.toLocaleString()} Tokens)`}
+                  {result.tokensUsed && ` (${result.tokensUsed.toLocaleString()} Tokens${costDisplay ? ` · ${costDisplay}` : ''})`}
                 </span>
               </>
             )}

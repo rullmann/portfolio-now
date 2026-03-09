@@ -105,7 +105,11 @@ export function BenchmarkView() {
             <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             Aktualisieren
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors">
+          <button
+            disabled
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Kommt bald"
+          >
             <Plus size={16} />
             Benchmark hinzufügen
           </button>

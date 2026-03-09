@@ -5,8 +5,10 @@
 //! - Tax Report: Taxable events (dividends, realized gains)
 //! - Realized Gains Report: Gains/losses from sales
 
+use crate::currency;
 use crate::db;
 use crate::pp::common::{prices, shares};
+use crate::pp::parse_date_flexible;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
@@ -264,6 +266,8 @@ pub fn generate_dividend_report(
     let mut entries: Vec<DividendEntry> = Vec::new();
     let mut total_gross = 0.0;
     let mut total_taxes = 0.0;
+    // Pre-converted amounts in base currency for aggregation (avoids 3× DB lookups per entry)
+    let mut converted_amounts: Vec<(f64, f64, f64)> = Vec::new();
 
     for row in rows.flatten() {
         let (date, security_id, security_name, isin, portfolio_name, gross_raw, currency, taxes_raw, shares_raw) = row;
@@ -274,8 +278,22 @@ pub fn generate_dividend_report(
         let shares_val = shares_raw.map(|s| shares::to_decimal(s));
         let per_share = shares_val.filter(|s| *s > 0.0).map(|s| gross / s);
 
-        total_gross += gross;
-        total_taxes += taxes;
+        // Convert to base currency once — reuse for totals, by_security, and by_month
+        let (gross_base, taxes_base, net_base) = if currency != base_currency {
+            let txn_date = parse_date_flexible(&date)
+                .unwrap_or_else(|| chrono::Utc::now().date_naive());
+            let g = currency::convert(conn, gross, &currency, &base_currency, txn_date)
+                .unwrap_or(gross);
+            let t = currency::convert(conn, taxes, &currency, &base_currency, txn_date)
+                .unwrap_or(taxes);
+            (g, t, g - t)
+        } else {
+            (gross, taxes, net)
+        };
+
+        total_gross += gross_base;
+        total_taxes += taxes_base;
+        converted_amounts.push((gross_base, taxes_base, net_base));
 
         entries.push(DividendEntry {
             date,
@@ -292,9 +310,10 @@ pub fn generate_dividend_report(
         });
     }
 
-    // Group by security
+    // Group by security (reuse pre-converted amounts — no extra DB lookups)
     let mut by_security_map: std::collections::HashMap<i64, DividendBySecurity> = std::collections::HashMap::new();
-    for entry in &entries {
+    for (i, entry) in entries.iter().enumerate() {
+        let (g, t, n) = converted_amounts[i];
         let sec = by_security_map.entry(entry.security_id).or_insert(DividendBySecurity {
             security_id: entry.security_id,
             security_name: entry.security_name.clone(),
@@ -304,17 +323,18 @@ pub fn generate_dividend_report(
             total_net: 0.0,
             payment_count: 0,
         });
-        sec.total_gross += entry.gross_amount;
-        sec.total_taxes += entry.taxes;
-        sec.total_net += entry.net_amount;
+        sec.total_gross += g;
+        sec.total_taxes += t;
+        sec.total_net += n;
         sec.payment_count += 1;
     }
     let mut by_security: Vec<DividendBySecurity> = by_security_map.into_values().collect();
     by_security.sort_by(|a, b| b.total_gross.partial_cmp(&a.total_gross).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Group by month
+    // Group by month (reuse pre-converted amounts)
     let mut by_month_map: std::collections::HashMap<String, DividendByMonth> = std::collections::HashMap::new();
-    for entry in &entries {
+    for (i, entry) in entries.iter().enumerate() {
+        let (g, t, n) = converted_amounts[i];
         let month = entry.date[..7].to_string(); // YYYY-MM
         let m = by_month_map.entry(month.clone()).or_insert(DividendByMonth {
             month,
@@ -322,9 +342,9 @@ pub fn generate_dividend_report(
             total_taxes: 0.0,
             total_net: 0.0,
         });
-        m.total_gross += entry.gross_amount;
-        m.total_taxes += entry.taxes;
-        m.total_net += entry.net_amount;
+        m.total_gross += g;
+        m.total_taxes += t;
+        m.total_net += n;
     }
     let mut by_month: Vec<DividendByMonth> = by_month_map.into_values().collect();
     by_month.sort_by(|a, b| a.month.cmp(&b.month));
@@ -362,10 +382,24 @@ pub fn generate_realized_gains_report(
         )
         .unwrap_or_else(|_| "EUR".to_string());
 
-    // Get SELL transactions with FIFO cost basis - use parameterized query
+    // Get SELL transactions with FIFO cost basis in single query (no N+1)
+    // FIFO data joined via subquery to avoid per-row lookups
+    let fifo_subquery = r#"
+        LEFT JOIN (
+            SELECT
+                fc.sale_txn_id,
+                SUM(fc.gross_amount) / 100.0 as cost_basis,
+                AVG(julianday('now') - julianday(fl.purchase_date)) as avg_holding_days,
+                fl.currency as lot_currency
+            FROM pp_fifo_consumption fc
+            JOIN pp_fifo_lot fl ON fl.id = fc.lot_id
+            GROUP BY fc.sale_txn_id
+        ) fifo ON fifo.sale_txn_id = t.id
+    "#;
+
     let (query, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(pid) = portfolio_id {
         (
-            r#"
+            format!(r#"
             SELECT
                 t.id,
                 t.date,
@@ -377,16 +411,20 @@ pub fn generate_realized_gains_report(
                 t.amount as proceeds,
                 t.currency,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'FEE'), 0) as fees,
-                COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes
+                COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes,
+                COALESCE(fifo.cost_basis, 0) as fifo_cost_basis,
+                COALESCE(fifo.avg_holding_days, 0) as fifo_holding_days,
+                COALESCE(fifo.lot_currency, t.currency) as fifo_lot_currency
             FROM pp_txn t
             JOIN pp_security s ON s.id = t.security_id
             JOIN pp_portfolio p ON p.id = t.owner_id
+            {}
             WHERE t.txn_type = 'SELL'
               AND t.owner_type = 'portfolio'
               AND t.date >= ?1 AND t.date <= ?2
               AND t.owner_id = ?3
             ORDER BY t.date DESC
-            "#.to_string(),
+            "#, fifo_subquery),
             vec![
                 Box::new(start_date.clone()) as Box<dyn rusqlite::ToSql>,
                 Box::new(end_date.clone()),
@@ -395,7 +433,7 @@ pub fn generate_realized_gains_report(
         )
     } else {
         (
-            r#"
+            format!(r#"
             SELECT
                 t.id,
                 t.date,
@@ -407,15 +445,19 @@ pub fn generate_realized_gains_report(
                 t.amount as proceeds,
                 t.currency,
                 COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'FEE'), 0) as fees,
-                COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes
+                COALESCE((SELECT SUM(amount) FROM pp_txn_unit WHERE txn_id = t.id AND unit_type = 'TAX'), 0) as taxes,
+                COALESCE(fifo.cost_basis, 0) as fifo_cost_basis,
+                COALESCE(fifo.avg_holding_days, 0) as fifo_holding_days,
+                COALESCE(fifo.lot_currency, t.currency) as fifo_lot_currency
             FROM pp_txn t
             JOIN pp_security s ON s.id = t.security_id
             JOIN pp_portfolio p ON p.id = t.owner_id
+            {}
             WHERE t.txn_type = 'SELL'
               AND t.owner_type = 'portfolio'
               AND t.date >= ?1 AND t.date <= ?2
             ORDER BY t.date DESC
-            "#.to_string(),
+            "#, fifo_subquery),
             vec![
                 Box::new(start_date.clone()) as Box<dyn rusqlite::ToSql>,
                 Box::new(end_date.clone()),
@@ -439,6 +481,9 @@ pub fn generate_realized_gains_report(
                 row.get::<_, String>(8)?,
                 row.get::<_, i64>(9)?,
                 row.get::<_, i64>(10)?,
+                row.get::<_, f64>(11)?,
+                row.get::<_, f64>(12)?,
+                row.get::<_, String>(13)?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -452,29 +497,46 @@ pub fn generate_realized_gains_report(
     let mut long_term_gain = 0.0;
 
     for row in rows.flatten() {
-        let (txn_id, date, security_id, security_name, isin, portfolio_name, shares_raw, proceeds_raw, currency, fees_raw, taxes_raw) = row;
+        let (txn_id, date, security_id, security_name, isin, portfolio_name, shares_raw, proceeds_raw, currency, fees_raw, taxes_raw, cost_basis_orig, avg_holding_days_f, lot_currency) = row;
+        let _ = txn_id; // Used in query, not needed in loop
 
         let shares_sold = shares::to_decimal(shares_raw);
-        let proceeds = proceeds_raw as f64 / 100.0;
-        let fees = fees_raw as f64 / 100.0;
-        let taxes = taxes_raw as f64 / 100.0;
+        let proceeds_orig = proceeds_raw as f64 / 100.0;
+        let fees_orig = fees_raw as f64 / 100.0;
+        let taxes_orig = taxes_raw as f64 / 100.0;
+        let avg_holding_days = avg_holding_days_f as i32;
 
-        // Get FIFO cost basis for this sale from consumption records
-        // Use gross_amount from consumption which is the proportional cost basis (INCLUDING fees/taxes)
-        let (cost_basis, avg_holding_days): (f64, i32) = conn
-            .query_row(
-                r#"
-                SELECT
-                    COALESCE(SUM(fc.gross_amount) / 100.0, 0),
-                    COALESCE(AVG(julianday(?) - julianday(fl.purchase_date)), 0)
-                FROM pp_fifo_consumption fc
-                JOIN pp_fifo_lot fl ON fl.id = fc.lot_id
-                WHERE fc.sale_txn_id = ?
-                "#,
-                rusqlite::params![date, txn_id],
-                |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)? as i32)),
-            )
-            .unwrap_or((0.0, 0));
+        // Convert proceeds and cost basis to base currency for correct gain calculation
+        let txn_date = parse_date_flexible(&date)
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+        let proceeds = if currency != base_currency {
+            currency::convert(conn, proceeds_orig, &currency, &base_currency, txn_date)
+                .unwrap_or(proceeds_orig)
+        } else {
+            proceeds_orig
+        };
+
+        let cost_basis = if lot_currency != base_currency {
+            currency::convert(conn, cost_basis_orig, &lot_currency, &base_currency, txn_date)
+                .unwrap_or(cost_basis_orig)
+        } else {
+            cost_basis_orig
+        };
+
+        let fees = if currency != base_currency {
+            currency::convert(conn, fees_orig, &currency, &base_currency, txn_date)
+                .unwrap_or(fees_orig)
+        } else {
+            fees_orig
+        };
+
+        let taxes = if currency != base_currency {
+            currency::convert(conn, taxes_orig, &currency, &base_currency, txn_date)
+                .unwrap_or(taxes_orig)
+        } else {
+            taxes_orig
+        };
 
         let gain = proceeds - cost_basis - fees;
         let gain_percent = if cost_basis > 0.0 { (gain / cost_basis) * 100.0 } else { 0.0 };
@@ -504,7 +566,7 @@ pub fn generate_realized_gains_report(
             gain_percent,
             holding_days: avg_holding_days,
             is_long_term,
-            currency,
+            currency: base_currency.clone(),
             fees,
             taxes,
         });

@@ -1444,9 +1444,9 @@ fn save_quote_to_db(security_id: i64, quote: &LatestQuote) -> anyhow::Result<()>
 
     // Auch in historische Preise einfügen
     conn.execute(
-        "INSERT OR REPLACE INTO pp_price (security_id, date, value)
-         VALUES (?, ?, ?)",
-        params![security_id, quote.quote.date.to_string(), price_value],
+        "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume)
+         VALUES (?, ?, ?, ?)",
+        params![security_id, quote.quote.date.to_string(), price_value, quote.quote.volume],
     )?;
 
     // Clear any previous error on success (using same connection to avoid deadlock)
@@ -1526,13 +1526,13 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
                 )?;
 
                 let mut stmt_insert = tx.prepare_cached(
-                    "INSERT INTO pp_price (security_id, date, value) VALUES (?, ?, ?)"
+                    "INSERT INTO pp_price (security_id, date, value, volume) VALUES (?, ?, ?, ?)"
                 )?;
 
                 for quote in quotes {
                     let date_str = quote.date.to_string();
                     let new_value = quotes::price_to_db(quote.close);
-                    stmt_insert.execute(params![security_id, date_str, new_value])?;
+                    stmt_insert.execute(params![security_id, date_str, new_value, quote.volume])?;
                     stats.inserted += 1;
                 }
             }
@@ -1540,12 +1540,12 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
         } else {
             // Normal mode: Compare with existing and insert/update as needed
             // Step 1: Get existing prices for comparison (using index)
-            let existing_prices: std::collections::HashMap<String, i64> = {
+            let existing_prices: std::collections::HashMap<String, (i64, Option<i64>)> = {
                 let mut stmt = conn.prepare_cached(
-                    "SELECT date, value FROM pp_price WHERE security_id = ?"
+                    "SELECT date, value, volume FROM pp_price WHERE security_id = ?"
                 )?;
                 let rows = stmt.query_map(params![security_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    Ok((row.get::<_, String>(0)?, (row.get::<_, i64>(1)?, row.get::<_, Option<i64>>(2)?)))
                 })?;
                 rows.filter_map(|r| r.ok()).collect()
             };
@@ -1556,10 +1556,10 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
             {
                 // Prepare statements once, reuse many times
                 let mut stmt_insert = tx.prepare_cached(
-                    "INSERT INTO pp_price (security_id, date, value) VALUES (?, ?, ?)"
+                    "INSERT INTO pp_price (security_id, date, value, volume) VALUES (?, ?, ?, ?)"
                 )?;
                 let mut stmt_update = tx.prepare_cached(
-                    "UPDATE pp_price SET value = ? WHERE security_id = ? AND date = ?"
+                    "UPDATE pp_price SET value = ?, volume = ? WHERE security_id = ? AND date = ?"
                 )?;
 
                 for quote in quotes {
@@ -1567,16 +1567,16 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
                     let new_value = quotes::price_to_db(quote.close);
 
                     match existing_prices.get(&date_str) {
-                        Some(&existing_value) => {
-                            if existing_value == new_value {
+                        Some(&(existing_value, existing_volume)) => {
+                            if existing_value == new_value && existing_volume == quote.volume {
                                 stats.skipped += 1;
                             } else {
-                                stmt_update.execute(params![new_value, security_id, date_str])?;
+                                stmt_update.execute(params![new_value, quote.volume, security_id, date_str])?;
                                 stats.updated += 1;
                             }
                         }
                         None => {
-                            stmt_insert.execute(params![security_id, date_str, new_value])?;
+                            stmt_insert.execute(params![security_id, date_str, new_value, quote.volume])?;
                             stats.inserted += 1;
                         }
                     }
@@ -3850,6 +3850,11 @@ pub async fn chat_with_quote_assistant(
                 .await
                 .map_err(|e| format!("Perplexity error: {}", e.message))?
         }
+        "openrouter" => {
+            crate::ai::openrouter::complete_text(&request.model, &request.api_key, &full_prompt)
+                .await
+                .map_err(|e| format!("OpenRouter error: {}", e.message))?
+        }
         _ => {
             return Err(format!("Unknown AI provider: {}", request.provider));
         }
@@ -3878,7 +3883,9 @@ pub async fn chat_with_quote_assistant(
     Ok(QuoteAssistantResponse {
         message: response_text,
         suggestion,
-        tokens_used: None, // Simple completion doesn't return token usage
+        tokens_used: None,
+        input_tokens: None,
+        output_tokens: None,
     })
 }
 

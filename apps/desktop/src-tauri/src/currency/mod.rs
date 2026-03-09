@@ -81,27 +81,41 @@ pub fn get_exchange_rate(
     }
 
     // Try direct rate first
-    if let Some(rate) = lookup_rate(conn, base, target, date)? {
-        return Ok(rate);
+    match lookup_rate(conn, base, target, date) {
+        Ok(Some(rate)) => return Ok(rate),
+        Err(e) => {
+            // Stale rate found — remember but try other paths first
+            log::warn!("Direct rate {}/{}: {}", base, target, e);
+        }
+        Ok(None) => {}
     }
 
     // Try inverse rate
-    if let Some(rate) = lookup_rate(conn, target, base, date)? {
-        if rate == 0.0 {
-            return Err(anyhow!("Exchange rate {}/{} is 0.0 on {} – cannot invert", target, base, date));
+    match lookup_rate(conn, target, base, date) {
+        Ok(Some(rate)) => {
+            if rate == 0.0 {
+                return Err(anyhow!("Exchange rate {}/{} is 0.0 on {} – cannot invert", target, base, date));
+            }
+            return Ok(1.0 / rate);
         }
-        return Ok(1.0 / rate);
+        Err(e) => {
+            log::warn!("Inverse rate {}/{}: {}", target, base, e);
+        }
+        Ok(None) => {}
     }
 
     // Triangulate through EUR
     if base != "EUR" && target != "EUR" {
-        let base_to_eur = get_exchange_rate(conn, base, "EUR", date)?;
-        let eur_to_target = get_exchange_rate(conn, "EUR", target, date)?;
-        return Ok(base_to_eur * eur_to_target);
+        if let Ok(base_to_eur) = get_exchange_rate(conn, base, "EUR", date) {
+            if let Ok(eur_to_target) = get_exchange_rate(conn, "EUR", target, date) {
+                return Ok(base_to_eur * eur_to_target);
+            }
+        }
     }
 
     Err(anyhow!(
-        "No exchange rate found for {}/{} on {} or before",
+        "No exchange rate found for {}/{} on {} or before. \
+         Rates may be stale (>180 days) — please sync exchange rates.",
         base, target, date
     ))
 }
@@ -138,11 +152,11 @@ fn lookup_rate(
             if let Ok(rate_date) = NaiveDate::parse_from_str(&rate_date_str, "%Y-%m-%d") {
                 let age_days = (date - rate_date).num_days();
                 if age_days > 180 {
-                    log::warn!(
-                        "Rejecting stale exchange rate {}/{}: {} days old (rate date: {}, requested: {}). Sync exchange rates.",
+                    return Err(anyhow!(
+                        "Exchange rate {}/{} is {} days stale (last rate: {}, requested: {}). \
+                         Please sync exchange rates (Menu → Sync → Exchange Rates).",
                         base, target, age_days, rate_date_str, date
-                    );
-                    return Ok(None);
+                    ));
                 }
                 if age_days > 30 {
                     log::warn!(

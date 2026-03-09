@@ -8,11 +8,12 @@
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Building2, TrendingUp, TrendingDown } from 'lucide-react';
+import { X, TrendingUp, TrendingDown } from 'lucide-react';
 import { createChart, ColorType, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, LineData, Time, SeriesMarker } from 'lightweight-charts';
 import type { SecurityChartData, PriceData } from '../../lib/types';
 import { getPriceHistory, getFifoCostBasisHistory, fetchLogosBatch, getCachedLogoData } from '../../lib/api';
+import { LogoImage } from '../common/SecurityLogo';
 import { useSettingsStore } from '../../store';
 import { formatNumber } from '../../views/utils';
 
@@ -402,18 +403,7 @@ export function SecurityDetailChartModal({
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-3">
             {/* Logo */}
-            {logoUrl ? (
-              <img
-                src={logoUrl}
-                alt=""
-                className="w-10 h-10 rounded-lg object-contain bg-muted"
-                crossOrigin="anonymous"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
-                <Building2 size={24} className="text-muted-foreground" />
-              </div>
-            )}
+            <LogoImage src={logoUrl} size={40} />
             <div>
               <h2 className="text-lg font-semibold">{securityName}</h2>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

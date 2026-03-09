@@ -345,6 +345,15 @@ pub mod limits {
             window_duration: Duration::from_secs(60),
         }
     }
+
+    /// Rate limit for API key validation (no min interval, max 30 per minute)
+    pub fn api_key_validation() -> RateLimitConfig {
+        RateLimitConfig {
+            min_interval: Duration::from_secs(0),
+            max_requests_per_window: 30,
+            window_duration: Duration::from_secs(60),
+        }
+    }
 }
 
 // ============================================================================

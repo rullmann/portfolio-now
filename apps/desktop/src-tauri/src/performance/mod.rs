@@ -554,9 +554,9 @@ fn get_ttwror_portfolio_values(
 
     // Get all unique dates with prices in range
     let dates_sql = r#"
-        SELECT DISTINCT date(date) as d
+        SELECT DISTINCT date as d
         FROM pp_price
-        WHERE date(date) >= ? AND date(date) <= ?
+        WHERE date >= ? AND date <= ?
         ORDER BY d
     "#;
 
@@ -595,7 +595,7 @@ fn get_ttwror_portfolio_values(
             JOIN pp_security s ON s.id = t.security_id
             WHERE t.owner_type = 'portfolio'
               AND t.shares IS NOT NULL
-              AND date(t.date) <= ?
+              AND t.date <= ?
               {}
             GROUP BY t.security_id
             HAVING net_shares > 0
@@ -620,7 +620,7 @@ fn get_ttwror_portfolio_values(
                 // Get price at this date
                 let price_sql = r#"
                     SELECT value FROM pp_price
-                    WHERE security_id = ? AND date(date) <= ?
+                    WHERE security_id = ? AND date <= ?
                     ORDER BY date DESC LIMIT 1
                 "#;
 
@@ -702,7 +702,7 @@ pub fn get_portfolio_value_at_date_with_currency(
         JOIN pp_security s ON s.id = t.security_id
         WHERE t.owner_type = 'portfolio'
           AND t.shares IS NOT NULL
-          AND date(t.date) <= ?1
+          AND t.date <= ?1
           {}
         GROUP BY t.security_id
         HAVING net_shares > 0
@@ -728,7 +728,7 @@ pub fn get_portfolio_value_at_date_with_currency(
             // Get price at or before valuation_date (not always latest!)
             let price_sql = r#"
                 SELECT value FROM pp_price
-                WHERE security_id = ?1 AND date(date) <= ?2
+                WHERE security_id = ?1 AND date <= ?2
                 ORDER BY date DESC LIMIT 1
             "#;
 
@@ -736,13 +736,23 @@ pub fn get_portfolio_value_at_date_with_currency(
                 .query_row(price_sql, params![security_id, date_str], |row| row.get(0))
                 .ok()
                 .or_else(|| {
-                    // Fallback to latest_price if no historical price found
-                    conn.query_row(
-                        "SELECT value FROM pp_latest_price WHERE security_id = ?1",
-                        [security_id],
-                        |row| row.get(0),
-                    )
-                    .ok()
+                    // Fallback to latest_price ONLY if valuation_date is today or in the future
+                    // Never use latest_price for historical valuations (would inflate past values)
+                    let today = chrono::Utc::now().date_naive();
+                    if valuation_date >= today {
+                        conn.query_row(
+                            "SELECT value FROM pp_latest_price WHERE security_id = ?1",
+                            [security_id],
+                            |row| row.get(0),
+                        )
+                        .ok()
+                    } else {
+                        log::warn!(
+                            "No historical price for security {} on {} – skipping (no future price fallback)",
+                            security_id, date_str
+                        );
+                        None
+                    }
                 });
 
             if let Some(p) = price {
@@ -818,10 +828,10 @@ fn get_price_at_or_near_date(
     security_id: i64,
     date: &str,
 ) -> Option<i64> {
-    // First try: price at or before date (use date() function for proper comparison)
+    // First try: price at or before date (direct string comparison, uses index)
     let before_sql = r#"
         SELECT value FROM pp_price
-        WHERE security_id = ?1 AND date(date) <= date(?2)
+        WHERE security_id = ?1 AND date <= ?2
         ORDER BY date DESC
         LIMIT 1
     "#;
@@ -833,7 +843,7 @@ fn get_price_at_or_near_date(
     // Fallback 1: first price after date (for new holdings without historical prices)
     let after_sql = r#"
         SELECT value FROM pp_price
-        WHERE security_id = ?1 AND date(date) > date(?2)
+        WHERE security_id = ?1 AND date > ?2
         ORDER BY date ASC
         LIMIT 1
     "#;
@@ -871,7 +881,7 @@ fn calculate_portfolio_value_at_date(
         FROM pp_txn t
         WHERE t.owner_type = 'portfolio'
           AND t.shares IS NOT NULL
-          AND date(t.date) <= ?
+          AND t.date <= ?
           {}
         GROUP BY t.security_id
         HAVING net_shares > 0
@@ -937,7 +947,7 @@ fn get_initial_investment_amount(
         WHERE owner_type = 'portfolio'
           AND txn_type IN ('BUY', 'DELIVERY_INBOUND')
           AND amount IS NOT NULL
-          AND date(date) <= ?
+          AND date <= ?
           {}
         "#,
         portfolio_filter
@@ -1053,12 +1063,29 @@ fn calculate_npv_and_derivative(cash_flows: &[(f64, f64)], rate: f64) -> (f64, f
     let mut dnpv = 0.0;
 
     for (cf, years) in cash_flows {
-        let discount = (1.0 + rate).powf(*years);
-        npv += cf / discount;
+        let base = 1.0 + rate;
+        // Guard: if base <= 0, discount factor is undefined for fractional exponents
+        if base <= 0.0 {
+            // Skip this cash flow — rate is too extreme
+            continue;
+        }
+
+        let discount = base.powf(*years);
+
+        // Guard against zero/NaN/Infinity discount
+        if discount <= 0.0 || !discount.is_finite() {
+            continue;
+        }
+
+        let term = cf / discount;
+        if term.is_finite() {
+            npv += term;
+        }
 
         // Derivative: d/dr [cf / (1+r)^t] = -t * cf / (1+r)^(t+1)
-        if discount > 0.0 {
-            dnpv -= years * cf / (discount * (1.0 + rate));
+        let dterm = years * cf / (discount * base);
+        if dterm.is_finite() {
+            dnpv -= dterm;
         }
     }
 
@@ -1124,7 +1151,7 @@ fn get_portfolio_values(
             FROM pp_txn t
             WHERE t.owner_type = 'portfolio'
               AND t.shares IS NOT NULL
-              AND date(t.date) <= ?
+              AND t.date <= ?
               {}
             GROUP BY t.security_id
             HAVING net_shares > 0
@@ -1232,7 +1259,7 @@ fn get_cash_flows(
             WHERE t.owner_type = 'account'
               AND t.txn_type IN ('DEPOSIT', 'REMOVAL')
               AND t.owner_id IN ({})
-              AND date(t.date) >= ?1 AND date(t.date) <= ?2
+              AND t.date >= ?1 AND t.date <= ?2
             ORDER BY t.date
             "#,
             in_clause
@@ -1297,7 +1324,7 @@ fn get_cash_flows(
             JOIN pp_account a ON a.id = t.owner_id
             WHERE t.owner_type = 'account'
               AND t.txn_type IN ('DEPOSIT', 'REMOVAL')
-              AND date(t.date) >= ?1 AND date(t.date) <= ?2
+              AND t.date >= ?1 AND t.date <= ?2
             ORDER BY t.date
         "#;
 
@@ -1426,7 +1453,7 @@ fn get_buy_sell_cash_flows(
         WHERE t.owner_type = 'portfolio'
           AND t.txn_type IN ('BUY', 'SELL')
           {}
-          AND date(t.date) >= ?1 AND date(t.date) <= ?2
+          AND t.date >= ?1 AND t.date <= ?2
         ORDER BY t.date
         "#,
         portfolio_filter
@@ -1509,7 +1536,7 @@ fn get_delivery_cash_flows(
         WHERE t.owner_type = 'portfolio'
           AND t.txn_type IN ('DELIVERY_INBOUND', 'DELIVERY_OUTBOUND')
           {}
-          AND date(t.date) >= ?1 AND date(t.date) <= ?2
+          AND t.date >= ?1 AND t.date <= ?2
         ORDER BY t.date
         "#,
         portfolio_filter
@@ -1883,9 +1910,9 @@ fn get_portfolio_value_history(
 
     // Get all unique dates with prices in range
     let dates_sql = r#"
-        SELECT DISTINCT date(date) as d
+        SELECT DISTINCT date as d
         FROM pp_price
-        WHERE date(date) >= ? AND date(date) <= ?
+        WHERE date >= ? AND date <= ?
         ORDER BY d
     "#;
 
@@ -1924,7 +1951,7 @@ fn get_portfolio_value_history(
             JOIN pp_security s ON s.id = t.security_id
             WHERE t.owner_type = 'portfolio'
               AND t.shares IS NOT NULL
-              AND date(t.date) <= ?
+              AND t.date <= ?
               {}
             GROUP BY t.security_id
             HAVING net_shares > 0
@@ -1949,7 +1976,7 @@ fn get_portfolio_value_history(
                 // Get price at this date
                 let price_sql = r#"
                     SELECT value FROM pp_price
-                    WHERE security_id = ? AND date(date) <= ?
+                    WHERE security_id = ? AND date <= ?
                     ORDER BY date DESC LIMIT 1
                 "#;
 
@@ -2170,9 +2197,9 @@ fn calculate_beta_alpha(
 
     // Get benchmark price history with currency conversion
     let bench_sql = r#"
-        SELECT date(date) as d, value
+        SELECT date as d, value
         FROM pp_price
-        WHERE security_id = ? AND date(date) >= ? AND date(date) <= ?
+        WHERE security_id = ? AND date >= ? AND date <= ?
         ORDER BY d
     "#;
 
@@ -2373,7 +2400,7 @@ fn get_account_balance_at_date(
             ), 0) as balance
         FROM pp_account a
         LEFT JOIN pp_txn t ON t.owner_type = 'account' AND t.owner_id = a.id
-            AND date(t.date) <= ?2
+            AND t.date <= ?2
         WHERE a.id = ?1
         GROUP BY a.id
     "#;

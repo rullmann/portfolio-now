@@ -17,7 +17,7 @@ import {
   isUsingKeyring,
   type ApiKeyType,
 } from '../lib/secureStorage';
-import { useSettingsStore } from '../store';
+import { useSettingsStore, clearModelCache } from '../store';
 
 // Key used by Zustand persist middleware for settings
 const ZUSTAND_STORAGE_KEY = 'portfolio-settings';
@@ -100,6 +100,7 @@ interface SecureApiKeys {
   openaiApiKey: string;
   geminiApiKey: string;
   perplexityApiKey: string;
+  openrouterApiKey: string;
   // External services
   divvyDiaryApiKey: string;
   // Twitter/X
@@ -129,6 +130,7 @@ const EMPTY_KEYS: SecureApiKeys = {
   openaiApiKey: '',
   geminiApiKey: '',
   perplexityApiKey: '',
+  openrouterApiKey: '',
   divvyDiaryApiKey: '',
   twitterClientId: '',
 };
@@ -169,6 +171,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const setOpenaiApiKey = useSettingsStore((s) => s.setOpenaiApiKey);
   const setGeminiApiKey = useSettingsStore((s) => s.setGeminiApiKey);
   const setPerplexityApiKey = useSettingsStore((s) => s.setPerplexityApiKey);
+  const setOpenrouterApiKey = useSettingsStore((s) => s.setOpenrouterApiKey);
   const setDivvyDiaryApiKey = useSettingsStore((s) => s.setDivvyDiaryApiKey);
 
   // Map key types to Zustand setters
@@ -182,6 +185,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     openai: setOpenaiApiKey,
     gemini: setGeminiApiKey,
     perplexity: setPerplexityApiKey,
+    openrouter: setOpenrouterApiKey,
     divvyDiary: setDivvyDiaryApiKey,
     twitterClientId: () => {}, // No Zustand sync needed for twitterClientId
   };
@@ -201,6 +205,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     setOpenaiApiKey(newKeys.openaiApiKey);
     setGeminiApiKey(newKeys.geminiApiKey);
     setPerplexityApiKey(newKeys.perplexityApiKey);
+    setOpenrouterApiKey(newKeys.openrouterApiKey);
     setDivvyDiaryApiKey(newKeys.divvyDiaryApiKey);
   }, [
     setBrandfetchApiKey,
@@ -212,6 +217,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     setOpenaiApiKey,
     setGeminiApiKey,
     setPerplexityApiKey,
+    setOpenrouterApiKey,
     setDivvyDiaryApiKey,
   ]);
 
@@ -242,6 +248,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
           openaiApiKey: legacyKeys.openai || '',
           geminiApiKey: legacyKeys.gemini || '',
           perplexityApiKey: legacyKeys.perplexity || '',
+          openrouterApiKey: '',
           divvyDiaryApiKey: legacyKeys.divvyDiary || '',
           twitterClientId: '',
         };
@@ -282,6 +289,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
         openaiApiKey: secureKeys.openai,
         geminiApiKey: secureKeys.gemini,
         perplexityApiKey: secureKeys.perplexity,
+        openrouterApiKey: secureKeys.openrouter,
         divvyDiaryApiKey: secureKeys.divvyDiary,
         twitterClientId: secureKeys.twitterClientId,
       };
@@ -310,6 +318,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     openai: 'openaiApiKey',
     gemini: 'geminiApiKey',
     perplexity: 'perplexityApiKey',
+    openrouter: 'openrouterApiKey',
     divvyDiary: 'divvyDiaryApiKey',
     twitterClientId: 'twitterClientId',
   };
@@ -325,6 +334,15 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
       const setter = setterMap[keyType];
       if (setter) {
         setter(value);
+      }
+
+      // Clear model cache when AI provider key changes
+      const aiKeyToProvider: Partial<Record<ApiKeyType, 'claude' | 'openai' | 'gemini' | 'perplexity' | 'openrouter'>> = {
+        anthropic: 'claude', openai: 'openai', gemini: 'gemini', perplexity: 'perplexity', openrouter: 'openrouter',
+      };
+      const provider = aiKeyToProvider[keyType];
+      if (provider) {
+        clearModelCache(provider);
       }
 
       // Store in appropriate storage

@@ -19,11 +19,11 @@ pub const MAX_RETRIES: u32 = 2;
 /// Base delay for exponential backoff (milliseconds)
 pub const RETRY_BASE_DELAY_MS: u64 = 1000;
 
-/// Maximum tokens for response
-pub const MAX_TOKENS: u32 = 1500;
+/// Maximum tokens for response (chart analysis incl. enhanced JSON)
+pub const MAX_TOKENS: u32 = 4096;
 
 /// Maximum tokens for portfolio insights (longer response needed)
-pub const MAX_TOKENS_INSIGHTS: u32 = 2000;
+pub const MAX_TOKENS_INSIGHTS: u32 = 3000;
 
 /// Maximum tokens for chat responses
 /// Note: 8192 needed for longer answers with SQL queries + explanations + command markers (e.g. EXTRACTED_TRANSACTIONS JSON)
@@ -189,6 +189,8 @@ pub struct ChartAnalysisResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 // ============================================================================
@@ -203,6 +205,8 @@ pub struct NewsResearchResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 // ============================================================================
@@ -333,6 +337,8 @@ pub struct EnhancedAnnotationAnalysisResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 // ============================================================================
@@ -419,6 +425,8 @@ pub struct AnnotationAnalysisResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 // ============================================================================
@@ -685,6 +693,8 @@ pub struct PortfolioInsightsResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 // ============================================================================
@@ -734,6 +744,8 @@ pub struct PortfolioChatResponse {
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
     /// Suggested actions that require user confirmation (watchlist modifications)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suggestions: Vec<ChatSuggestedAction>,
@@ -854,6 +866,23 @@ pub struct AiModelInfo {
     pub name: String,
     pub description: String,
     pub supports_vision: bool,
+    #[serde(default)]
+    pub supports_web_search: bool,
+    /// Maximum output tokens the model can produce
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Context window size (input + output)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    /// Cost per 1M input tokens in USD
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_input: Option<f64>,
+    /// Cost per 1M output tokens in USD
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_output: Option<f64>,
+    /// ISO date when model will be deprecated (e.g. "2026-06-01")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecation_date: Option<String>,
 }
 
 // ============================================================================
@@ -924,6 +953,8 @@ pub struct QuoteAssistantResponse {
     pub message: String,
     pub suggestion: Option<ValidatedQuoteSuggestion>,
     pub tokens_used: Option<u32>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 /// Security with quote issue for the assistant

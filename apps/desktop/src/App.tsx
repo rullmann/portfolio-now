@@ -93,6 +93,7 @@ const PROVIDER_NAMES: Record<AiProvider, string> = {
   openai: 'OpenAI',
   gemini: 'Gemini',
   perplexity: 'Perplexity',
+  openrouter: 'OpenRouter',
 };
 
 function App() {
@@ -378,29 +379,24 @@ function App() {
     try {
       setLoading(true);
 
-      // Get all portfolios for display
-      const portfolios = await invoke<PortfolioData[]>('get_pp_portfolios', { importId: null });
+      // Load all data sources in parallel for faster startup
+      const [portfolios, holdings, history, investedHistory] = await Promise.all([
+        invoke<PortfolioData[]>('get_pp_portfolios', { importId: null }),
+        invoke<AggregatedHolding[]>('get_all_holdings'),
+        invoke<Array<{ date: string; value: number }>>('get_portfolio_history').catch((err) => {
+          console.warn('Could not load portfolio history:', err);
+          return [] as Array<{ date: string; value: number }>;
+        }),
+        invoke<Array<{ date: string; value: number }>>('get_invested_capital_history').catch((err) => {
+          console.warn('Could not load invested capital history:', err);
+          return [] as Array<{ date: string; value: number }>;
+        }),
+      ]);
+
       setDbPortfolios(portfolios);
-
-      // Get aggregated holdings by ISIN
-      const holdings = await invoke<AggregatedHolding[]>('get_all_holdings');
       setDbHoldings(holdings);
-
-      // Get portfolio history for chart
-      try {
-        const history = await invoke<Array<{ date: string; value: number }>>('get_portfolio_history');
-        setDbPortfolioHistory(history);
-      } catch (historyErr) {
-        console.warn('Could not load portfolio history:', historyErr);
-      }
-
-      // Get invested capital history for chart
-      try {
-        const investedHistory = await invoke<Array<{ date: string; value: number }>>('get_invested_capital_history');
-        setDbInvestedCapitalHistory(investedHistory);
-      } catch (investedErr) {
-        console.warn('Could not load invested capital history:', investedErr);
-      }
+      setDbPortfolioHistory(history);
+      setDbInvestedCapitalHistory(investedHistory);
     } catch (err) {
       setError(`Fehler beim Laden der Daten: ${err}`);
     } finally {
