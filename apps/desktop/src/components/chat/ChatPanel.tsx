@@ -407,7 +407,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
     if (aiModel) {
       checkVision();
     }
-  }, [aiModel, aiProvider]);
+  }, [aiModel, aiProvider, attachments.length]);
 
   // Load portfolios for transaction import
   useEffect(() => {
@@ -1155,7 +1155,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
     e.preventDefault();
     if (isCollapsed) return; // Don't resize when collapsed
     setIsResizing(true);
-  }, []);
+  }, [isCollapsed]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -1441,7 +1441,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
                   );
                   if (!found) {
                     // Security not in watchlist — skip suggestion, show info message
-                    const infoContent = `\"${cmd.security}\" ist nicht in der Watchlist \"${cmd.watchlist}\".`;
+                    const infoContent = `"${cmd.security}" ist nicht in der Watchlist "${cmd.watchlist}".`;
                     const infoMsgId = await invoke<number>('save_chat_message', {
                       role: 'assistant',
                       content: infoContent,

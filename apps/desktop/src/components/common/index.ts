@@ -13,7 +13,8 @@ export {
 } from './Skeleton';
 export { DropdownMenu, DropdownItem, DropdownDivider } from './DropdownMenu';
 export { ErrorBoundary } from './ErrorBoundary';
-export { AIProviderLogo, ClaudeLogo, OpenAILogo, GeminiLogo, AI_PROVIDER_NAMES } from './AIProviderLogo';
+export { AIProviderLogo, ClaudeLogo, OpenAILogo, GeminiLogo } from './AIProviderLogo';
+export { AI_PROVIDER_NAMES } from './aiProviderNames';
 export { AIModelSelector } from './AIModelSelector';
 export { SecurityLogo } from './SecurityLogo';
 export { SafeMarkdown } from './SafeMarkdown';

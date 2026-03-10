@@ -5,7 +5,7 @@
  * consolidated performance analysis and comparison.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   FolderKanban,
   Plus,
@@ -63,22 +63,7 @@ export function ConsortiumView() {
   const { baseCurrency: _baseCurrency } = useSettingsStore();
   void _baseCurrency; // Reserved for future use
 
-  // Load consortiums and portfolios
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // Load performance when consortium selected
-  useEffect(() => {
-    if (selectedConsortiumId) {
-      loadPerformance(selectedConsortiumId);
-    } else {
-      setPerformance(null);
-      setHistory(null);
-    }
-  }, [selectedConsortiumId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       const [consortiumsData, portfoliosData] = await Promise.all([
@@ -98,7 +83,22 @@ export function ConsortiumView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedConsortiumId]);
+
+  // Load consortiums and portfolios
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Load performance when consortium selected
+  useEffect(() => {
+    if (selectedConsortiumId) {
+      loadPerformance(selectedConsortiumId);
+    } else {
+      setPerformance(null);
+      setHistory(null);
+    }
+  }, [selectedConsortiumId]);
 
   const loadPerformance = async (consortiumId: number) => {
     setIsLoadingPerformance(true);

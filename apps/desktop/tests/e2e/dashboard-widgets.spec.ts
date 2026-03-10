@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { injectTauriMocks, waitForAppReady, mockData } from './utils/tauri-mock';
+import { test, expect, Page } from '@playwright/test';
+import { waitForAppReady, mockData } from './utils/tauri-mock';
 
 // Extended mock data for widget tests
 const widgetMockData = {
@@ -48,11 +48,11 @@ const widgetMockData = {
   },
 };
 
-async function injectWidgetMocks(page: any) {
+async function injectWidgetMocks(page: Page) {
   await page.addInitScript((data: typeof widgetMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Widget Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -84,6 +84,8 @@ async function injectWidgetMocks(page: any) {
         emit: async () => {},
       },
     };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
   }, widgetMockData);
 }
 
@@ -177,8 +179,8 @@ test.describe('Widget Layout Persistence', () => {
   });
 
   test('Layout wird nach Reload wiederhergestellt', async ({ page }) => {
-    // Get initial content
-    const initialContent = await page.locator('#root').innerHTML();
+    // Get initial content (used as baseline before reload)
+    await page.locator('#root').innerHTML();
 
     // Reload page
     await page.reload();

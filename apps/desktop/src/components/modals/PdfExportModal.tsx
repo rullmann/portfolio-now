@@ -101,7 +101,7 @@ export function PdfExportModal({ isOpen, onClose }: PdfExportModalProps) {
 
       // Call appropriate export command
       let command: string;
-      let params: Record<string, unknown> = { path: savePath };
+      const params: Record<string, unknown> = { path: savePath };
 
       switch (selectedType) {
         case 'summary':

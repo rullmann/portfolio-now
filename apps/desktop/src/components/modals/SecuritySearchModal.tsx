@@ -56,6 +56,18 @@ export function SecuritySearchModal({
   const debounceRef = useRef<NodeJS.Timeout>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const loadWatchlists = useCallback(async () => {
+    try {
+      const lists = await getWatchlists();
+      setWatchlists(lists);
+      if (lists.length > 0 && !selectedWatchlistId) {
+        setSelectedWatchlistId(lists[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load watchlists:', err);
+    }
+  }, [selectedWatchlistId]);
+
   // Load watchlists on mount
   useEffect(() => {
     if (isOpen) {
@@ -67,19 +79,7 @@ export function SecuritySearchModal({
       setResults([]);
       setAddedSymbols(new Set());
     }
-  }, [isOpen]);
-
-  const loadWatchlists = async () => {
-    try {
-      const lists = await getWatchlists();
-      setWatchlists(lists);
-      if (lists.length > 0 && !selectedWatchlistId) {
-        setSelectedWatchlistId(lists[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load watchlists:', err);
-    }
-  };
+  }, [isOpen, loadWatchlists]);
 
   // Debounced search
   const performSearch = useCallback(

@@ -46,7 +46,7 @@ export function QuoteChat({
     if (security) {
       inputRef.current?.focus();
     }
-  }, [security?.id]);
+  }, [security]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

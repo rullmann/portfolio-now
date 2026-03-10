@@ -480,19 +480,19 @@ export function SettingsView() {
     }
   };
 
-  // Load validation status on mount
-  useEffect(() => {
-    loadValidationStatus();
-  }, [symbolValidation.validateOnlyHeld]);
-
-  const loadValidationStatus = async () => {
+  const loadValidationStatus = useCallback(async () => {
     try {
       const status = await getValidationStatus(symbolValidation.validateOnlyHeld);
       setValidationStatus(status);
     } catch {
       // Status loading is optional
     }
-  };
+  }, [symbolValidation.validateOnlyHeld]);
+
+  // Load validation status on mount
+  useEffect(() => {
+    loadValidationStatus();
+  }, [loadValidationStatus]);
 
   const handleRunValidation = async () => {
     setIsValidating(true);

@@ -63,7 +63,7 @@ export function AllocationTargetModal({
         })
         .finally(() => setIsLoading(false));
     }
-  }, [isOpen]);
+  }, [isOpen, form.portfolioId]);
 
   // Reset form when modal opens
   useEffect(() => {

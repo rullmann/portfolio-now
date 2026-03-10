@@ -3,7 +3,7 @@
  * Uses the global logo cache to display security logos efficiently.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Building2 } from 'lucide-react';
 import type { CachedLogo } from '../../lib/hooks';
 
@@ -25,13 +25,11 @@ interface SecurityLogoProps {
  * Uses the global logo cache (useCachedLogos) for logo lookup.
  */
 export function SecurityLogo({ securityId, logos, size = 28, className = '', customLogoUrl }: SecurityLogoProps) {
-  const [hasError, setHasError] = useState(false);
+  // Track which URL triggered the error so reset happens automatically when URL changes
+  const [errorUrl, setErrorUrl] = useState<string | undefined>(undefined);
   const logoData = logos.get(securityId);
   const effectiveUrl = customLogoUrl || logoData?.url;
-
-  useEffect(() => {
-    setHasError(false);
-  }, [effectiveUrl]);
+  const hasError = errorUrl !== undefined && errorUrl === effectiveUrl;
 
   if (effectiveUrl && !hasError) {
     return (
@@ -41,7 +39,7 @@ export function SecurityLogo({ securityId, logos, size = 28, className = '', cus
         className={`rounded-md object-contain bg-white flex-shrink-0 ${className}`}
         style={{ width: size, height: size }}
         crossOrigin="anonymous"
-        onError={() => setHasError(true)}
+        onError={() => setErrorUrl(effectiveUrl)}
       />
     );
   }
@@ -65,11 +63,9 @@ export function LogoImage({ src, size = 28, className = '' }: {
   size?: number;
   className?: string;
 }) {
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [src]);
+  // Track which URL triggered the error so reset happens automatically when URL changes
+  const [errorUrl, setErrorUrl] = useState<string | undefined>(undefined);
+  const hasError = errorUrl !== undefined && errorUrl === src;
 
   if (src && !hasError) {
     return (
@@ -79,7 +75,7 @@ export function LogoImage({ src, size = 28, className = '' }: {
         className={`rounded-md object-contain bg-white flex-shrink-0 ${className}`}
         style={{ width: size, height: size }}
         crossOrigin="anonymous"
-        onError={() => setHasError(true)}
+        onError={() => setErrorUrl(src)}
       />
     );
   }

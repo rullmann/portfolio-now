@@ -21,7 +21,6 @@ import {
   Bot,
   Loader2,
   Square,
-  Eye,
   AlertTriangle,
   ChevronDown,
   Info,
@@ -1100,7 +1099,7 @@ export function ScreenerView() {
             <span>Die KI analysiert die Breakout-Kandidaten und gibt konkrete Handlungsempfehlungen basierend auf dem 6-Regeln-System.</span>
           </div>
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            <SafeMarkdown content={aiAnalysis} />
+            <SafeMarkdown>{aiAnalysis}</SafeMarkdown>
           </div>
         </div>
       )}

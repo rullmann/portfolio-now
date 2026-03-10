@@ -47,7 +47,7 @@ export function WatchlistView() {
   // Load logos
   const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
 
-  const loadWatchlists = async () => {
+  const loadWatchlists = useCallback(async () => {
     try {
       setIsLoading(true);
       const data = await getWatchlists();
@@ -60,7 +60,7 @@ export function WatchlistView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedWatchlist]);
 
   const loadSecurities = async (watchlistId: number) => {
     try {
@@ -110,7 +110,7 @@ export function WatchlistView() {
 
   useEffect(() => {
     loadWatchlists();
-  }, []);
+  }, [loadWatchlists]);
 
   // Listen for watchlist updates from ChatBot
   useEffect(() => {
@@ -125,7 +125,7 @@ export function WatchlistView() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [selectedWatchlist]);
+  }, [selectedWatchlist, loadWatchlists]);
 
   // Load price histories when securities change
   useEffect(() => {

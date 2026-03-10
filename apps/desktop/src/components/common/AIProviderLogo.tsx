@@ -154,13 +154,3 @@ export function AIProviderLogo({
   }
 }
 
-/**
- * Provider display names
- */
-export const AI_PROVIDER_NAMES: Record<string, string> = {
-  claude: 'Claude',
-  openai: 'OpenAI',
-  gemini: 'Gemini',
-  perplexity: 'Perplexity',
-  openrouter: 'OpenRouter',
-};

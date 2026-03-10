@@ -339,12 +339,33 @@ export function ChartsView() {
     return () => { unlisten.then((fn) => fn()); };
   }, [loadSecurities, filterMode, selectedSecurity, watchlistSecurityIds]);
 
+  // Enrich securities with holding/watchlist status (must be before useEffects that reference displayedSecurities)
+  const enrichedSecurities = useMemo<EnrichedSecurity[]>(() => {
+    return securities.map(s => ({
+      ...s,
+      isInHoldings: holdingsSecurityIds.has(s.id),
+      isWatchlistOnly: !holdingsSecurityIds.has(s.id) && watchlistSecurityIds.has(s.id),
+    }));
+  }, [securities, holdingsSecurityIds, watchlistSecurityIds]);
+
+  // Filter securities based on mode
+  const displayedSecurities = useMemo(() => {
+    if (filterMode === 'holdings') {
+      return enrichedSecurities.filter(s => s.isInHoldings);
+    }
+    if (filterMode === 'watchlist') {
+      return enrichedSecurities.filter(s => s.isWatchlistOnly || watchlistSecurityIds.has(s.id));
+    }
+    // 'all' mode: holdings + watchlist securities
+    return enrichedSecurities.filter(s => s.isInHoldings || s.isWatchlistOnly);
+  }, [enrichedSecurities, filterMode, watchlistSecurityIds]);
+
   // Auto-select first security when filter changes
   useEffect(() => {
     if (displayedSecurities.length > 0 && !selectedSecurity) {
       setSelectedSecurity(displayedSecurities[0]);
     }
-  }, [holdingsSecurityIds, watchlistSecurityIds, securities]);
+  }, [holdingsSecurityIds, watchlistSecurityIds, securities, displayedSecurities, selectedSecurity]);
 
   // Handle pending chart navigation from ChatBot
   const pendingChartName = useUIStore(s => s.pendingChartSecurityName);
@@ -451,7 +472,7 @@ export function ChartsView() {
           if (response.results.length > 0) {
             const best = response.results[0];
             // Get or create default watchlist
-            let watchlists = await getWatchlists();
+            const watchlists = await getWatchlists();
             let watchlistId: number;
             if (watchlists.length === 0) {
               const newWl = await createWatchlist('Watchlist');
@@ -476,16 +497,7 @@ export function ChartsView() {
       };
       addExternal();
     }
-  }, [pendingChartName, securities]);
-
-  // Enrich securities with holding/watchlist status
-  const enrichedSecurities = useMemo<EnrichedSecurity[]>(() => {
-    return securities.map(s => ({
-      ...s,
-      isInHoldings: holdingsSecurityIds.has(s.id),
-      isWatchlistOnly: !holdingsSecurityIds.has(s.id) && watchlistSecurityIds.has(s.id),
-    }));
-  }, [securities, holdingsSecurityIds, watchlistSecurityIds]);
+  }, [pendingChartName, securities, loadSecurities, pendingChartIndicators, pendingChartTimeRange, apiKeys.alphaVantageApiKey]);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -499,18 +511,6 @@ export function ChartsView() {
 
   // Load logos
   const { logos } = useCachedLogos(securitiesForLogos, brandfetchApiKey);
-
-  // Filter securities based on mode
-  const displayedSecurities = useMemo(() => {
-    if (filterMode === 'holdings') {
-      return enrichedSecurities.filter(s => s.isInHoldings);
-    }
-    if (filterMode === 'watchlist') {
-      return enrichedSecurities.filter(s => s.isWatchlistOnly || watchlistSecurityIds.has(s.id));
-    }
-    // 'all' mode: holdings + watchlist securities
-    return enrichedSecurities.filter(s => s.isInHoldings || s.isWatchlistOnly);
-  }, [enrichedSecurities, filterMode, watchlistSecurityIds]);
 
   // Apply text search on displayed securities
   const filteredSecurities = useMemo(() => {
@@ -561,7 +561,7 @@ export function ChartsView() {
     setIsAddingExternal(result.symbol);
     try {
       // Get or create a default watchlist
-      let watchlists = await getWatchlists();
+      const watchlists = await getWatchlists();
       let watchlistId: number;
       if (watchlists.length === 0) {
         const newWl = await createWatchlist('Watchlist');
@@ -867,7 +867,7 @@ export function ChartsView() {
     };
 
     loadDrawings();
-  }, [selectedSecurity?.id]);
+  }, [selectedSecurity]);
 
   // Handle drawings change - save new drawings and delete removed ones
   const handleDrawingsChange = useCallback(async (newDrawings: Drawing[]) => {
@@ -912,7 +912,7 @@ export function ChartsView() {
 
     // Update tracked IDs
     savedDrawingIds.current = new Set(newDrawings.map(d => d.id));
-  }, [selectedSecurity?.id]);
+  }, [selectedSecurity]);
 
   // Chart ready callback for drawing tools
   const handleChartReady = useCallback((api: IChartApi, series: ISeriesApi<'Candlestick'>) => {

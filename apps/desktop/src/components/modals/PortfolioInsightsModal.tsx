@@ -5,7 +5,7 @@
  * strengths, weaknesses, and recommendations.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   X, Sparkles, RefreshCw, Loader2, AlertCircle, CheckCircle,
   TrendingUp, Target, AlertTriangle, Lightbulb, PieChart, Brain, ShoppingCart
@@ -204,7 +204,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
   const aiProvider = (tempSelection?.provider ?? portfolioConfig.provider) as AiProvider;
   const aiModel = tempSelection?.model ?? portfolioConfig.model;
 
-  const getApiKey = () => {
+  const getApiKey = useCallback(() => {
     switch (aiProvider) {
       case 'claude':
         return keys.anthropicApiKey;
@@ -219,18 +219,18 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
       default:
         return '';
     }
-  };
+  }, [aiProvider, keys]);
 
-  const hasApiKey = () => {
+  const hasApiKey = useCallback(() => {
     const key = getApiKey();
     return key && key.trim().length > 0;
-  };
+  }, [getApiKey]);
 
-  const updateStep = (stepId: string, status: LoadingStep['status']) => {
+  const updateStep = useCallback((stepId: string, status: LoadingStep['status']) => {
     setSteps((prev) =>
       prev.map((s) => (s.id === stepId ? { ...s, status } : s))
     );
-  };
+  }, []);
 
   const resetSteps = () => {
     setSteps([
@@ -239,7 +239,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
     ]);
   };
 
-  const runAnalysis = async (selectedMode: AnalysisMode) => {
+  const runAnalysis = useCallback(async (selectedMode: AnalysisMode) => {
     if (selectedMode === 'select') return;
 
     // Both modes require an API key now
@@ -299,7 +299,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [hasApiKey, getApiKey, aiProvider, aiModel, updateStep, baseCurrency]);
 
   // Reset state when modal closes
   useEffect(() => {
@@ -318,7 +318,7 @@ export function PortfolioInsightsModal({ isOpen, onClose, initialMode }: Portfol
       setHasAutoStarted(true);
       runAnalysis(initialMode);
     }
-  }, [isOpen, initialMode, hasAutoStarted, isLoading, result]);
+  }, [isOpen, initialMode, hasAutoStarted, isLoading, result, runAnalysis]);
 
   // Don't show modal if AI is globally disabled or not open
   if (!isOpen || !aiEnabled) return null;

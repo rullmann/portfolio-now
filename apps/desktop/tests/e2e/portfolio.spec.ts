@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { mockData, waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 // Extended mock data for portfolio tests
@@ -16,11 +16,11 @@ const portfolioMockData = {
   ],
 };
 
-async function injectPortfolioMocks(page: any) {
+async function injectPortfolioMocks(page: Page) {
   await page.addInitScript((data: typeof portfolioMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Portfolio Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -52,9 +52,9 @@ async function injectPortfolioMocks(page: any) {
         emit: async () => {},
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, portfolioMockData);
 }
 

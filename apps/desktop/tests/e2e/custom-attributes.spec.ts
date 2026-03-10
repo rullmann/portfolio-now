@@ -69,9 +69,9 @@ const attributesMockData = {
 
 async function injectAttributesMocks(page: Page) {
   await page.addInitScript((data: typeof attributesMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Attributes Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -103,7 +103,7 @@ async function injectAttributesMocks(page: Page) {
               return null;
             case 'get_attribute_types':
               if (args?.target) {
-                return data.attributeTypes.filter((t: any) => t.target === args.target);
+                return data.attributeTypes.filter((t) => t.target === args.target);
               }
               return data.attributeTypes;
             case 'get_security_attributes':
@@ -116,7 +116,7 @@ async function injectAttributesMocks(page: Page) {
                 createdAt: new Date().toISOString(),
               };
             case 'update_attribute_type':
-              return data.attributeTypes.find((t: any) => t.id === args?.id);
+              return data.attributeTypes.find((t) => t.id === (args?.id as number));
             case 'delete_attribute_type':
               return null;
             case 'set_security_attribute':
@@ -135,9 +135,9 @@ async function injectAttributesMocks(page: Page) {
       },
     };
 
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, attributesMockData);
 }
 

@@ -2,7 +2,7 @@
  * Alerts Widget - Shows allocation warnings from backend
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react';
 import { getAllocationAlerts } from '../../../lib/api';
 import type { AllocationAlert } from '../../../lib/types';
@@ -15,7 +15,7 @@ export function AlertsWidget({ config }: WidgetProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadAlerts = async () => {
+  const loadAlerts = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -26,11 +26,11 @@ export function AlertsWidget({ config }: WidgetProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [portfolioId]);
 
   useEffect(() => {
     loadAlerts();
-  }, [portfolioId]);
+  }, [loadAlerts]);
 
   const criticalCount = alerts.filter(a => a.severity === 'critical').length;
   const warningCount = alerts.filter(a => a.severity === 'warning').length;

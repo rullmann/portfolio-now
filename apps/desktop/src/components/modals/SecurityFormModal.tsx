@@ -185,7 +185,6 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
 
   const isEditMode = !!security;
   const finnhubApiKey = useSettingsStore((state) => state.finnhubApiKey);
-  const alphaVantageApiKey = useSettingsStore((state) => state.alphaVantageApiKey);
   const twelveDataApiKey = useSettingsStore((state) => state.twelveDataApiKey);
   const aiFeatureSettings = useSettingsStore((state) => state.aiFeatureSettings);
   const aiEnabled = useSettingsStore((state) => state.aiEnabled);
@@ -209,7 +208,7 @@ export function SecurityFormModal({ isOpen, onClose, onSuccess, security }: Secu
       providers.splice(yahooIndex + 1, 0, { value: 'TWELVEDATA', label: 'Twelve Data (CH/EU)' });
     }
     return providers;
-  }, [finnhubApiKey, alphaVantageApiKey, twelveDataApiKey]);
+  }, [finnhubApiKey, twelveDataApiKey]);
 
   const [formData, setFormData] = useState({
     name: '',

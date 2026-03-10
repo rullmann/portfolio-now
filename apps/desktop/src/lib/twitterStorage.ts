@@ -32,7 +32,7 @@ export async function storeTwitterTokens(tokens: TwitterTokens): Promise<void> {
     const store = await getStore();
     await store.set(TWITTER_TOKENS_KEY, tokens);
     await store.save();
-  } catch (error) {
+  } catch {
     console.error('Failed to store Twitter tokens');
     throw new Error('Failed to store Twitter tokens');
   }
@@ -43,7 +43,7 @@ export async function getTwitterTokens(): Promise<TwitterTokens | null> {
     const store = await getStore();
     const tokens = await store.get<TwitterTokens>(TWITTER_TOKENS_KEY);
     return tokens ?? null;
-  } catch (error) {
+  } catch {
     console.error('Failed to retrieve Twitter tokens');
     return null;
   }
@@ -54,7 +54,7 @@ export async function clearTwitterTokens(): Promise<void> {
     const store = await getStore();
     await store.delete(TWITTER_TOKENS_KEY);
     await store.save();
-  } catch (error) {
+  } catch {
     console.error('Failed to clear Twitter tokens');
   }
 }

@@ -28,7 +28,8 @@ interface PortfolioViewProps {
   dbPortfolios?: PortfolioData[];
 }
 
-export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioViewProps) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function PortfolioView({ dbPortfolios }: PortfolioViewProps) {
   const [portfolios, setPortfolios] = useState<PortfolioWithMetrics[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +42,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
   const baseCurrency = useSettingsStore((s) => s.baseCurrency);
 
   /** Load metrics for a single portfolio - only holdings, no TTWROR for speed */
-  const loadPortfolioMetrics = async (portfolio: PortfolioData): Promise<PortfolioWithMetrics> => {
+  const loadPortfolioMetrics = useCallback(async (portfolio: PortfolioData): Promise<PortfolioWithMetrics> => {
     try {
       // Only load holdings - skip expensive TTWROR calculation for overview
       const holdings = await getHoldings(portfolio.id);
@@ -75,7 +76,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
         metricsError: err instanceof Error ? err.message : String(err),
       };
     }
-  };
+  }, [baseCurrency]);
 
   const loadPortfolios = useCallback(async () => {
     setIsLoading(true);
@@ -109,7 +110,7 @@ export function PortfolioView({ dbPortfolios: _initialDbPortfolios }: PortfolioV
       setError(err instanceof Error ? err.message : String(err));
       setIsLoading(false);
     }
-  }, [baseCurrency]);
+  }, [baseCurrency, loadPortfolioMetrics]);
 
   useEffect(() => {
     loadPortfolios();

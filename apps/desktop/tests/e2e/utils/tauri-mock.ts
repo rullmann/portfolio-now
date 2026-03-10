@@ -96,9 +96,9 @@ export const mockData = {
 export async function injectTauriMocks(page: Page): Promise<void> {
   await page.addInitScript((data) => {
     // Mock window.__TAURI__
-    (window as any).__TAURI__ = {
+    (window as unknown as Record<string, unknown>).__TAURI__ = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Tauri Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -129,13 +129,14 @@ export async function injectTauriMocks(page: Page): Promise<void> {
             case 'get_dashboard_layout':
               return null;
             // Portfolio Insights Command
-            case 'analyze_portfolio_with_ai':
-              const request = args?.request || args;
+            case 'analyze_portfolio_with_ai': {
+              const request = (args?.request ?? args) as Record<string, unknown> | undefined;
               const technicalOnly = request?.technicalOnly || request?.technical_only;
               if (technicalOnly) {
                 return data.technicalRanking;
               }
               return data.portfolioInsights;
+            }
             default:
               console.warn('[Tauri Mock] Unknown command:', cmd);
               return null;
@@ -143,19 +144,19 @@ export async function injectTauriMocks(page: Page): Promise<void> {
         },
       },
       event: {
-        listen: async (event: string, handler: any) => {
+        listen: async (event: string) => {
           console.log('[Tauri Mock] listen:', event);
           return () => {}; // Return unsubscribe function
         },
-        emit: async (event: string, payload: any) => {
+        emit: async (event: string, payload: unknown) => {
           console.log('[Tauri Mock] emit:', event, payload);
         },
       },
     };
 
     // Also mock @tauri-apps/api imports
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      invoke: (window as unknown as Record<string, { core: { invoke: unknown } }>).__TAURI__.core.invoke,
     };
   }, mockData);
 }

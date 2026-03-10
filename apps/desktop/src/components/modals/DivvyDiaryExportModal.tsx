@@ -5,7 +5,7 @@
  * This modal only USES the key from secure storage — never edits it.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Upload, Loader2, CheckCircle, AlertCircle, Info, Settings } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { getPortfolios } from '../../lib/api';
@@ -48,23 +48,6 @@ export function DivvyDiaryExportModal({ isOpen, onClose }: DivvyDiaryExportModal
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<ExportResult | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      loadLocalPortfolios();
-      setError(null);
-      setSuccess(null);
-      setDivvyDiaryPortfolios([]);
-      setSelectedDivvyDiaryPortfolio('');
-    }
-  }, [isOpen]);
-
-  // Auto-load DivvyDiary portfolios when key is available
-  useEffect(() => {
-    if (isOpen && apiKey) {
-      loadDivvyDiaryPortfolios();
-    }
-  }, [isOpen, apiKey]);
-
   const loadLocalPortfolios = async () => {
     try {
       const data = await getPortfolios();
@@ -75,7 +58,7 @@ export function DivvyDiaryExportModal({ isOpen, onClose }: DivvyDiaryExportModal
     }
   };
 
-  const loadDivvyDiaryPortfolios = async () => {
+  const loadDivvyDiaryPortfolios = useCallback(async () => {
     if (!apiKey) return;
 
     setIsLoading(true);
@@ -95,7 +78,24 @@ export function DivvyDiaryExportModal({ isOpen, onClose }: DivvyDiaryExportModal
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [apiKey, selectedDivvyDiaryPortfolio]);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadLocalPortfolios();
+      setError(null);
+      setSuccess(null);
+      setDivvyDiaryPortfolios([]);
+      setSelectedDivvyDiaryPortfolio('');
+    }
+  }, [isOpen]);
+
+  // Auto-load DivvyDiary portfolios when key is available
+  useEffect(() => {
+    if (isOpen && apiKey) {
+      loadDivvyDiaryPortfolios();
+    }
+  }, [isOpen, apiKey, loadDivvyDiaryPortfolios]);
 
   const handleExport = async () => {
     if (!apiKey || !selectedDivvyDiaryPortfolio) return;

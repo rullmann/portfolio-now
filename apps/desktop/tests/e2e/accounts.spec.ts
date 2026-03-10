@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { mockData, waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 const accountsMockData = {
@@ -10,11 +10,11 @@ const accountsMockData = {
   ],
 };
 
-async function injectAccountsMocks(page: any) {
+async function injectAccountsMocks(page: Page) {
   await page.addInitScript((data: typeof accountsMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           switch (cmd) {
             case 'get_pp_portfolios':
               return data.portfolios;
@@ -29,9 +29,9 @@ async function injectAccountsMocks(page: any) {
             case 'calculate_performance':
               return data.performance;
             case 'create_account':
-              return { id: Date.now(), ...args?.account };
+              return { id: Date.now(), ...(args?.account as Record<string, unknown>) };
             case 'update_account':
-              return { id: args?.id, ...args?.account };
+              return { id: args?.id, ...(args?.account as Record<string, unknown>) };
             case 'delete_account':
               return null;
             default:
@@ -44,9 +44,9 @@ async function injectAccountsMocks(page: any) {
         emit: async () => {},
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, accountsMockData);
 }
 

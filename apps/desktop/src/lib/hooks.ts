@@ -205,7 +205,7 @@ export function useTransactions(options?: {
     } finally {
       setIsLoading(false);
     }
-  }, [options?.ownerType, options?.ownerId, options?.securityId, options?.limit, options?.offset]);
+  }, [options]);
 
   useEffect(() => {
     refresh();

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { waitForAppReady, closeWelcomeModal, mockData } from './utils/tauri-mock';
 
 // Extended mock data for asset statement tests
@@ -32,11 +32,11 @@ const assetStatementMockData = {
   ],
 };
 
-async function injectAssetStatementMocks(page: any) {
+async function injectAssetStatementMocks(page: Page) {
   await page.addInitScript((data: typeof assetStatementMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[AssetStatement Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -60,7 +60,7 @@ async function injectAssetStatementMocks(page: any) {
               return data.taxonomies;
             case 'get_all_security_classifications':
               return data.securityClassifications.filter(
-                (c: any) => c.taxonomyId === args?.taxonomyId
+                (c) => c.taxonomyId === (args?.taxonomyId as number)
               );
             case 'get_base_currency':
               return 'EUR';
@@ -77,6 +77,8 @@ async function injectAssetStatementMocks(page: any) {
         emit: async () => {},
       },
     };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
   }, assetStatementMockData);
 }
 

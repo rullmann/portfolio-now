@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 /**
@@ -247,12 +247,24 @@ const scenario4MockData = {
   watchlists: [],
 };
 
-async function injectScenarioMocks(page: any, scenarioData: any) {
-  await page.addInitScript((data: any) => {
-    (window as any).__TAURI__ = {
+interface ScenarioData {
+  portfolios: unknown[];
+  accounts: unknown[];
+  securities: unknown[];
+  holdings: unknown[];
+  portfolioHistory: unknown[];
+  investedCapitalHistory: unknown[];
+  performance: Record<string, unknown>;
+  transactions: unknown[];
+  watchlists: unknown[];
+}
+
+async function injectScenarioMocks(page: Page, scenarioData: ScenarioData) {
+  await page.addInitScript((data: ScenarioData) => {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
-          console.log('[Performance Test] invoke:', cmd, args);
+        invoke: async (cmd: string) => {
+          console.log('[Performance Test] invoke:', cmd);
 
           switch (cmd) {
             case 'get_pp_portfolios':
@@ -288,9 +300,9 @@ async function injectScenarioMocks(page: any, scenarioData: any) {
         emit: async () => {},
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, scenarioData);
 }
 
@@ -313,7 +325,7 @@ test.describe('Performance-Berechnungen: Plausibilitätstests', () => {
       await page.waitForTimeout(500);
 
       // Prüfe angezeigte Performance-Werte
-      const performanceText = await page.locator('body').textContent();
+      await page.locator('body').textContent();
 
       // Die erwartete TTWROR sollte ~10% sein
       const expected = scenario1MockData.performance.ttwror;
@@ -372,7 +384,7 @@ test.describe('Performance-Berechnungen: Plausibilitätstests', () => {
       });
     });
 
-    test('Simple Return wäre falsch (6.67% statt 8.39%)', async ({ page }) => {
+    test('Simple Return wäre falsch (6.67% statt 8.39%)', async () => {
       // Demonstriere den Unterschied zwischen richtiger und falscher Berechnung
       const wrongSimpleReturn = (1600 - 1500) / 1500;  // 6.67%
       const correctTtwror = scenario2MockData.performance.ttwror;  // 8.39%
@@ -414,7 +426,7 @@ test.describe('Performance-Berechnungen: Plausibilitätstests', () => {
       });
     });
 
-    test('IRR ohne Dividenden wäre signifikant niedriger', async ({ page }) => {
+    test('IRR ohne Dividenden wäre signifikant niedriger', async () => {
       // Kursgewinn allein: (1050-1000)/1000 = 5%
       const priceOnlyReturn = (1050 - 1000) / 1000;  // 5%
       const irrWithDividends = scenario3MockData.performance.irr;  // ~10.5%
@@ -452,7 +464,7 @@ test.describe('Performance-Berechnungen: Plausibilitätstests', () => {
       });
     });
 
-    test('IRR sollte -20% sein', async ({ page }) => {
+    test('IRR sollte -20% sein', async () => {
       assertWithinTolerance(
         scenario4MockData.performance.irr,
         -0.20,

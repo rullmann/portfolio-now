@@ -18,7 +18,8 @@ import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useSettingsStore, AI_MODELS, DEFAULT_MODELS, fetchModelsForProvider, type AiProvider, type AiFeatureId, type AiModelInfo } from '../../store';
 import { useUIStore } from '../../store';
 import { getLatestExchangeRate } from '../../lib/api';
-import { AIProviderLogo, AI_PROVIDER_NAMES } from './AIProviderLogo';
+import { AIProviderLogo } from './AIProviderLogo';
+import { AI_PROVIDER_NAMES } from './aiProviderNames';
 import { cn } from '../../lib/utils';
 
 // Model quality tiers — derived from model ID patterns

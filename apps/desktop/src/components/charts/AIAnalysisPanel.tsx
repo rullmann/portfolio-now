@@ -26,7 +26,7 @@ import type {
   AlertSuggestion,
   RiskRewardAnalysis,
 } from '../../lib/types';
-import { AI_PROVIDER_NAMES } from '../common/AIProviderLogo';
+import { AI_PROVIDER_NAMES } from '../common/aiProviderNames';
 import { AIModelSelector } from '../common';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { AiProvider } from '../../store';
@@ -124,9 +124,9 @@ export function AIAnalysisPanel({
   const aiModel = tempSelection?.model ?? chartAnalysisConfig.model;
 
   // Update the feature-specific model
-  const setAiModel = (model: string) => {
+  const setAiModel = useCallback((model: string) => {
     setAiFeatureSetting('chartAnalysis', { provider: aiProvider, model });
-  };
+  }, [setAiFeatureSetting, aiProvider]);
 
   // Portfolio analysis store for trend indicators in Dashboard
   const { setAnalysis: setPortfolioAnalysis } = usePortfolioAnalysisStore();
@@ -301,7 +301,7 @@ export function AIAnalysisPanel({
         try { setRiskReward(JSON.parse(persisted.riskRewardJson)); } catch { /* ignore */ }
       }
     }).catch(err => console.warn('Failed to load persisted analysis:', err));
-  }, [security?.id]);
+  }, [security?.id, onAnnotationsChange]);
 
   // Load persisted annotations when security changes
   useEffect(() => {

@@ -1456,6 +1456,10 @@ export interface AnnotationAnalysisResponse {
   model: string;
   /** Tokens used (if available) */
   tokensUsed?: number;
+  /** Input tokens for cost calculation */
+  inputTokens?: number;
+  /** Output tokens for cost calculation */
+  outputTokens?: number;
 }
 
 // ============================================================================
@@ -1565,6 +1569,10 @@ export interface EnhancedAnnotationAnalysisResponse {
   model: string;
   /** Tokens used (if available) */
   tokensUsed?: number;
+  /** Input tokens for cost calculation */
+  inputTokens?: number;
+  /** Output tokens for cost calculation */
+  outputTokens?: number;
 }
 
 /** Annotation with generated ID for React rendering */

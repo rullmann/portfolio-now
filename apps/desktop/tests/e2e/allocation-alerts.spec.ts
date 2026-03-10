@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { waitForAppReady, mockData, closeWelcomeModal } from './utils/tauri-mock';
 
 // Extended mock data for allocation alerts tests
@@ -51,11 +51,11 @@ const alertsMockData = {
   },
 };
 
-async function injectAlertsMocks(page: any) {
+async function injectAlertsMocks(page: Page) {
   await page.addInitScript((data: typeof alertsMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Alerts Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -96,6 +96,8 @@ async function injectAlertsMocks(page: any) {
         emit: async () => {},
       },
     };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
   }, alertsMockData);
 }
 

@@ -2,7 +2,7 @@
  * Benchmark view for performance comparison.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Target, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { getBenchmarks, compareToBenchmark, getBenchmarkComparisonData, removeBenchmark } from '../../lib/api';
 import { TradingViewBenchmarkChart } from '../../components/charts';
@@ -22,7 +22,7 @@ export function BenchmarkView() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadBenchmarks = async () => {
+  const loadBenchmarks = useCallback(async () => {
     try {
       setIsLoading(true);
       const data = await getBenchmarks();
@@ -35,9 +35,9 @@ export function BenchmarkView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedBenchmark]);
 
-  const loadComparison = async () => {
+  const loadComparison = useCallback(async () => {
     if (!selectedBenchmark) return;
     try {
       setIsLoading(true);
@@ -52,17 +52,17 @@ export function BenchmarkView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedBenchmark, startDate, endDate]);
 
   useEffect(() => {
     loadBenchmarks();
-  }, []);
+  }, [loadBenchmarks]);
 
   useEffect(() => {
     if (selectedBenchmark) {
       loadComparison();
     }
-  }, [selectedBenchmark, startDate, endDate]);
+  }, [loadComparison, selectedBenchmark]);
 
   const handleRemoveBenchmark = async (benchmarkId: number, securityId: number) => {
     try {

@@ -10,7 +10,7 @@
  * - Calmar Ratio
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Activity,
   TrendingDown,
@@ -42,11 +42,7 @@ export function RiskMetricsPanel({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadMetrics();
-  }, [portfolioId, benchmarkId, startDate, endDate]);
-
-  const loadMetrics = async () => {
+  const loadMetrics = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -62,7 +58,11 @@ export function RiskMetricsPanel({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [portfolioId, benchmarkId, startDate, endDate]);
+
+  useEffect(() => {
+    loadMetrics();
+  }, [loadMetrics]);
 
   const formatRatio = (value: number, decimals: number = 2) => {
     return value.toFixed(decimals);

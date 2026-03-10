@@ -94,7 +94,7 @@ export function ReportsView() {
 
     try {
       switch (reportType) {
-        case 'performance':
+        case 'performance': {
           const perf = await calculatePerformance({
             portfolioId: selectedPortfolio,
             startDate,
@@ -102,23 +102,27 @@ export function ReportsView() {
           });
           setPerformanceData(perf);
           break;
+        }
 
-        case 'dividends':
+        case 'dividends': {
           const divs = await generateDividendReport(startDate, endDate, selectedPortfolio);
           setDividendData(divs);
           break;
+        }
 
-        case 'gains':
+        case 'gains': {
           const gains = await generateRealizedGainsReport(startDate, endDate, selectedPortfolio);
           setGainsData(gains);
           break;
+        }
 
-        case 'tax':
+        case 'tax': {
           const tax = await generateTaxReport(year);
           setTaxData(tax);
           break;
+        }
 
-        case 'heatmap':
+        case 'heatmap': {
           const [monthly, yearly] = await Promise.all([
             getMonthlyReturns(selectedPortfolio),
             getYearlyReturns(selectedPortfolio),
@@ -126,6 +130,7 @@ export function ReportsView() {
           setMonthlyReturns(monthly);
           setYearlyReturns(yearly);
           break;
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

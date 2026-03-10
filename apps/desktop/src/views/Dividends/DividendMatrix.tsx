@@ -17,7 +17,7 @@ interface Props {
 const formatAmount = (amount: number) =>
   amount > 0 ? amount.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '';
 
-export function DividendMatrix({ yearReports, logos, currency, isLoading }: Props) {
+export function DividendMatrix({ yearReports, logos, isLoading }: Props) {
   const years = useMemo(() => Array.from(yearReports.keys()).sort(), [yearReports]);
 
   // Collect all securities across all years

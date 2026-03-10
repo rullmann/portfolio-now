@@ -2,8 +2,8 @@
  * Watchlist Widget - Shows watchlist with current prices
  */
 
-import { useEffect, useState } from 'react';
-import { Eye, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
 import { getWatchlists, getWatchlistSecurities } from '../../../lib/api';
 import type { WatchlistData, WatchlistSecurityData } from '../../../lib/types';
 import type { WidgetProps } from '../types';
@@ -22,7 +22,7 @@ export function WatchlistWidget({ config }: WatchlistWidgetProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadWatchlists = async () => {
+  const loadWatchlists = useCallback(async () => {
     try {
       const data = await getWatchlists();
       setWatchlists(data);
@@ -34,9 +34,9 @@ export function WatchlistWidget({ config }: WatchlistWidgetProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Fehler beim Laden');
     }
-  };
+  }, [selectedWatchlist]);
 
-  const loadSecurities = async () => {
+  const loadSecurities = useCallback(async () => {
     if (!selectedWatchlist) {
       setSecurities([]);
       setLoading(false);
@@ -53,15 +53,15 @@ export function WatchlistWidget({ config }: WatchlistWidgetProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedWatchlist, limit]);
 
   useEffect(() => {
     loadWatchlists();
-  }, []);
+  }, [loadWatchlists]);
 
   useEffect(() => {
     loadSecurities();
-  }, [selectedWatchlist, limit]);
+  }, [loadSecurities]);
 
   const formatCurrency = (value: number, curr: string) => {
     return new Intl.NumberFormat('de-DE', {

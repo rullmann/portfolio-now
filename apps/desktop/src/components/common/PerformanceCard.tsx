@@ -3,7 +3,7 @@
  * Shows TTWROR, IRR, and other key performance indicators.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, TrendingDown, RefreshCw, AlertCircle, Calendar, Percent } from 'lucide-react';
 import { calculatePerformance, getBaseCurrency } from '../../lib/api';
 import type { PerformanceResult } from '../../lib/types';
@@ -20,7 +20,7 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
   const [error, setError] = useState<string | null>(null);
   const [baseCurrency, setBaseCurrency] = useState<string>('EUR');
 
-  const loadPerformance = async () => {
+  const loadPerformance = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -35,11 +35,11 @@ export function PerformanceCard({ portfolioId, className = '' }: PerformanceCard
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [portfolioId]);
 
   useEffect(() => {
     loadPerformance();
-  }, [portfolioId]);
+  }, [loadPerformance]);
 
   if (isLoading && !performance) {
     return (

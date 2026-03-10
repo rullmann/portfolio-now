@@ -52,7 +52,8 @@ interface PatternStatisticsPanelProps {
   securityId?: number | null;
 }
 
-export function PatternStatisticsPanel({ securityId: _securityId }: PatternStatisticsPanelProps) {
+// securityId is accepted for API compatibility but not used internally
+export function PatternStatisticsPanel(_props: PatternStatisticsPanelProps) { // eslint-disable-line @typescript-eslint/no-unused-vars
   const [isExpanded, setIsExpanded] = useState(true);
   const [statistics, setStatistics] = useState<PatternStatistics[]>([]);
   const [isLoading, setIsLoading] = useState(false);

@@ -8,7 +8,7 @@
  * instead of browser localStorage. This prevents access from arbitrary JavaScript code.
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   getAllApiKeys,
   storeApiKey,
@@ -119,6 +119,22 @@ interface UseSecureApiKeysReturn {
   refreshKeys: () => Promise<void>;
 }
 
+// Static mapping from ApiKeyType to SecureApiKeys field name
+const KEY_TYPE_TO_FIELD: Record<ApiKeyType, keyof SecureApiKeys> = {
+  brandfetch: 'brandfetchApiKey',
+  finnhub: 'finnhubApiKey',
+  coingecko: 'coingeckoApiKey',
+  alphaVantage: 'alphaVantageApiKey',
+  twelveData: 'twelveDataApiKey',
+  anthropic: 'anthropicApiKey',
+  openai: 'openaiApiKey',
+  gemini: 'geminiApiKey',
+  perplexity: 'perplexityApiKey',
+  openrouter: 'openrouterApiKey',
+  divvyDiary: 'divvyDiaryApiKey',
+  twitterClientId: 'twitterClientId',
+};
+
 // Default empty keys
 const EMPTY_KEYS: SecureApiKeys = {
   brandfetchApiKey: '',
@@ -175,7 +191,7 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
   const setDivvyDiaryApiKey = useSettingsStore((s) => s.setDivvyDiaryApiKey);
 
   // Map key types to Zustand setters
-  const setterMap: Record<ApiKeyType, (key: string) => void> = {
+  const setterMap = useMemo<Record<ApiKeyType, (key: string) => void>>(() => ({
     brandfetch: setBrandfetchApiKey,
     finnhub: setFinnhubApiKey,
     coingecko: setCoingeckoApiKey,
@@ -188,7 +204,11 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     openrouter: setOpenrouterApiKey,
     divvyDiary: setDivvyDiaryApiKey,
     twitterClientId: () => {}, // No Zustand sync needed for twitterClientId
-  };
+  }), [
+    setBrandfetchApiKey, setFinnhubApiKey, setCoingeckoApiKey, setAlphaVantageApiKey,
+    setTwelveDataApiKey, setAnthropicApiKey, setOpenaiApiKey, setGeminiApiKey,
+    setPerplexityApiKey, setOpenrouterApiKey, setDivvyDiaryApiKey,
+  ]);
 
   // Helper to update both local state and Zustand store
   const syncKeysToState = useCallback((newKeys: SecureApiKeys) => {
@@ -307,27 +327,11 @@ export function useSecureApiKeys(): UseSecureApiKeysReturn {
     loadKeys();
   }, [loadKeys]);
 
-  // Map ApiKeyType to SecureApiKeys field name
-  const keyTypeToField: Record<ApiKeyType, keyof SecureApiKeys> = {
-    brandfetch: 'brandfetchApiKey',
-    finnhub: 'finnhubApiKey',
-    coingecko: 'coingeckoApiKey',
-    alphaVantage: 'alphaVantageApiKey',
-    twelveData: 'twelveDataApiKey',
-    anthropic: 'anthropicApiKey',
-    openai: 'openaiApiKey',
-    gemini: 'geminiApiKey',
-    perplexity: 'perplexityApiKey',
-    openrouter: 'openrouterApiKey',
-    divvyDiary: 'divvyDiaryApiKey',
-    twitterClientId: 'twitterClientId',
-  };
-
   // Set a single API key (stores in secure storage and updates local state + Zustand)
   const setApiKey = useCallback(
     async (keyType: ApiKeyType, value: string) => {
       // Update local state immediately for UI responsiveness
-      const fieldName = keyTypeToField[keyType];
+      const fieldName = KEY_TYPE_TO_FIELD[keyType];
       setKeys(prev => ({ ...prev, [fieldName]: value }));
 
       // Also update Zustand for other components

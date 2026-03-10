@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 // Mock data for heatmap tests
@@ -24,12 +24,12 @@ const heatmapMockData = {
   ],
 };
 
-async function injectHeatmapMocks(page: any) {
+async function injectHeatmapMocks(page: Page) {
   await page.addInitScript((data: typeof heatmapMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
-          console.log('[Heatmap Mock] invoke:', cmd, args);
+        invoke: async (cmd: string) => {
+          console.log('[Heatmap Mock] invoke:', cmd);
 
           switch (cmd) {
             case 'get_pp_portfolios':
@@ -56,6 +56,8 @@ async function injectHeatmapMocks(page: any) {
         emit: async () => {},
       },
     };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
   }, heatmapMockData);
 }
 

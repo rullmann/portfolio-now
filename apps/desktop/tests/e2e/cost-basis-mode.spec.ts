@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { waitForAppReady, closeWelcomeModal, mockData } from './utils/tauri-mock';
 
 /**
@@ -82,14 +82,11 @@ const costBasisMockData = {
   ],
 };
 
-async function injectCostBasisMocks(page: any) {
+async function injectCostBasisMocks(page: Page) {
   await page.addInitScript((data: typeof costBasisMockData) => {
-    // Track current cost basis mode (simulating Zustand store)
-    let currentMode = 'historical';
-
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[CostBasis Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -99,15 +96,15 @@ async function injectCostBasisMocks(page: any) {
               return data.accounts;
             case 'get_securities':
               return data.securities;
-            case 'get_all_holdings':
+            case 'get_all_holdings': {
               // Return different data based on optional mode parameter
-              const mode = args?.costBasisMode || 'historical';
-              currentMode = mode;
+              const mode = (args?.costBasisMode as string) || 'historical';
               console.log('[CostBasis Mock] Mode:', mode, 'Period start:', args?.periodStart);
               if (mode === 'period') {
                 return data.holdingsPeriod;
               }
               return data.holdingsHistorical;
+            }
             case 'get_portfolio_history':
               return data.portfolioHistory;
             case 'get_invested_capital_history':
@@ -133,9 +130,9 @@ async function injectCostBasisMocks(page: any) {
         emit: async () => {},
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, costBasisMockData);
 }
 
@@ -197,7 +194,6 @@ test.describe('Cost Basis Mode (Einstandswert-Berechnung)', () => {
     await expect(historicalRadio).toBeChecked();
 
     // Period start date should NOT be visible when historical is selected
-    const periodStartLabel = page.locator('text=Periodenstart').first();
     // The date picker section should not be visible in historical mode
     const dateInput = page.locator('input[type="date"]');
     const dateInputVisible = await dateInput.isVisible().catch(() => false);

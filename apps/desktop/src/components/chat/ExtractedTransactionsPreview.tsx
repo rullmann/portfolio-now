@@ -191,7 +191,7 @@ function parseNumericDate(value: string, sep: string, preferMdy: boolean): Date 
 }
 
 function parseMonthNameDate(value: string): Date | null {
-  const cleaned = value.toLowerCase().replace(/[,\.]/g, ' ');
+  const cleaned = value.toLowerCase().replace(/[,.]/g, ' ');
   const tokens = cleaned.split(/\s+/).filter(Boolean);
   if (tokens.length < 3) return null;
 

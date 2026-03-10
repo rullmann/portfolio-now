@@ -2,7 +2,7 @@
  * Recent Transactions Widget - Shows last N transactions
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { ArrowUpRight, ArrowDownRight, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { getTransactions } from '../../../lib/api';
 import type { TransactionData } from '../../../lib/types';
@@ -50,7 +50,7 @@ export function RecentTransactionsWidget({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadTransactions = async () => {
+  const loadTransactions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -61,11 +61,11 @@ export function RecentTransactionsWidget({
     } finally {
       setLoading(false);
     }
-  };
+  }, [limit]);
 
   useEffect(() => {
     loadTransactions();
-  }, [limit]);
+  }, [loadTransactions]);
 
   const formatCurrency = (value: number, curr: string) => {
     return new Intl.NumberFormat('de-DE', {

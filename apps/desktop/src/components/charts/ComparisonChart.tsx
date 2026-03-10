@@ -37,17 +37,7 @@ export interface ComparisonChartProps {
   normalize?: boolean; // If true, show percentage performance; if false, show raw prices
 }
 
-// Predefined colors for comparison lines
-export const COMPARISON_COLORS = [
-  '#2563eb', // Blue
-  '#dc2626', // Red
-  '#16a34a', // Green
-  '#ca8a04', // Yellow
-  '#9333ea', // Purple
-  '#ea580c', // Orange
-  '#0891b2', // Cyan
-  '#be185d', // Pink
-];
+export { COMPARISON_COLORS } from './comparisonColors';
 
 // ============================================================================
 // Helper Functions
@@ -146,11 +136,12 @@ export function ComparisonChart({
       resizeObserver.observe(containerRef.current);
     }
 
+    const seriesMap = seriesRef.current;
     return () => {
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
-      seriesRef.current.clear();
+      seriesMap.clear();
     };
   }, [height, theme, isDark, backgroundColor, textColor, gridColor]);
 

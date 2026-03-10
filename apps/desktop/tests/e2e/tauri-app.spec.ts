@@ -37,7 +37,8 @@ function isAppBuilt(): boolean {
   return fs.existsSync(APP_PATH);
 }
 
-// Start the app
+// Start the app (reserved for future real app testing)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function startApp(): Promise<void> {
   if (!isAppBuilt()) {
     console.log('App not built. Building now...');

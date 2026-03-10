@@ -2,7 +2,7 @@
  * Benchmark Widget - Shows portfolio vs benchmark comparison
  */
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { RefreshCw, Target, TrendingUp, TrendingDown } from 'lucide-react';
 import { getBenchmarks, compareToBenchmark } from '../../../lib/api';
 import type { BenchmarkData, BenchmarkComparison } from '../../../lib/types';
@@ -32,7 +32,7 @@ export function BenchmarkWidget({ config }: BenchmarkWidgetProps) {
     };
   }, []);
 
-  const loadBenchmarks = async () => {
+  const loadBenchmarks = useCallback(async () => {
     try {
       const data = await getBenchmarks();
       setBenchmarks(data);
@@ -44,9 +44,9 @@ export function BenchmarkWidget({ config }: BenchmarkWidgetProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Fehler beim Laden');
     }
-  };
+  }, [selectedBenchmark]);
 
-  const loadComparison = async () => {
+  const loadComparison = useCallback(async () => {
     if (!selectedBenchmark) {
       setComparison(null);
       setLoading(false);
@@ -68,15 +68,15 @@ export function BenchmarkWidget({ config }: BenchmarkWidgetProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedBenchmark, portfolioId, startDate, endDate]);
 
   useEffect(() => {
     loadBenchmarks();
-  }, []);
+  }, [loadBenchmarks]);
 
   useEffect(() => {
     loadComparison();
-  }, [selectedBenchmark, portfolioId, startDate, endDate]);
+  }, [loadComparison]);
 
   const formatPercent = (value: number) => {
     return new Intl.NumberFormat('de-DE', {

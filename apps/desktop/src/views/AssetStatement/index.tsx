@@ -77,7 +77,7 @@ interface HoldingWithLogo extends AggregatedHolding {
   logoUrl?: string;
 }
 
-export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: AssetStatementViewProps) {
+export function AssetStatementView({ dbHoldings }: AssetStatementViewProps) {
   const [baseCurrency, setBaseCurrency] = useState<string>('EUR');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [sortField, setSortField] = useState<SortField>('currentValue');
@@ -131,14 +131,10 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
 
   // Fetch classifications when taxonomy is selected
   useEffect(() => {
-    if (groupBy.startsWith('taxonomy-')) {
-      const taxonomyId = parseInt(groupBy.replace('taxonomy-', ''), 10);
-      getAllSecurityClassifications(taxonomyId)
-        .then(setClassifications)
-        .catch(() => setClassifications([]));
-    } else {
-      setClassifications([]);
-    }
+    const promise = groupBy.startsWith('taxonomy-')
+      ? getAllSecurityClassifications(parseInt(groupBy.replace('taxonomy-', ''), 10)).catch(() => [] as SecurityClassification[])
+      : Promise.resolve([] as SecurityClassification[]);
+    promise.then(setClassifications);
   }, [groupBy]);
 
   // Close menus on click outside
@@ -157,18 +153,20 @@ export function AssetStatementView({ dbHoldings, dbPortfolios: _dbPortfolios }: 
 
   // Fetch portfolio history for chart
   useEffect(() => {
-    if (displayMode === 'chart') {
-      setIsLoadingChart(true);
-      getPortfolioHistory()
-        .then((history) => {
-          setPortfolioHistory(history || []);
-        })
-        .catch((err) => {
-          console.error('Failed to load portfolio history:', err);
-          setPortfolioHistory([]);
-        })
-        .finally(() => setIsLoadingChart(false));
-    }
+    if (displayMode !== 'chart') return;
+    Promise.resolve()
+      .then(() => {
+        setIsLoadingChart(true);
+        return getPortfolioHistory();
+      })
+      .then((history) => {
+        setPortfolioHistory(history || []);
+      })
+      .catch((err) => {
+        console.error('Failed to load portfolio history:', err);
+        setPortfolioHistory([]);
+      })
+      .finally(() => setIsLoadingChart(false));
   }, [displayMode]);
 
   // Handle sort

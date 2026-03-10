@@ -35,13 +35,14 @@ const portfolioInsightsMockData = {
 
 async function injectPortfolioInsightsMocks(page: Page) {
   await page.addInitScript((data: typeof portfolioInsightsMockData) => {
+    const w = window as unknown as Record<string, unknown>;
     // Storage for event listeners and request tracking
-    (window as any).__tauriEventListeners = {} as Record<string, ((event: any) => void)[]>;
-    (window as any).__lastAnalysisRequest = null as { analysisType: string } | null;
+    w.__tauriEventListeners = {} as Record<string, ((event: unknown) => void)[]>;
+    w.__lastAnalysisRequest = null as { analysisType: string } | null;
 
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Portfolio Insights Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -78,7 +79,7 @@ async function injectPortfolioInsightsMocks(page: Page) {
               const analysisType = request?.analysisType || request?.analysis_type || 'insights';
 
               // Track the request for testing
-              (window as any).__lastAnalysisRequest = { analysisType, request };
+              w.__lastAnalysisRequest = { analysisType, request };
 
               // Small delay to simulate AI processing
               await new Promise((resolve) => setTimeout(resolve, 100));
@@ -103,34 +104,33 @@ async function injectPortfolioInsightsMocks(page: Page) {
         },
       },
       event: {
-        listen: async (event: string, handler: any) => {
+        listen: async (event: string, handler: (e: unknown) => void) => {
           console.log('[Portfolio Insights Mock] listen:', event);
 
           // Store listener for progress events
-          (window as any).__tauriEventListeners[event] =
-            (window as any).__tauriEventListeners[event] || [];
-          (window as any).__tauriEventListeners[event].push(handler);
+          const listeners = w.__tauriEventListeners as Record<string, ((e: unknown) => void)[]>;
+          listeners[event] = listeners[event] || [];
+          listeners[event].push(handler);
 
           return () => {
             // Unsubscribe function
-            const listeners = (window as any).__tauriEventListeners?.[event];
-            if (listeners) {
-              const idx = listeners.indexOf(handler);
+            const evListeners = (w.__tauriEventListeners as Record<string, ((e: unknown) => void)[]> | undefined)?.[event];
+            if (evListeners) {
+              const idx = evListeners.indexOf(handler);
               if (idx > -1) {
-                listeners.splice(idx, 1);
+                evListeners.splice(idx, 1);
               }
             }
           };
         },
-        emit: async (event: string, payload: any) => {
+        emit: async (event: string, payload: unknown) => {
           console.log('[Portfolio Insights Mock] emit:', event, payload);
         },
       },
     };
 
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, portfolioInsightsMockData);
 }
 
@@ -609,7 +609,7 @@ test.describe('Portfolio Insights - Analyse-Modi', () => {
     await page.waitForTimeout(500);
 
     // Verify the correct analysisType was sent
-    const lastRequest = await page.evaluate(() => (window as any).__lastAnalysisRequest);
+    const lastRequest = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastAnalysisRequest);
 
     await page.screenshot({
       path: 'playwright-report/screenshots/portfolio-insights-opportunities-request.png',
@@ -654,7 +654,7 @@ test.describe('Portfolio Insights - Analyse-Modi', () => {
     await page.waitForTimeout(500);
 
     // Verify the correct analysisType was sent
-    const lastRequest = await page.evaluate(() => (window as any).__lastAnalysisRequest);
+    const lastRequest = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastAnalysisRequest);
 
     await page.screenshot({
       path: 'playwright-report/screenshots/portfolio-insights-insights-request.png',
@@ -691,7 +691,7 @@ test.describe('Portfolio Insights - Analyse-Modi', () => {
     const time1 = Date.now() - startTime1;
 
     // Verify first analysis completed
-    const request1 = await page.evaluate(() => (window as any).__lastAnalysisRequest);
+    const request1 = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastAnalysisRequest);
     expect(request1?.analysisType).toBe('opportunities');
 
     // Look for "Neue Analyse" button to switch modes
@@ -722,7 +722,7 @@ test.describe('Portfolio Insights - Analyse-Modi', () => {
       const time2 = Date.now() - startTime2;
 
       // Verify second analysis completed
-      const request2 = await page.evaluate(() => (window as any).__lastAnalysisRequest);
+      const request2 = await page.evaluate(() => (window as unknown as Record<string, unknown>).__lastAnalysisRequest);
       expect(request2?.analysisType).toBe('insights');
 
       // Both analyses should complete quickly (no freeze)

@@ -3,7 +3,7 @@
  * Shows current alerts and allows setting allocation targets
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   AlertTriangle,
   CheckCircle,
@@ -33,7 +33,7 @@ export function AlertsPanel({ portfolioId, onAddTarget, className = '' }: Alerts
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'alerts' | 'targets'>('alerts');
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -48,11 +48,11 @@ export function AlertsPanel({ portfolioId, onAddTarget, className = '' }: Alerts
     } finally {
       setLoading(false);
     }
-  };
+  }, [portfolioId]);
 
   useEffect(() => {
     loadData();
-  }, [portfolioId]);
+  }, [loadData]);
 
   const handleDeleteTarget = async (targetId: number) => {
     try {

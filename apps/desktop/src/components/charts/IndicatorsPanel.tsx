@@ -193,7 +193,7 @@ export function IndicatorsPanel({ indicators, onIndicatorsChange }: IndicatorsPa
     const config = defaultIndicatorConfigs[type];
     const newIndicator: IndicatorConfig = {
       ...config,
-      id: `${type}-${Date.now()}`,
+      id: `${type}-${crypto.randomUUID()}`,
       enabled: true,
       color: ['sma', 'ema'].includes(type) ? getNextColor() : config.color,
     };

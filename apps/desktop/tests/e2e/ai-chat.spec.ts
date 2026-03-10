@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { mockData, waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 const aiChatMockData = {
@@ -9,12 +9,12 @@ const aiChatMockData = {
   },
 };
 
-async function injectAIChatMocks(page: any, overrides?: Partial<typeof aiChatMockData>) {
+async function injectAIChatMocks(page: Page, overrides?: Partial<typeof aiChatMockData>) {
   const data = { ...aiChatMockData, ...overrides };
   await page.addInitScript((data: typeof aiChatMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[AI Chat Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -50,9 +50,9 @@ async function injectAIChatMocks(page: any, overrides?: Partial<typeof aiChatMoc
             case 'ai_query_transactions':
               return [];
             case 'enrich_extracted_transactions':
-              return (args?.transactions || []).map((txn: any) => ({
+              return ((args?.transactions ?? []) as Record<string, unknown>[]).map((txn) => ({
                 ...txn,
-                shares: txn.shares ?? 10,
+                shares: (txn.shares as number | null | undefined) ?? 10,
                 shares_from_holdings: txn.shares == null,
               }));
             default:
@@ -65,9 +65,9 @@ async function injectAIChatMocks(page: any, overrides?: Partial<typeof aiChatMoc
         emit: async () => {},
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, data);
 }
 
@@ -98,7 +98,7 @@ test.describe('AI Chat Panel', () => {
 
   test('Chat Panel öffnet sich bei Klick', async ({ page }) => {
     // Find and click chat button
-    const chatButton = page.locator('button').filter({ has: page.locator('svg') }).last();
+    void page.locator('button').filter({ has: page.locator('svg') }).last();
 
     // Try to find the actual chat button at bottom right
     const buttons = await page.locator('button').all();
@@ -378,8 +378,7 @@ test.describe('AI Chat SQL Queries', () => {
     await page.waitForTimeout(1000);
 
     // Check for query approval card
-    const approvalCard = page.locator('text=/Bestätigung|Genehmigen|Abfrage erlauben|SQL/i');
-    const hasApprovalCard = await approvalCard.count() > 0;
+    void page.locator('text=/Bestätigung|Genehmigen|Abfrage erlauben|SQL/i');
 
     await page.screenshot({
       path: 'playwright-report/screenshots/ai-chat-sql-pending.png',

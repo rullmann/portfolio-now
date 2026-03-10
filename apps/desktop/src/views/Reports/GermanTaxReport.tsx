@@ -8,7 +8,7 @@
  * - Anlage KAP data export
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   FileText,
   RefreshCw,
@@ -56,12 +56,7 @@ export function GermanTaxReportView({ year }: Props) {
   const [settings, setSettings] = useState<TaxSettings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Load data
-  useEffect(() => {
-    loadData();
-  }, [year]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -76,7 +71,12 @@ export function GermanTaxReportView({ year }: Props) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [year]);
+
+  // Load data
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleSaveSettings = async () => {
     if (!settings) return;

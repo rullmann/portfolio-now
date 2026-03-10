@@ -137,9 +137,9 @@ const exDividendMockData = {
 
 async function injectExDividendMocks(page: Page) {
   await page.addInitScript((data: typeof exDividendMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           console.log('[Ex-Dividend Mock] invoke:', cmd, args);
 
           switch (cmd) {
@@ -195,7 +195,7 @@ async function injectExDividendMocks(page: Page) {
                 createdAt: new Date().toISOString(),
               };
             case 'update_ex_dividend':
-              return data.exDividends.find((e: any) => e.id === args?.id);
+              return data.exDividends.find((e) => e.id === (args?.id as number));
             case 'delete_ex_dividend':
               return null;
             case 'get_dividend_patterns':
@@ -228,9 +228,9 @@ async function injectExDividendMocks(page: Page) {
       },
     };
 
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, exDividendMockData);
 }
 

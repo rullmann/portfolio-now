@@ -2,7 +2,7 @@
  * Dividends Widget - Shows dividend summary
  */
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { RefreshCw, TrendingUp } from 'lucide-react';
 import { generateDividendReport } from '../../../lib/api';
 import type { DividendReport } from '../../../lib/types';
@@ -27,7 +27,7 @@ export function DividendsWidget({ currency = 'EUR' }: DividendsWidgetProps) {
     };
   }, []);
 
-  const loadDividends = async () => {
+  const loadDividends = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -38,11 +38,11 @@ export function DividendsWidget({ currency = 'EUR' }: DividendsWidgetProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [startDate, endDate]);
 
   useEffect(() => {
     loadDividends();
-  }, [startDate, endDate]);
+  }, [loadDividends]);
 
   const formatCurrency = (value: number, curr: string) => {
     return new Intl.NumberFormat('de-DE', {

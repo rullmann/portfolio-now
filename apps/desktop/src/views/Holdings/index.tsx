@@ -85,18 +85,21 @@ const LogoLayer = ({ cx, cy, innerRadius, outerRadius, data }: LogoLayerProps) =
   // Calculate total value for percent calculation
   const totalValue = data.reduce((sum, item) => sum + item.value, 0);
 
-  // Calculate cumulative angles for each segment
-  let currentAngle = 90; // Start from top (90 degrees in Recharts coordinate system)
+  // Pre-compute angles for each segment to avoid mutating a variable during render
+  const segmentAngles = data.map((item) => {
+    const percent = totalValue > 0 ? item.value / totalValue : 0;
+    return percent * 360;
+  });
+  const midAngles = segmentAngles.map((_, index) => {
+    const startAngle = 90 - segmentAngles.slice(0, index).reduce((sum, a) => sum + a, 0);
+    return startAngle - segmentAngles[index] / 2;
+  });
 
   return (
     <g className="logo-layer" style={{ pointerEvents: 'none' }}>
       {data.map((item, index) => {
         const percent = totalValue > 0 ? item.value / totalValue : 0;
-        const segmentAngle = percent * 360;
-        const midAngle = currentAngle - segmentAngle / 2;
-
-        // Update for next segment
-        currentAngle -= segmentAngle;
+        const midAngle = midAngles[index];
 
         // Skip if segment is too small or no logo URL
         if (percent < MIN_LOGO_PERCENT || !item.logoUrl || item.logoUrl.length === 0) {
@@ -245,29 +248,29 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
     return chartData.reduce((sum, d) => sum + d.value, 0);
   }, [chartData]);
 
-  // Custom tooltip
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartDataItem }> }) => {
+  // Custom tooltip rendered via render prop to avoid defining a component during render
+  const renderTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartDataItem }> }) => {
     if (!active || !payload || payload.length === 0) return null;
 
-    const data = payload[0].payload;
+    const item = payload[0].payload;
     return (
       <div className="bg-card border border-border rounded-lg p-3 shadow-lg z-50">
         <div className="flex items-center gap-2 mb-2">
-          <LogoImage src={data.logoUrl} size={24} />
-          <span className="font-medium">{data.name}</span>
+          <LogoImage src={item.logoUrl} size={24} />
+          <span className="font-medium">{item.name}</span>
         </div>
         <div className="space-y-1 text-sm">
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">Wert:</span>
-            <span className="font-medium">{formatNumber(data.value)} {baseCurrency}</span>
+            <span className="font-medium">{formatNumber(item.value)} {baseCurrency}</span>
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">Anteil:</span>
-            <span className="font-medium">{data.percentValue.toFixed(2)}%</span>
+            <span className="font-medium">{item.percentValue.toFixed(2)}%</span>
           </div>
           <div className="flex justify-between gap-4">
             <span className="text-muted-foreground">Bestand:</span>
-            <span className="font-medium">{data.shares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}</span>
+            <span className="font-medium">{item.shares.toLocaleString('de-DE', { maximumFractionDigits: 4 })}</span>
           </div>
         </div>
       </div>
@@ -428,7 +431,7 @@ export function HoldingsView({ dbHoldings, dbPortfolios }: HoldingsViewProps) {
                   );
                 }}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={renderTooltip} />
             </PieChart>
           </ResponsiveContainer>
 

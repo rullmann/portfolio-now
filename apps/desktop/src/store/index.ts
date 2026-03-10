@@ -56,16 +56,15 @@ export const navItems: NavItem[] = [
   // Analysis section
   { id: 'asset-statement', label: 'Vermögensaufstellung', icon: 'Table2', section: 'analysis' },
   { id: 'taxonomies', label: 'Klassifizierung', icon: 'FolderTree', section: 'analysis' },
-  // --- HIDDEN FOR v0.1.0 RELEASE (see RELEASE_NOTES.md) ---
-  // { id: 'benchmark', label: 'Benchmark', icon: 'Target', section: 'analysis' },
-  // { id: 'consortium', label: 'Portfolio-Gruppen', icon: 'FolderKanban', section: 'analysis' },
-  // { id: 'reports', label: 'Berichte', icon: 'BarChart3', section: 'analysis' },
+  { id: 'benchmark', label: 'Benchmark', icon: 'Target', section: 'analysis' },
+  { id: 'consortium', label: 'Portfolio-Gruppen', icon: 'FolderKanban', section: 'analysis' },
+  { id: 'reports', label: 'Berichte', icon: 'BarChart3', section: 'analysis' },
   // Tools section
   { id: 'optimization', label: 'Optimierung', icon: 'Sparkles', section: 'tools' },
   { id: 'charts', label: 'Technische Analyse', icon: 'CandlestickChart', section: 'tools' },
   { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
-  // { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
-  // { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
+  { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
+  { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
 ];
 
 // ============================================================================
@@ -158,12 +157,6 @@ export const useAppStore = create<AppState>()(
     }
   )
 );
-
-// Views only available in portfolio mode
-const PORTFOLIO_ONLY_VIEWS: View[] = [
-  'dashboard', 'widget-dashboard', 'portfolio', 'accounts', 'transactions',
-  'holdings', 'dividends', 'asset-statement', 'taxonomies', 'optimization',
-];
 
 // Views available in analysis mode
 const ANALYSIS_MODE_VIEWS: View[] = [

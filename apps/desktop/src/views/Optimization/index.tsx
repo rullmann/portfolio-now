@@ -143,6 +143,40 @@ export function OptimizationView() {
 // Efficient Frontier Chart
 // ============================================================================
 
+function EfficientFrontierTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { volatility: number; return: number; sharpe: number; type: string } }> }) {
+  if (!active || !payload || !payload[0]) return null;
+
+  const p = payload[0].payload;
+  const labels: Record<string, string> = {
+    frontier: 'Efficient Frontier',
+    current: 'Aktuelles Portfolio',
+    minVar: 'Minimum Varianz',
+    maxSharpe: 'Maximum Sharpe',
+  };
+
+  return (
+    <div className="bg-popover border border-border rounded-lg shadow-lg p-3">
+      <div className="font-medium mb-2">{labels[p.type] || 'Portfolio'}</div>
+      <div className="space-y-1 text-sm">
+        <div className="flex justify-between gap-4">
+          <span className="text-muted-foreground">Rendite:</span>
+          <span className={p.return >= 0 ? 'text-green-600' : 'text-red-600'}>
+            {p.return.toFixed(2)}%
+          </span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-muted-foreground">Volatilität:</span>
+          <span>{p.volatility.toFixed(2)}%</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-muted-foreground">Sharpe Ratio:</span>
+          <span>{p.sharpe.toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EfficientFrontierChart({ data }: { data: EfficientFrontier }) {
   const chartData = useMemo(() => {
     return data.points.map((p, i) => ({
@@ -173,40 +207,6 @@ function EfficientFrontierChart({ data }: { data: EfficientFrontier }) {
     return: data.maxSharpePortfolio.expectedReturn * 100,
     sharpe: data.maxSharpePortfolio.sharpeRatio,
     type: 'maxSharpe',
-  };
-
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { volatility: number; return: number; sharpe: number; type: string } }> }) => {
-    if (!active || !payload || !payload[0]) return null;
-
-    const p = payload[0].payload;
-    const labels: Record<string, string> = {
-      frontier: 'Efficient Frontier',
-      current: 'Aktuelles Portfolio',
-      minVar: 'Minimum Varianz',
-      maxSharpe: 'Maximum Sharpe',
-    };
-
-    return (
-      <div className="bg-popover border border-border rounded-lg shadow-lg p-3">
-        <div className="font-medium mb-2">{labels[p.type] || 'Portfolio'}</div>
-        <div className="space-y-1 text-sm">
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">Rendite:</span>
-            <span className={p.return >= 0 ? 'text-green-600' : 'text-red-600'}>
-              {p.return.toFixed(2)}%
-            </span>
-          </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">Volatilität:</span>
-            <span>{p.volatility.toFixed(2)}%</span>
-          </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">Sharpe Ratio:</span>
-            <span>{p.sharpe.toFixed(2)}</span>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   return (
@@ -278,7 +278,7 @@ function EfficientFrontierChart({ data }: { data: EfficientFrontier }) {
                   style: { fontSize: 12 },
                 }}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<EfficientFrontierTooltip />} />
               <Legend />
 
               {/* Efficient Frontier Line */}

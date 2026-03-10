@@ -24,7 +24,8 @@ interface BriefingEntry {
   setup: SetupScore;
 }
 
-export function TradingBriefingWidget({ config: _config }: WidgetProps) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function TradingBriefingWidget({ config }: WidgetProps) {
   const [entries, setEntries] = useState<BriefingEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const { brandfetchApiKey } = useSettingsStore();

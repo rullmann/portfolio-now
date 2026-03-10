@@ -116,7 +116,8 @@ export const usePortfolioAnalysisStore = create<PortfolioAnalysisState>()(
       // Clear single analysis
       clearAnalysis: (securityId) =>
         set((state) => {
-          const { [securityId]: _, ...rest } = state.analyses;
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { [securityId]: _removed, ...rest } = state.analyses;
           return { analyses: rest };
         }),
 

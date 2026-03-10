@@ -208,13 +208,17 @@ export function SignalsPanel({ data, onSignalClick }: SignalsPanelProps) {
   const [patterns, setPatterns] = useState<PatternMatch[]>([]);
 
   useEffect(() => {
-    if (data.length < 30) { setSignals([]); return; }
-    getAllSignals(data).then(setSignals).catch(() => setSignals([]));
+    const promise = data.length < 30
+      ? Promise.resolve([])
+      : getAllSignals(data).catch(() => [] as TechnicalSignal[]);
+    promise.then(setSignals);
   }, [data]);
 
   useEffect(() => {
-    if (data.length < 10) { setPatterns([]); return; }
-    detectCandlestickPatterns(data).then(setPatterns).catch(() => setPatterns([]));
+    const promise = data.length < 10
+      ? Promise.resolve([])
+      : detectCandlestickPatterns(data).catch(() => [] as PatternMatch[]);
+    promise.then(setPatterns);
   }, [data]);
 
   // Filter signals

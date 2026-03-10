@@ -157,21 +157,20 @@ export function TradingViewChart({
   // Calculate indicator data via individual Rust calls (supports multiple same-type indicators)
   const [indicatorData, setIndicatorData] = useState<Record<string, unknown>>({});
   const [isCalculatingIndicators, setIsCalculatingIndicators] = useState(false);
+  const [containerWidth, setContainerWidth] = useState(0);
 
   useEffect(() => {
-    if (!data || data.length < 2) {
-      setIndicatorData({});
-      return;
-    }
+    const enabledIndicators = (!data || data.length < 2)
+      ? []
+      : indicators.filter(i => i.enabled);
 
-    const enabledIndicators = indicators.filter(i => i.enabled);
     if (enabledIndicators.length === 0) {
-      setIndicatorData({});
+      Promise.resolve({}).then(setIndicatorData);
       return;
     }
 
     let cancelled = false;
-    setIsCalculatingIndicators(true);
+    Promise.resolve().then(() => setIsCalculatingIndicators(true));
 
     const calculateIndicator = async (indicator: IndicatorConfig): Promise<[string, unknown]> => {
       switch (indicator.type) {
@@ -763,6 +762,7 @@ export function TradingViewChart({
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
         const { width, height: newHeight } = entry.contentRect;
+        if (width > 0) setContainerWidth(width);
         if (chart && width > 0 && newHeight > 100) {
           chart.applyOptions({ width, height: newHeight });
         }
@@ -777,7 +777,7 @@ export function TradingViewChart({
         chartRef.current = null;
       }
     };
-  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations, onChartReady]);
+  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations, onChartReady, onVisibleLogicalRangeChange]);
 
   // Early return for no data
   if (!data || data.length < 2) {
@@ -838,7 +838,7 @@ export function TradingViewChart({
         <div
           className="absolute z-20 pointer-events-none"
           style={{
-            left: Math.min(tooltipPosition.x + 12, containerRef.current?.clientWidth ? containerRef.current.clientWidth - 260 : tooltipPosition.x),
+            left: Math.min(tooltipPosition.x + 12, containerWidth > 0 ? containerWidth - 260 : tooltipPosition.x),
             top: Math.max(tooltipPosition.y - 80, 10),
           }}
         >

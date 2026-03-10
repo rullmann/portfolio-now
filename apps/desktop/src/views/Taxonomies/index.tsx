@@ -2,7 +2,7 @@
  * Taxonomies view for classification management.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { FolderTree, Plus, ChevronRight, ChevronDown, Edit2, Trash2, RefreshCw } from 'lucide-react';
 import { getTaxonomies, getClassificationTree, createStandardTaxonomies, deleteTaxonomy, deleteClassification } from '../../lib/api';
 import type { TaxonomyData, ClassificationData } from '../../lib/types';
@@ -24,7 +24,7 @@ export function TaxonomiesView() {
   const [editingClassification, setEditingClassification] = useState<ClassificationData | undefined>(undefined);
   const [parentClassificationId, setParentClassificationId] = useState<number | undefined>(undefined);
 
-  const loadTaxonomies = async () => {
+  const loadTaxonomies = useCallback(async () => {
     try {
       setIsLoading(true);
       const data = await getTaxonomies();
@@ -37,7 +37,7 @@ export function TaxonomiesView() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedTaxonomy]);
 
   const loadClassifications = async (taxonomyId: number) => {
     try {
@@ -50,7 +50,7 @@ export function TaxonomiesView() {
 
   useEffect(() => {
     loadTaxonomies();
-  }, []);
+  }, [loadTaxonomies]);
 
   useEffect(() => {
     if (selectedTaxonomy) {

@@ -63,7 +63,7 @@ export async function storeApiKey(keyType: ApiKeyType, value: string): Promise<v
     const store = await getStore();
     await store.set(`apiKey.${keyType}`, value);
     await store.save();
-  } catch (error) {
+  } catch {
     // Don't expose the key value in error messages
     console.error(`Failed to store API key for ${keyType}`);
     throw new Error(`Failed to store API key: ${keyType}`);
@@ -81,7 +81,7 @@ export async function getApiKey(keyType: ApiKeyType): Promise<string> {
     const store = await getStore();
     const value = await store.get<string>(`apiKey.${keyType}`);
     return value ?? '';
-  } catch (error) {
+  } catch {
     console.error(`Failed to retrieve API key for ${keyType}`);
     return '';
   }
@@ -97,7 +97,7 @@ export async function deleteApiKey(keyType: ApiKeyType): Promise<void> {
     const store = await getStore();
     await store.delete(`apiKey.${keyType}`);
     await store.save();
-  } catch (error) {
+  } catch {
     console.error(`Failed to delete API key for ${keyType}`);
   }
 }

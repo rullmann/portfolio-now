@@ -575,7 +575,7 @@ describe('ESC Key Modal Close', () => {
   describe('useEscapeKey Hook Logic', () => {
     it('should trigger callback on Escape key', () => {
       const callback = vi.fn();
-      let isOpen = true;
+      const isOpen = true;
 
       // Simulate the hook behavior
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -593,7 +593,7 @@ describe('ESC Key Modal Close', () => {
 
     it('should not trigger when modal is closed', () => {
       const callback = vi.fn();
-      let isOpen = false;
+      const isOpen = false;
 
       const handleKeyDown = (e: KeyboardEvent) => {
         if (isOpen && e.key === 'Escape') {
@@ -609,7 +609,7 @@ describe('ESC Key Modal Close', () => {
 
     it('should not trigger for other keys', () => {
       const callback = vi.fn();
-      let isOpen = true;
+      const isOpen = true;
 
       const handleKeyDown = (e: KeyboardEvent) => {
         if (isOpen && e.key === 'Escape') {

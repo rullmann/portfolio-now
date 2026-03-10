@@ -13,20 +13,18 @@ interface QueryApprovalCardProps {
 }
 
 /**
- * Get the appropriate icon for a query type
+ * Get the appropriate icon element for a query type
  */
-function getQueryTypeIcon(queryType: QueryType) {
+function getQueryTypeIcon(queryType: QueryType, className: string) {
   switch (queryType) {
-    case 'sql_query':
-      return Database;
     case 'transaction_query':
-      return Search;
+      return <Search className={className} />;
     case 'portfolio_value_query':
-      return TrendingUp;
+      return <TrendingUp className={className} />;
+    case 'sql_query':
     case 'database_query':
-      return Database;
     default:
-      return Database;
+      return <Database className={className} />;
   }
 }
 
@@ -50,7 +48,6 @@ export function QueryApprovalCard({
   disabled = false,
   sqlApprovalMode = 'session',
 }: QueryApprovalCardProps) {
-  const Icon = getQueryTypeIcon(query.queryType);
   const label = getQueryTypeLabel(query.queryType);
   const typeDescription = getQueryTypeDescription(query.queryType);
 
@@ -58,7 +55,7 @@ export function QueryApprovalCard({
     <div className="p-4 rounded-lg border-2 border-amber-500/50 bg-amber-500/5">
       <div className="flex items-start gap-3">
         <div className="p-2 rounded-lg bg-amber-500/10">
-          <Icon className="h-5 w-5 text-amber-600" />
+          {getQueryTypeIcon(query.queryType, 'h-5 w-5 text-amber-600')}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">

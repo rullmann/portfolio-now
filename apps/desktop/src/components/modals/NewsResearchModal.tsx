@@ -90,10 +90,10 @@ export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: N
     }
   }, [aiProvider, keys]);
 
-  const hasApiKey = () => {
+  const hasApiKey = useCallback(() => {
     const key = getApiKey();
     return key && key.trim().length > 0;
-  };
+  }, [getApiKey]);
 
   const handleResearch = useCallback(async () => {
     if (!hasApiKey()) return;
@@ -159,7 +159,7 @@ export function NewsResearchModal({ isOpen, onClose, security, currentPrice }: N
     } finally {
       setIsLoading(false);
     }
-  }, [aiProvider, aiModel, security, currentPrice, language, getApiKey]);
+  }, [aiProvider, aiModel, security, currentPrice, language, getApiKey, baseCurrency, hasApiKey]);
 
   const handleClose = () => {
     if (countdownIntervalRef.current) {

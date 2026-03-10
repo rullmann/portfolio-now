@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { mockData, waitForAppReady, closeWelcomeModal } from './utils/tauri-mock';
 
 const watchlistMockData = {
@@ -22,11 +22,11 @@ const watchlistMockData = {
   ],
 };
 
-async function injectWatchlistMocks(page: any) {
+async function injectWatchlistMocks(page: Page) {
   await page.addInitScript((data: typeof watchlistMockData) => {
-    (window as any).__TAURI__ = {
+    const tauriImpl = {
       core: {
-        invoke: async (cmd: string, args?: any) => {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
           switch (cmd) {
             case 'get_pp_portfolios':
               return data.portfolios;
@@ -54,13 +54,18 @@ async function injectWatchlistMocks(page: any) {
         },
       },
       event: {
-        listen: async () => () => {},
-        emit: async () => {},
+        listen: async (event: string) => {
+          console.log('[Tauri Mock] listen:', event);
+          return () => {};
+        },
+        emit: async (event: string, payload: unknown) => {
+          console.log('[Tauri Mock] emit:', event, payload);
+        },
       },
     };
-    (window as any).__TAURI_INTERNALS__ = {
-      invoke: (window as any).__TAURI__.core.invoke,
-    };
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI__ = tauriImpl;
+    w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
   }, watchlistMockData);
 }
 

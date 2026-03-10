@@ -92,9 +92,9 @@ async function injectStabilityMocks(
         }
       };
 
-      (window as any).__TAURI__ = {
+      const tauriImpl = {
         core: {
-          invoke: async (cmd: string, args?: any) => {
+          invoke: async (cmd: string, args?: Record<string, unknown>) => {
             callCount++;
             console.log(`[Stability Mock] invoke #${callCount}:`, cmd, args);
 
@@ -179,7 +179,7 @@ async function injectStabilityMocks(
                   tokensUsed: 800,
                 };
 
-              case 'get_ai_models':
+              case 'get_ai_models': {
                 const provider = args?.provider || 'openai';
                 if (provider === 'openai') {
                   return [
@@ -196,6 +196,7 @@ async function injectStabilityMocks(
                   ];
                 }
                 return [];
+              }
 
               case 'get_vision_models':
                 return [
@@ -210,19 +211,19 @@ async function injectStabilityMocks(
           },
         },
         event: {
-          listen: async (event: string, handler: any) => {
+          listen: async (event: string) => {
             console.log('[Stability Mock] listen:', event);
             return () => {};
           },
-          emit: async (event: string, payload: any) => {
+          emit: async (event: string, payload: unknown) => {
             console.log('[Stability Mock] emit:', event, payload);
           },
         },
       };
 
-      (window as any).__TAURI_INTERNALS__ = {
-        invoke: (window as any).__TAURI__.core.invoke,
-      };
+      const w = window as unknown as Record<string, unknown>;
+      w.__TAURI__ = tauriImpl;
+      w.__TAURI_INTERNALS__ = { invoke: tauriImpl.core.invoke };
     },
     { data: stabilityMockData, errorType, errorAfterCalls, recoverAfterErrors }
   );
@@ -433,7 +434,7 @@ test.describe('AI Recovery - After Error', () => {
       await insightsButton.click();
       await page.waitForTimeout(500);
 
-      let analyzeButton = page.locator('[role="dialog"] button').first();
+      const analyzeButton = page.locator('[role="dialog"] button').first();
       if (await analyzeButton.isVisible({ timeout: 1000 }).catch(() => false)) {
         await analyzeButton.click();
         await page.waitForTimeout(1500);

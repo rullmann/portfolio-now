@@ -165,7 +165,7 @@ export function AiFeatureMatrix({ apiKeys }: AiFeatureMatrixProps) {
         });
       }
     });
-  }, [availableProviders, webSearchProviders, aiFeatureSettings, setAiFeatureSetting, hasAnyProvider]);
+  }, [availableProviders, webSearchProviders, aiFeatureSettings, setAiFeatureSetting, hasAnyProvider, getModelsForProvider]);
 
   // Handle provider change for a feature
   const handleProviderChange = (featureId: AiFeatureId, provider: AiProvider, requiresWebSearch?: boolean) => {
