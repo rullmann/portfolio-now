@@ -6,7 +6,7 @@
 //! **Claude and Gemini support direct PDF upload** (no conversion needed!)
 //! OpenAI/Perplexity require poppler (pdftoppm) for PDF-to-image conversion.
 
-use crate::ai::{claude, gemini, openai, perplexity, AiError};
+use crate::ai::{claude, gemini, openai, openrouter, perplexity, AiError};
 use base64::{engine::general_purpose, Engine as _};
 use std::process::Command;
 
@@ -167,6 +167,15 @@ async fn ocr_image(
         }
         "perplexity" => {
             perplexity::analyze_with_custom_prompt(
+                image_base64,
+                &options.model,
+                &options.api_key,
+                OCR_PROMPT,
+            )
+            .await
+        }
+        "openrouter" => {
+            openrouter::analyze_with_custom_prompt(
                 image_base64,
                 &options.model,
                 &options.api_key,

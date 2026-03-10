@@ -3,7 +3,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt_with_options,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
@@ -973,7 +973,7 @@ pub async fn chat(
             let request_body = MultimodalChatRequest {
                 model: model.to_string(),
                 max_tokens: MAX_TOKENS_CHAT,
-                system: Some(build_chat_system_prompt(context)),
+                system: Some(build_chat_system_prompt_with_options(context, has_images)),
                 messages: claude_messages,
             };
 
@@ -991,7 +991,7 @@ pub async fn chat(
             let request_body = TextMessagesRequest {
                 model: model.to_string(),
                 max_tokens: MAX_TOKENS_CHAT,
-                system: Some(build_chat_system_prompt(context)),
+                system: Some(build_chat_system_prompt_with_options(context, has_images)),
                 messages: claude_messages,
             };
 

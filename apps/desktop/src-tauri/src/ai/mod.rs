@@ -151,6 +151,7 @@ pub use prompts::{
     build_portfolio_insights_prompt,
     build_opportunities_prompt,
     build_chat_system_prompt,
+    build_chat_system_prompt_with_options,
     build_news_research_prompt,
     build_trading_analysis_prompt,
 };

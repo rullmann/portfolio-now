@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon, Mic, Square } from 'lucide-react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon, Mic, Square, SlidersHorizontal, CandlestickChart, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -45,11 +45,14 @@ const PDF_EXTENSIONS = ['pdf'];
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 800;
 const DEFAULT_WIDTH = 420;
+const COLLAPSED_WIDTH = 44;
 const STORAGE_KEY_WIDTH = 'portfolio-chat-width';
+const STORAGE_KEY_COLLAPSED = 'portfolio-chat-collapsed';
 
 interface ChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  overlay?: boolean;
 }
 
 interface SuggestedAction {
@@ -76,7 +79,10 @@ const EXAMPLE_QUESTIONS = [
   'Wie war meine Rendite dieses Jahr?',
   'Welche Aktien zahlen Dividende?',
   'Zeige meine Top-Performer',
-  'Wie ist mein Portfolio diversifiziert?',
+  'Scanne den DAX nach überverkauften Aktien',
+  'Finde Ausbruchs-Kandidaten im S&P 500',
+  'Welche meiner Aktien haben starkes Momentum?',
+  'Suche Kaufgelegenheiten im NASDAQ 100',
 ];
 
 // ============================================================================
@@ -280,7 +286,7 @@ function TransactionConfirmation({ suggestion, onConfirm, onDecline, isExecuting
   return null;
 }
 
-export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
+export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [input, setInput] = useState('');
@@ -295,6 +301,9 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     return saved ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, parseInt(saved, 10))) : DEFAULT_WIDTH;
   });
   const [isResizing, setIsResizing] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_COLLAPSED) === 'true';
+  });
   const [lastResponseCost, setLastResponseCost] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -385,7 +394,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   useEffect(() => {
     const checkVision = async () => {
       try {
-        const result = await invoke<boolean>('check_vision_support', { model: aiModel });
+        const result = await invoke<boolean>('check_vision_support', { model: aiModel, provider: aiProvider });
         setHasVisionSupport(result);
         // Clear attachments if switching to non-vision model
         if (!result && attachments.length > 0) {
@@ -398,7 +407,7 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     if (aiModel) {
       checkVision();
     }
-  }, [aiModel]);
+  }, [aiModel, aiProvider]);
 
   // Load portfolios for transaction import
   useEffect(() => {
@@ -1105,10 +1114,13 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Focus input when panel opens
+  // Focus input and scroll to bottom when panel opens
   useEffect(() => {
     if (isOpen) {
-      setTimeout(() => inputRef.current?.focus(), 100);
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+        inputRef.current?.focus();
+      }, 100);
     }
   }, [isOpen]);
 
@@ -1117,9 +1129,31 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
     localStorage.setItem(STORAGE_KEY_WIDTH, String(panelWidth));
   }, [panelWidth]);
 
+  // Save collapsed state to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_COLLAPSED, String(isCollapsed));
+  }, [isCollapsed]);
+
+  const toggleCollapsed = useCallback(() => {
+    setIsCollapsed(prev => !prev);
+  }, []);
+
+  // Keyboard shortcut: Cmd+. to toggle collapse
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+        e.preventDefault();
+        toggleCollapsed();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [toggleCollapsed]);
+
   // Handle resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    if (isCollapsed) return; // Don't resize when collapsed
     setIsResizing(true);
   }, []);
 
@@ -1501,11 +1535,34 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   // Create a new conversation
   const handleNewConversation = async () => {
     try {
+      // If current conversation is empty (no messages), just reset state instead of creating a new one
+      const currentConv = conversations.find((c) => c.id === currentConversationId);
+      if (currentConv && currentConv.messageCount === 0) {
+        setMessages([]);
+        setSuggestions([]);
+        setPendingQueries([]);
+        setIsFirstMessage(true);
+        setError(null);
+        return;
+      }
+
       const newConv = await invoke<Conversation>('create_conversation', { title: null });
-      setConversations((prev) => [newConv, ...prev]);
+      // Clean up any empty conversations (except the new one)
+      const emptyConvIds = conversations
+        .filter((c) => c.messageCount === 0 && c.id !== currentConversationId)
+        .map((c) => c.id);
+      for (const id of emptyConvIds) {
+        invoke('delete_conversation', { id }).catch(() => {});
+      }
+
+      setConversations((prev) => [
+        newConv,
+        ...prev.filter((c) => !emptyConvIds.includes(c.id)),
+      ]);
       setCurrentConversationId(newConv.id);
       setMessages([]);
       setSuggestions([]);
+      setPendingQueries([]);
       setIsFirstMessage(true);
       setError(null);
     } catch (err) {
@@ -1515,10 +1572,17 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
   };
 
   // Switch to a different conversation
-  const switchConversation = (convId: number) => {
+  const switchConversation = async (convId: number) => {
     if (convId !== currentConversationId) {
       setCurrentConversationId(convId);
       setError(null);
+      // Refresh conversations list from DB to get accurate message counts
+      try {
+        const convs = await invoke<Conversation[]>('get_conversations');
+        setConversations(convs);
+      } catch (err) {
+        console.error('Failed to refresh conversations:', err);
+      }
     }
   };
 
@@ -1604,6 +1668,33 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
         result = await invoke<string>('execute_confirmed_transaction_delete', {
           payload: suggestion.payload,
         });
+      } else if (suggestion.actionType === 'show_chart') {
+        try {
+          const payload = JSON.parse(suggestion.payload);
+          useUIStore.getState().showChartFromChat(payload.securityName, payload.timeRange, payload.indicators);
+          useUIStore.getState().setCurrentView('charts');
+          result = `Technische Analyse für "${payload.securityName}" geöffnet`;
+        } catch {
+          result = 'Fehler beim Öffnen der technischen Analyse';
+        }
+      } else if (suggestion.actionType === 'screener_run') {
+        try {
+          const payload = JSON.parse(suggestion.payload);
+          const filters = (payload.filters || []).map((f: { indicator: string; condition: string; value: number; value2?: number }, i: number) => ({
+            ...f,
+            id: `chat-${i}-${Date.now()}`,
+            enabled: true,
+          }));
+          useUIStore.getState().applyScreenerFromChat(
+            filters,
+            payload.mode || 'market',
+            payload.indexId
+          );
+          useUIStore.getState().setCurrentView('screener');
+          result = `Screener geöffnet mit ${filters.length} Filter(n)`;
+        } catch {
+          result = 'Fehler beim Öffnen des Screeners';
+        }
       } else {
         // Default: watchlist actions
         result = await invoke<string>('execute_confirmed_ai_action', {
@@ -1931,22 +2022,19 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm md:bg-transparent md:backdrop-blur-none"
-        onClick={onClose}
-      />
-
-      {/* Panel */}
+      {/* Panel — flex flow or fixed overlay depending on mode */}
       <div
         ref={panelRef}
-        style={{ width: panelWidth }}
+        style={{
+          width: isCollapsed ? COLLAPSED_WIDTH : panelWidth,
+          ...(overlay ? {} : { flexBasis: isCollapsed ? COLLAPSED_WIDTH : panelWidth }),
+        }}
         className={cn(
-          'fixed right-0 top-0 z-50 h-full',
+          'h-full relative transition-[width,flex-basis] duration-200',
           'bg-background border-l border-border shadow-xl',
           'flex flex-col',
-          'animate-in slide-in-from-right duration-300',
-          isResizing && 'select-none'
+          overlay ? 'fixed right-0 top-0 z-50' : 'shrink-0',
+          isResizing && 'select-none !transition-none'
         )}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -1971,19 +2059,45 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
           </div>
         )}
 
-        {/* Resize Handle */}
-        <div
-          onMouseDown={handleMouseDown}
-          className={cn(
-            'absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize',
-            'hover:bg-primary/30 active:bg-primary/50 transition-colors',
-            'group flex items-center justify-center',
-            isResizing && 'bg-primary/50'
-          )}
-        >
-          <div className="absolute left-0 w-4 h-full" /> {/* Larger hit area */}
-          <GripVertical className="h-6 w-3 text-muted-foreground/50 group-hover:text-primary/70 absolute -left-1" />
-        </div>
+        {/* Resize Handle — only when expanded */}
+        {!isCollapsed && (
+          <div
+            onMouseDown={handleMouseDown}
+            onDoubleClick={toggleCollapsed}
+            className={cn(
+              'absolute -left-2 top-0 bottom-0 w-4 cursor-ew-resize z-10',
+              'hover:bg-primary/20 active:bg-primary/30 transition-colors',
+              'group flex items-center justify-center',
+              isResizing && 'bg-primary/30'
+            )}
+          >
+            <GripVertical className="h-6 w-3 text-muted-foreground/50 group-hover:text-primary/70" />
+          </div>
+        )}
+
+        {/* Collapsed sidebar strip */}
+        {isCollapsed ? (
+          <div className="flex flex-col items-center h-full py-3 gap-3">
+            <button
+              onClick={toggleCollapsed}
+              className="p-2 rounded hover:bg-muted transition-colors"
+              title="Chat aufklappen (⌘.)"
+            >
+              <PanelRightOpen className="h-5 w-5 text-muted-foreground" />
+            </button>
+            <button
+              onClick={toggleCollapsed}
+              className="p-2 rounded hover:bg-muted transition-colors"
+              title="Chat aufklappen"
+            >
+              <MessageSquare className="h-5 w-5 text-muted-foreground" />
+            </button>
+            {messages.length > 0 && (
+              <span className="text-[10px] text-muted-foreground/60">{messages.length}</span>
+            )}
+          </div>
+        ) : (
+        <>
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -2041,8 +2155,16 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               </button>
             )}
             <button
+              onClick={toggleCollapsed}
+              className="p-2 rounded hover:bg-muted transition-colors"
+              title="Einklappen (⌘.)"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+            <button
               onClick={onClose}
               className="p-2 rounded hover:bg-muted transition-colors"
+              title="Chat schließen"
             >
               <X className="h-5 w-5" />
             </button>
@@ -2231,6 +2353,124 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
                               </div>
                             </div>
                           )}
+                        </div>
+                      );
+                    }
+
+                    // Show chart suggestions
+                    if (suggestion.actionType === 'show_chart') {
+                      return (
+                        <div key={`chart-${message.id}-${idx}`} className={cn('p-3 rounded-lg border border-purple-500/30 bg-purple-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
+                          <div className="flex items-start gap-2">
+                            <CandlestickChart className="h-4 w-4 text-purple-500 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-purple-600">Technische Analyse</p>
+                              <p className="text-sm text-muted-foreground">{suggestion.description}</p>
+                              {suggestion.status === 'pending' ? (
+                                <div className="flex gap-2 mt-2">
+                                  <button
+                                    onClick={() => executeSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    {executingSuggestion === suggestion.payload ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <CandlestickChart className="h-3.5 w-3.5" />
+                                    )}
+                                    Chart öffnen
+                                  </button>
+                                  <button
+                                    onClick={() => declineSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                    Abbrechen
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
+                                  {suggestion.status === 'confirmed' ? (
+                                    <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Chart geöffnet</>
+                                  ) : (
+                                    <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Screener run suggestions
+                    if (suggestion.actionType === 'screener_run') {
+                      let screenerPayload: { filters?: Array<{ indicator: string; condition: string; value: number; value2?: number }>; mode?: string; indexId?: string } | null = null;
+                      try {
+                        screenerPayload = JSON.parse(suggestion.payload);
+                      } catch {
+                        screenerPayload = null;
+                      }
+                      return (
+                        <div key={`screener-${message.id}-${idx}`} className={cn('p-3 rounded-lg border border-blue-500/30 bg-blue-500/5', suggestion.status !== 'pending' && 'opacity-60')}>
+                          <div className="flex items-start gap-2">
+                            <SlidersHorizontal className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-blue-600">Screener-Scan</p>
+                                {screenerPayload?.indexId && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium uppercase">{screenerPayload.indexId.replace(/\d+$/, ' $&').trim()}</span>
+                                )}
+                                {screenerPayload?.mode === 'local' && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 font-medium">Eigene Aktien</span>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground">{suggestion.description}</p>
+                              {screenerPayload?.filters && screenerPayload.filters.length > 0 && (
+                                <ul className="mt-1.5 space-y-0.5">
+                                  {screenerPayload.filters.map((f, fi) => (
+                                    <li key={fi} className="text-xs text-muted-foreground flex items-center gap-1">
+                                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                                      {f.indicator} {f.condition} {f.value}{f.value2 !== undefined ? ` – ${f.value2}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                              {suggestion.status === 'pending' ? (
+                                <div className="flex gap-2 mt-2">
+                                  <button
+                                    onClick={() => executeSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    {executingSuggestion === suggestion.payload ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                                    )}
+                                    Im Screener öffnen
+                                  </button>
+                                  <button
+                                    onClick={() => declineSuggestion(suggestion)}
+                                    disabled={executingSuggestion !== null}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                    Abbrechen
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
+                                  {suggestion.status === 'confirmed' ? (
+                                    <><CheckCircle className="h-3.5 w-3.5 text-green-600" /> Im Screener geöffnet</>
+                                  ) : (
+                                    <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> Abgebrochen</>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       );
                     }
@@ -2455,9 +2695,11 @@ export function ChatPanel({ isOpen, onClose }: ChatPanelProps) {
               compact
               disabled={isLoading}
             />
-            <VisionIndicator model={aiModel} className="ml-2" />
+            <VisionIndicator model={aiModel} provider={aiProvider} className="ml-2" />
           </div>
         </div>
+      </>
+      )}
       </div>
 
       {/* Image Upload Consent Dialog */}

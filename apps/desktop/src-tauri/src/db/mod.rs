@@ -1209,6 +1209,18 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Added volume column to pp_price");
     }
 
+    // Seed: Ensure a default pp_import record exists (required for FK constraints)
+    let import_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pp_import", [], |r| r.get(0))
+        .unwrap_or(0);
+    if import_count == 0 {
+        conn.execute(
+            "INSERT INTO pp_import (file_path, version, base_currency) VALUES ('__default__', 0, 'EUR')",
+            [],
+        )?;
+        log::info!("Seed: Created default pp_import record for fresh database");
+    }
+
     // Migration: Create pp_quote_error table for quote fetch errors
     if !table_exists(conn, "pp_quote_error") {
         conn.execute_batch(

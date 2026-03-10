@@ -18,7 +18,7 @@ static RE_CLOSE_BRACKET: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]\s+\]").unwra
 static RE_OPEN_BRACKET: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\s+\[").unwrap());
 static RE_COMMAND_MARKERS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)\[\[\s*(QUERY[\s_]*DB|WATCHLIST[\s_]*ADD|WATCHLIST[\s_]*REMOVE|TRANSACTION[\s_]*CREATE|TRANSACTION[\s_]*DELETE|PORTFOLIO[\s_]*TRANSFER|QUERY[\s_]*TRANSACTIONS|QUERY[\s_]*PORTFOLIO[\s_]*VALUE|EXTRACTED[\s_]*TRANSACTIONS|STRUCTURED[\s_]*QUERY)\s*:"
+        r"(?i)\[\[\s*(QUERY[\s_]*DB|WATCHLIST[\s_]*ADD|WATCHLIST[\s_]*REMOVE|TRANSACTION[\s_]*CREATE|TRANSACTION[\s_]*DELETE|PORTFOLIO[\s_]*TRANSFER|QUERY[\s_]*TRANSACTIONS|QUERY[\s_]*PORTFOLIO[\s_]*VALUE|EXTRACTED[\s_]*TRANSACTIONS|STRUCTURED[\s_]*QUERY|SCREENER[\s_]*RUN)\s*:"
     ).unwrap()
 });
 // Fixes LLM bug: single closing bracket after JSON (e.g., [[COMMAND:{...}] instead of [[COMMAND:{...}]])
@@ -34,17 +34,6 @@ static RE_COMMAND_MARKERS: Lazy<Regex> = Lazy::new(|| {
 /// let (commands, cleaned) = parse_db_queries(&normalized);
 /// ```
 pub fn normalize_ai_response(response: &str) -> String {
-    log::info!("=== normalize_ai_response called ===");
-    log::info!("Input length: {}", response.len());
-    if response.contains("[[") {
-        log::info!("Input contains [[, checking for command tags...");
-        // Log the part with [[ for debugging
-        if let Some(idx) = response.find("[[") {
-            let end = (idx + 200).min(response.len());
-            log::info!("Tag region: {}", &response[idx..end]);
-        }
-    }
-
     let mut result = response.to_string();
 
     // 1. Normalize line endings (CRLF → LF)
@@ -66,25 +55,16 @@ pub fn normalize_ai_response(response: &str) -> String {
     // 6. Fix single closing bracket: [[COMMAND:{...}] → [[COMMAND:{...}]]
     result = fix_single_close_bracket(&result);
 
-    // DEBUG: Log output
-    if result.contains("[[") {
-        log::info!("=== normalize_ai_response OUTPUT ===");
-        if let Some(idx) = result.find("[[") {
-            let end = (idx + 200).min(result.len());
-            log::info!("Normalized tag region: {}", &result[idx..end]);
-        }
-    }
-
     result
 }
 
 /// Fixes LLM bug where command tags have only one closing bracket
 /// Example: [[COMMAND:{...}] → [[COMMAND:{...}]]
+///
+/// Uses brace counting to only fix `}]` where `}` closes the outermost JSON object,
+/// avoiding false positives on nested JSON arrays like `{"filters":[{...}],"mode":"..."}`.
 fn fix_single_close_bracket(s: &str) -> String {
-    // Match pattern: [[COMMAND:{...}] followed by anything except ]
-    // We look for }] that's NOT followed by another ]
     static RE_COMMAND_END: Lazy<Regex> = Lazy::new(|| {
-        // Match the }] pattern that might need fixing
         Regex::new(r"\}\]").unwrap()
     });
 
@@ -97,19 +77,39 @@ fn fix_single_close_bracket(s: &str) -> String {
         let next_char = s.get(match_end..match_end + 1);
         let needs_fix = next_char != Some("]");
 
-        // Also verify we're inside a command tag by checking backwards for [[
+        // Verify we're inside a command tag and this } closes the outermost JSON
         let before = &s[..mat.start()];
-        let in_command = {
+        let in_command_and_outermost = {
             if let Some(bracket_pos) = before.rfind("[[") {
                 let between = &before[bracket_pos..];
-                // Must have [[COMMAND: pattern AND no closing ]] between the [[ and here
-                between.contains(":") && !between.contains("]]")
+                if between.contains(":") && !between.contains("]]") {
+                    // Found [[COMMAND:... — now count braces from the colon to see if
+                    // this } closes the outermost object
+                    if let Some(colon_offset) = between.find(':') {
+                        let json_region = &between[colon_offset + 1..];
+                        let mut depth = 0;
+                        for ch in json_region.chars() {
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                        }
+                        // json_region goes up to mat.start() and doesn't include the
+                        // matched }. So depth==1 means the matched } closes the outermost.
+                        depth == 1
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             } else {
                 false
             }
         };
 
-        if needs_fix && in_command {
+        if needs_fix && in_command_and_outermost {
             result.push_str(&s[last_end..match_end]);
             result.push(']'); // Add the missing ]
             last_end = match_end;
@@ -401,6 +401,27 @@ Das sind alle Käufe."#;
     fn test_double_close_bracket_unchanged() {
         // Already correct - should not add extra bracket
         let input = r#"[[STRUCTURED_QUERY:{"from":"transactions"}]]"#;
+        assert_eq!(normalize_ai_response(input), input);
+    }
+
+    #[test]
+    fn test_screener_run_with_nested_arrays() {
+        // SCREENER_RUN contains JSON arrays - must NOT add extra ] inside JSON
+        let input = r#"[[SCREENER_RUN:{"filters":[{"type":"rsi","operator":"lt","value":[50,70]}],"mode":"market","universe":"DAX"}]]"#;
+        assert_eq!(normalize_ai_response(input), input);
+    }
+
+    #[test]
+    fn test_screener_run_single_bracket_fix() {
+        // Single closing bracket should be fixed
+        let input = r#"[[SCREENER_RUN:{"filters":[],"mode":"market"}]"#;
+        let expected = r#"[[SCREENER_RUN:{"filters":[],"mode":"market"}]]"#;
+        assert_eq!(normalize_ai_response(input), expected);
+    }
+
+    #[test]
+    fn test_screener_run_already_correct() {
+        let input = r#"[[SCREENER_RUN:{"filters":[{"type":"rsi","operator":"lt","value":30}],"mode":"market","universe":"DAX"}]]"#;
         assert_eq!(normalize_ai_response(input), input);
     }
 }

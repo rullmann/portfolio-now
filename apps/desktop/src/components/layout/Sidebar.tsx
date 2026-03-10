@@ -28,7 +28,7 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
-import { useUIStore, navItems, type NavItem } from '../../store';
+import { useUIStore, useAppStore, getNavItemsForMode, type NavItem } from '../../store';
 // AlertBadge import removed - rebalancing nav item hidden for v0.1.0
 
 // Icon mapping for navItems
@@ -83,7 +83,8 @@ const sectionLabels: { [key: string]: string } = {
 
 export function Sidebar() {
   const { currentView, setCurrentView, sidebarCollapsed, toggleSidebar } = useUIStore();
-  const sections = groupBySection(navItems);
+  const appMode = useAppStore((s) => s.appMode);
+  const sections = groupBySection(getNavItemsForMode(appMode));
   const navRef = useRef<HTMLElement>(null);
 
   // Keyboard navigation handler
@@ -121,7 +122,7 @@ export function Sidebar() {
     <aside
       className={`${
         sidebarCollapsed ? 'w-16' : 'w-64'
-      } flex flex-col border-r border-border/50 bg-muted/30 transition-all duration-300`}
+      } flex flex-col border-r border-border/50 bg-muted/50 transition-all duration-300`}
       aria-label="Hauptnavigation"
     >
       {/* Logo/Header */}
@@ -129,7 +130,7 @@ export function Sidebar() {
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-primary" aria-hidden="true" />
-            <span className="font-semibold tracking-tight text-foreground">Portfolio</span>
+            <span className="font-semibold tracking-tight text-foreground">{appMode === 'analysis' ? 'Analyse' : 'Portfolio'}</span>
           </div>
         )}
         <button

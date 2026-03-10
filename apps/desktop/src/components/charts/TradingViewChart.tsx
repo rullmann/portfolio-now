@@ -74,6 +74,8 @@ export interface TradingViewChartProps {
   onAnnotationClick?: (annotation: ChartAnnotationWithId) => void;
   /** Callback when chart API is ready (for drawing tools integration) */
   onChartReady?: (api: IChartApi, mainSeries: ISeriesApi<'Candlestick'>) => void;
+  /** Callback when visible logical range changes (for lazy loading older data) */
+  onVisibleLogicalRangeChange?: (range: { from: number; to: number } | null) => void;
 }
 
 // ============================================================================
@@ -114,6 +116,7 @@ export function TradingViewChart({
   annotations = [],
   onAnnotationClick,
   onChartReady,
+  onVisibleLogicalRangeChange,
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -746,6 +749,14 @@ export function TradingViewChart({
     // Notify parent that chart is ready (for drawing tools)
     if (onChartReady) {
       onChartReady(chart, candlestickSeries);
+    }
+
+    // Subscribe to visible range changes (for lazy loading)
+    if (onVisibleLogicalRangeChange) {
+      const handler = (range: { from: number; to: number } | null) => {
+        onVisibleLogicalRangeChange(range);
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
     }
 
     // Resize observer - handle both width and height

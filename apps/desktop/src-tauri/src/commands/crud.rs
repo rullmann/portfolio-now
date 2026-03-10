@@ -76,7 +76,7 @@ pub struct SecurityResult {
 }
 
 /// Validate ISIN checksum (ISO 7812)
-fn validate_isin(isin: &str) -> bool {
+pub fn validate_isin(isin: &str) -> bool {
     if isin.len() != 12 {
         return false;
     }
@@ -2102,6 +2102,8 @@ pub fn delete_all_data() -> Result<(), String> {
         "pp_settings",
         "pp_client_properties",
         "pp_chart_annotation",
+        "pp_chart_drawing",
+        "pp_pattern_history",
         "logo_cache",
         // Main entity tables last
         "pp_portfolio",
@@ -2130,6 +2132,59 @@ pub fn delete_all_data() -> Result<(), String> {
     conn.execute("DELETE FROM sqlite_sequence", []).ok();
 
     log::info!("All data deleted from database");
+    Ok(())
+}
+
+/// Factory reset: delete all app data files (DB, API keys, logo cache)
+///
+/// This is the nuclear option — deletes the SQLite file itself, secure-keys.json,
+/// and the logo cache directory. After this, the app must be reloaded.
+/// The frontend is responsible for clearing localStorage before calling this.
+#[command]
+pub fn factory_reset(app: AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // 1. Close the database connection so the file handle is released
+    {
+        let mut conn_guard = db::DB.lock()
+            .map_err(|e| format!("Failed to lock DB: {}", e))?;
+        *conn_guard = None;
+    }
+
+    // 2. Resolve app data directory
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    // 3. Delete database files (main + WAL sidecar files)
+    let db_files = [
+        app_data_dir.join("portfolio.db"),
+        app_data_dir.join("portfolio.db-wal"),
+        app_data_dir.join("portfolio.db-shm"),
+    ];
+    for path in &db_files {
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
+        }
+    }
+
+    // 4. Delete secure API key store
+    let secure_keys = app_data_dir.join("secure-keys.json");
+    if secure_keys.exists() {
+        std::fs::remove_file(&secure_keys)
+            .map_err(|e| format!("Failed to delete secure-keys.json: {}", e))?;
+    }
+
+    // 5. Delete logo cache directory
+    if let Some(data_dir) = dirs::data_dir() {
+        let logo_cache = data_dir.join("com.portfolio-now.app").join("logos");
+        if logo_cache.exists() {
+            std::fs::remove_dir_all(&logo_cache)
+                .map_err(|e| format!("Failed to delete logo cache: {}", e))?;
+        }
+    }
+
+    log::info!("Factory reset completed: all app data files deleted");
     Ok(())
 }
 

@@ -3,11 +3,12 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Newspaper, History } from 'lucide-react';
+import { Eye, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Newspaper, History, Search } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { getWatchlists, getWatchlistSecurities, createWatchlist, deleteWatchlist, removeFromWatchlist, getPriceHistory } from '../../lib/api';
 import { TradingViewMiniChart } from '../../components/charts';
 import { SecurityLogo, RegimeBadge, SetupScoreBadge } from '../../components/common';
+import { SecuritySearchModal } from '../../components/modals';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { HistoricalQuotesModal } from '../../components/modals/HistoricalQuotesModal';
 import { useCachedLogos } from '../../lib/hooks';
@@ -30,6 +31,8 @@ export function WatchlistView() {
   const { brandfetchApiKey, aiEnabled } = useSettingsStore();
   const [newsModalSecurity, setNewsModalSecurity] = useState<WatchlistSecurityData | null>(null);
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [pendingHistorySecurityIds, setPendingHistorySecurityIds] = useState<number[]>([]);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -186,6 +189,14 @@ export function WatchlistView() {
           <h1 className="text-2xl font-bold">Watchlist</h1>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowSearchModal(true)}
+            disabled={!selectedWatchlist}
+            className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Search size={16} />
+            Wertpapier suchen
+          </button>
           <button
             onClick={() => setShowHistoricalModal(true)}
             disabled={!selectedWatchlist || securities.length === 0}
@@ -401,28 +412,64 @@ export function WatchlistView() {
                   </table>
                 </div>
               ) : (
-                <div className="p-8 text-center text-muted-foreground">
-                  <Eye className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>Diese Watchlist ist leer.</p>
-                  <p className="text-sm mt-1">Füge Wertpapiere aus der Wertpapier-Ansicht hinzu.</p>
+                <div className="p-10 text-center">
+                  <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                    <Search size={24} className="text-primary" />
+                  </div>
+                  <p className="font-medium text-foreground mb-1">Watchlist ist leer</p>
+                  <p className="text-sm text-muted-foreground mb-5">Suche nach Aktien, ETFs oder Krypto und füge sie zur Watchlist hinzu.</p>
+                  <button
+                    onClick={() => setShowSearchModal(true)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors shadow-sm"
+                  >
+                    <Plus size={16} />
+                    Wertpapier suchen
+                  </button>
                 </div>
               )
             ) : (
-              <div className="p-8 text-center text-muted-foreground">
-                <Eye className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p>Wähle eine Watchlist aus oder erstelle eine neue.</p>
+              <div className="p-10 text-center">
+                <div className="w-14 h-14 rounded-xl bg-muted flex items-center justify-center mx-auto mb-4">
+                  <Eye size={24} className="text-muted-foreground" />
+                </div>
+                <p className="font-medium text-foreground mb-1">Keine Watchlist ausgewählt</p>
+                <p className="text-sm text-muted-foreground">Wähle links eine Watchlist aus oder erstelle eine neue.</p>
               </div>
             )}
           </div>
         </div>
       </div>
 
+      {/* Security Search Modal */}
+      <SecuritySearchModal
+        isOpen={showSearchModal}
+        onClose={() => {
+          setShowSearchModal(false);
+          // Auto-open historical quotes for newly added securities
+          if (pendingHistorySecurityIds.length > 0) {
+            setShowHistoricalModal(true);
+          }
+        }}
+        defaultWatchlistId={selectedWatchlist ?? undefined}
+        onSecurityAdded={(securityId) => {
+          if (selectedWatchlist) {
+            loadSecurities(selectedWatchlist);
+          }
+          loadWatchlists();
+          // Auto-open historical quotes dialog for the new security
+          setPendingHistorySecurityIds(prev => [...prev, securityId]);
+        }}
+      />
+
       {/* Historical Quotes Modal */}
       <HistoricalQuotesModal
         isOpen={showHistoricalModal}
-        onClose={() => setShowHistoricalModal(false)}
+        onClose={() => {
+          setShowHistoricalModal(false);
+          setPendingHistorySecurityIds([]);
+        }}
         onComplete={loadPriceHistories}
-        securityIds={securities.map((s) => s.securityId)}
+        securityIds={pendingHistorySecurityIds.length > 0 ? pendingHistorySecurityIds : securities.map((s) => s.securityId)}
       />
 
       {/* News Research Modal */}

@@ -231,6 +231,69 @@ pub async fn fetch_historical(
     Ok(quotes)
 }
 
+// ============================================================================
+// Company Profile (for ISIN enrichment)
+// ============================================================================
+
+/// Response from Finnhub Company Profile2 API
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ProfileResponse {
+    pub name: Option<String>,
+    pub ticker: Option<String>,
+    pub country: Option<String>,
+    pub currency: Option<String>,
+    pub exchange: Option<String>,
+    #[serde(rename = "finnhubIndustry")]
+    pub industry: Option<String>,
+    pub ipo: Option<String>,
+    #[serde(rename = "marketCapitalization")]
+    pub market_cap: Option<f64>,
+    #[serde(rename = "shareOutstanding")]
+    pub shares_outstanding: Option<f64>,
+    pub weburl: Option<String>,
+    pub logo: Option<String>,
+    /// ISIN - available for many stocks
+    pub isin: Option<String>,
+}
+
+/// Fetch company profile including ISIN
+///
+/// Uses Finnhub's `/stock/profile2` endpoint which returns ISIN for many stocks.
+/// Returns None fields gracefully if the symbol is not found.
+pub async fn get_profile(symbol: &str, api_key: &str) -> Result<ProfileResponse> {
+    if api_key.is_empty() {
+        return Err(anyhow!("Finnhub API key required"));
+    }
+
+    let normalized = normalize_symbol(symbol);
+    let url = format!("{}/stock/profile2?symbol={}", BASE_URL, urlencoding::encode(&normalized));
+
+    let client = create_client(api_key)?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Finnhub profile request failed for {}: {}", symbol, e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!("Finnhub profile HTTP error for {}: {}", symbol, status));
+    }
+
+    let profile: ProfileResponse = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse Finnhub profile for {}: {}", symbol, e))?;
+
+    // Empty response means symbol not found
+    if profile.name.is_none() && profile.ticker.is_none() {
+        return Err(anyhow!("No profile data for {}", symbol));
+    }
+
+    Ok(profile)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

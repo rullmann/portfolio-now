@@ -2156,11 +2156,13 @@ export async function getWatchlistsForSecurity(securityId: number): Promise<Watc
  */
 export async function searchExternalSecurities(
   query: string,
-  alphaVantageApiKey?: string
+  alphaVantageApiKey?: string,
+  finnhubApiKey?: string,
 ): Promise<ExternalSearchResponse> {
   return invoke<ExternalSearchResponse>('search_external_securities', {
     query,
     alphaVantageApiKey,
+    finnhubApiKey,
   });
 }
 
@@ -3504,4 +3506,25 @@ export async function getUserProfilePicture(): Promise<string | null> {
   return invoke<string | null>('get_user_profile_picture');
 }
 
-// NOTE: User-defined Query Templates API removed - replaced by dynamic SQL system
+// ============================================================================
+// Market Screener
+// ============================================================================
+
+import type { MarketIndex, MarketScreenerResponse, MarketScreenerAiRequest } from './types';
+
+export async function getMarketIndices(): Promise<MarketIndex[]> {
+  return invoke<MarketIndex[]>('get_market_indices');
+}
+
+export async function screenMarket(indexId: string, filters: import('./screener').ScreenerFilter[]): Promise<MarketScreenerResponse> {
+  return invoke<MarketScreenerResponse>('screen_market', { request: { indexId, filters } });
+}
+
+export async function cancelMarketScreener(): Promise<void> {
+  return invoke<void>('cancel_market_screener');
+}
+
+export async function analyzeMarketScreenerWithAi(request: MarketScreenerAiRequest): Promise<string> {
+  return invoke<string>('analyze_market_screener_with_ai', { request });
+}
+

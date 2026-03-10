@@ -139,6 +139,7 @@ pub fn run() {
             commands::crud::get_transaction,
             // Database Reset
             commands::crud::delete_all_data,
+            commands::crud::factory_reset,
             // Performance
             commands::performance::calculate_performance,
             commands::performance::get_period_returns,
@@ -437,6 +438,11 @@ pub fn run() {
             commands::indicators::score_setup,
             commands::indicators::calculate_risk,
             commands::indicators::full_trading_analysis,
+            // Market Screener
+            commands::market_screener::get_market_indices,
+            commands::market_screener::screen_market,
+            commands::market_screener::cancel_market_screener,
+            commands::market_screener::analyze_market_screener_with_ai,
             // API Key Validation
             commands::api_keys::validate_api_key,
         ])

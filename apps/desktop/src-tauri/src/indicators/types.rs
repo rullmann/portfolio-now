@@ -300,6 +300,8 @@ pub struct ScreenerResult {
     pub change_1d: Option<f64>,
     pub change_5d: Option<f64>,
     pub change_20d: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub breakout_score: Option<BreakoutScore>,
 }
 
 // Batch result for calculating all indicators at once
@@ -437,4 +439,38 @@ pub struct TradingAnalysis {
     pub regime: RegimeAnalysis,
     pub setup: SetupScore,
     pub risk: Option<RiskAnalysis>,
+}
+
+// ============================================================================
+// Breakout Scoring (6-Rule System)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakoutRuleScore {
+    pub rule_name: String,
+    pub points: u8,       // 0, 1, or 2
+    pub max_points: u8,   // always 2
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BreakoutClassification {
+    VeryLikely,    // 10-12 points
+    Likely,        // 7-9 points
+    Possible,      // 4-6 points
+    Unlikely,      // 0-3 points
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakoutScore {
+    pub total_points: u8,
+    pub max_points: u8,         // always 12
+    pub classification: BreakoutClassification,
+    pub classification_label: String,
+    pub rules: Vec<BreakoutRuleScore>,
+    pub downgraded: bool,       // true if cap rules were applied
+    pub downgrade_reason: Option<String>,
 }

@@ -6,7 +6,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt_with_options,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse,
@@ -830,7 +830,7 @@ pub async fn chat(
             let mut perplexity_messages: Vec<ChatMessage> = vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: vec![ContentPart::Text { text: build_chat_system_prompt(context) }],
+                    content: vec![ContentPart::Text { text: build_chat_system_prompt_with_options(context, has_images) }],
                 }
             ];
 
@@ -868,7 +868,7 @@ pub async fn chat(
             // Text-only messages
             let mut perplexity_messages = vec![TextChatMessage {
                 role: "system".to_string(),
-                content: build_chat_system_prompt(context),
+                content: build_chat_system_prompt_with_options(context, has_images),
             }];
 
             for m in &merged_messages {

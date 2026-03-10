@@ -1103,6 +1103,7 @@ pub async fn analyze_csv_with_ai(
         recent_dividends: vec![],
         recent_transactions: vec![],
         watchlist: vec![],
+        watchlist_names: vec![],
         sold_positions: vec![],
         yearly_overview: vec![],
         portfolio_age_days: 0,

@@ -10,6 +10,9 @@ import { invoke } from '@tauri-apps/api/core';
 // Types
 // ============================================================================
 
+// App Mode: 'portfolio' shows all views, 'analysis' shows only market analysis views
+export type AppMode = 'portfolio' | 'analysis' | null; // null = not yet chosen
+
 export type View =
   | 'dashboard'
   | 'widget-dashboard'
@@ -60,8 +63,7 @@ export const navItems: NavItem[] = [
   // Tools section
   { id: 'optimization', label: 'Optimierung', icon: 'Sparkles', section: 'tools' },
   { id: 'charts', label: 'Technische Analyse', icon: 'CandlestickChart', section: 'tools' },
-  // --- HIDDEN FOR v0.1.0 RELEASE (see RELEASE_NOTES.md) ---
-  // { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
+  { id: 'screener', label: 'Screener', icon: 'Search', section: 'tools' },
   // { id: 'plans', label: 'Sparpläne', icon: 'CalendarClock', section: 'tools' },
   // { id: 'rebalancing', label: 'Rebalancing', icon: 'Scale', section: 'tools' },
 ];
@@ -77,12 +79,22 @@ interface UIState {
   // PDF Import Modal state (global for cross-component access)
   pdfImportModalOpen: boolean;
   pdfImportInitialPath: string | null;
+  // Screener bridge – transient, NOT persisted
+  pendingScreenerFilters: { filters: Array<{ indicator: string; condition: string; value: number; value2?: number }>; mode: 'local' | 'market'; indexId?: string } | null;
+  // Chart bridge – transient, NOT persisted
+  pendingChartSecurityName: string | null;
+  pendingChartTimeRange: string | null;
+  pendingChartIndicators: string[] | null;
   setCurrentView: (view: View) => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setScrollTarget: (target: string | null) => void;
   openPdfImportModal: (path?: string) => void;
   closePdfImportModal: () => void;
+  applyScreenerFromChat: (filters: Array<{ indicator: string; condition: string; value: number; value2?: number }>, mode: 'local' | 'market', indexId?: string) => void;
+  clearPendingScreener: () => void;
+  showChartFromChat: (securityName: string, timeRange?: string, indicators?: string[]) => void;
+  clearPendingChart: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -93,16 +105,24 @@ export const useUIStore = create<UIState>()(
       scrollTarget: null,
       pdfImportModalOpen: false,
       pdfImportInitialPath: null,
+      pendingScreenerFilters: null,
+      pendingChartSecurityName: null,
+      pendingChartTimeRange: null,
+      pendingChartIndicators: null,
       setCurrentView: (view) => set({ currentView: view }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       setScrollTarget: (target) => set({ scrollTarget: target }),
       openPdfImportModal: (path) => set({ pdfImportModalOpen: true, pdfImportInitialPath: path || null }),
       closePdfImportModal: () => set({ pdfImportModalOpen: false, pdfImportInitialPath: null }),
+      applyScreenerFromChat: (filters, mode, indexId) => set({ pendingScreenerFilters: { filters, mode, indexId: indexId || undefined } }),
+      clearPendingScreener: () => set({ pendingScreenerFilters: null }),
+      showChartFromChat: (securityName, timeRange, indicators) => set({ pendingChartSecurityName: securityName, pendingChartTimeRange: timeRange || null, pendingChartIndicators: indicators || null }),
+      clearPendingChart: () => set({ pendingChartSecurityName: null, pendingChartTimeRange: null, pendingChartIndicators: null }),
     }),
     {
       name: 'portfolio-ui-state',
-      partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed }),
+      partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed, currentView: state.currentView }),
     }
   )
 );
@@ -114,18 +134,58 @@ export const useUIStore = create<UIState>()(
 interface AppState {
   isLoading: boolean;
   error: string | null;
+  appMode: AppMode;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
+  setAppMode: (mode: AppMode) => void;
 }
 
-export const useAppStore = create<AppState>()((set) => ({
-  isLoading: false,
-  error: null,
-  setLoading: (loading) => set({ isLoading: loading }),
-  setError: (error) => set({ error }),
-  clearError: () => set({ error: null }),
-}));
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      isLoading: false,
+      error: null,
+      appMode: null,
+      setLoading: (loading) => set({ isLoading: loading }),
+      setError: (error) => set({ error }),
+      clearError: () => set({ error: null }),
+      setAppMode: (mode) => set({ appMode: mode }),
+    }),
+    {
+      name: 'portfolio-app-state',
+      partialize: (state) => ({ appMode: state.appMode }),
+    }
+  )
+);
+
+// Views only available in portfolio mode
+const PORTFOLIO_ONLY_VIEWS: View[] = [
+  'dashboard', 'widget-dashboard', 'portfolio', 'accounts', 'transactions',
+  'holdings', 'dividends', 'asset-statement', 'taxonomies', 'optimization',
+];
+
+// Views available in analysis mode
+const ANALYSIS_MODE_VIEWS: View[] = [
+  'watchlist', 'charts', 'screener',
+];
+
+/**
+ * Returns filtered nav items based on the current app mode.
+ */
+export function getNavItemsForMode(mode: AppMode): NavItem[] {
+  if (mode === 'analysis') {
+    return navItems.filter((item) => ANALYSIS_MODE_VIEWS.includes(item.id));
+  }
+  return navItems; // portfolio mode or null = show all
+}
+
+/**
+ * Returns the default view for a given mode.
+ */
+export function getDefaultViewForMode(mode: AppMode): View {
+  return mode === 'analysis' ? 'watchlist' : 'dashboard';
+}
 
 // ============================================================================
 // Data Refresh Trigger (for global data refresh after mutations)
@@ -267,8 +327,8 @@ export const AI_MODELS_FALLBACK: Record<AiProvider, AiModelInfo[]> = {
   gemini: [
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Schnell & günstig, Free Tier', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
     { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Beste Qualität (stabil)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 1.25, pricingOutput: 10.0 },
-    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'Neuestes Modell (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
-    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', description: 'Neuestes Pro (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 1.25, pricingOutput: 10.0 },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (Preview)', description: 'Neuestes Modell (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 0.30, pricingOutput: 2.50 },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro (Preview)', description: 'Neuestes Pro (Preview)', supportsVision: true, maxOutputTokens: 65536, contextWindow: 1000000, pricingInput: 1.25, pricingOutput: 10.0 },
   ],
   perplexity: [
     { id: 'sonar-pro', name: 'Sonar Pro', description: 'Vision + Web-Suche', supportsVision: true, supportsWebSearch: true, maxOutputTokens: 128000, contextWindow: 200000, pricingInput: 3.0, pricingOutput: 15.0 },

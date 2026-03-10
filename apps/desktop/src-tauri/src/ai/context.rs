@@ -306,8 +306,17 @@ pub fn load_portfolio_context(
     // Load recent transactions (last 30)
     let recent_transactions = load_recent_transactions(conn)?;
 
-    // Load watchlist items
+    // Load watchlist items (with watchlist names)
     let watchlist = load_watchlist(conn);
+
+    // Load all watchlist names (including empty ones)
+    let watchlist_names: Vec<String> = conn
+        .prepare("SELECT name FROM pp_watchlist ORDER BY name")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        })
+        .unwrap_or_else(|_| Vec::new());
 
     // Get portfolio age (first transaction date)
     let first_txn_sql = "SELECT MIN(date) FROM pp_txn WHERE date IS NOT NULL";
@@ -377,6 +386,7 @@ pub fn load_portfolio_context(
         recent_dividends,
         recent_transactions,
         watchlist,
+        watchlist_names,
         sold_positions,
         yearly_overview,
         portfolio_age_days,
@@ -613,21 +623,23 @@ fn load_recent_transactions(conn: &Connection) -> Result<Vec<RecentTransaction>,
 /// Load watchlist items
 fn load_watchlist(conn: &Connection) -> Vec<WatchlistItem> {
     let sql = r#"
-        SELECT s.name, s.isin, s.ticker, lp.value, s.currency
+        SELECT w.name, s.name, s.isin, s.ticker, lp.value, s.currency
         FROM pp_watchlist_security ws
+        JOIN pp_watchlist w ON w.id = ws.watchlist_id
         JOIN pp_security s ON s.id = ws.security_id
         LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
-        ORDER BY s.name
+        ORDER BY w.name, s.name
     "#;
     conn.prepare(sql)
         .and_then(|mut stmt| {
             stmt.query_map([], |row| {
                 Ok(WatchlistItem {
-                    name: row.get(0)?,
-                    isin: row.get(1)?,
-                    ticker: row.get(2)?,
-                    current_price: row.get::<_, Option<i64>>(3)?.map(prices::to_decimal),
-                    currency: row.get(4)?,
+                    watchlist_name: row.get(0)?,
+                    name: row.get(1)?,
+                    isin: row.get(2)?,
+                    ticker: row.get(3)?,
+                    current_price: row.get::<_, Option<i64>>(4)?.map(prices::to_decimal),
+                    currency: row.get(5)?,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())

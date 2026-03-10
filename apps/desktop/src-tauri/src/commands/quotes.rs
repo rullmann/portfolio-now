@@ -9,7 +9,7 @@
 
 use crate::commands::data;
 use crate::db;
-use crate::quotes::{self, alphavantage, ecb, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
+use crate::quotes::{self, alphavantage, ecb, finnhub, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
 use crate::security;
 use futures::stream::{self, StreamExt};
 use chrono::NaiveDate;
@@ -1103,10 +1103,12 @@ pub struct ExternalSearchResponse {
 
 /// Search for securities from external providers (Yahoo Finance, Alpha Vantage)
 /// Results can be added to watchlist and then to the database.
+/// If `finnhub_api_key` is provided, enriches results with ISINs via Finnhub Profile2.
 #[command]
 pub async fn search_external_securities(
     query: String,
     alpha_vantage_api_key: Option<String>,
+    finnhub_api_key: Option<String>,
 ) -> Result<ExternalSearchResponse, String> {
     let query = query.trim();
     if query.len() < 2 {
@@ -1178,6 +1180,48 @@ pub async fn search_external_securities(
                 }
             }
         }
+    }
+
+    // Enrich results with ISINs from Finnhub Profile2 (if API key available)
+    if let Some(ref fh_key) = finnhub_api_key {
+        if !fh_key.is_empty() {
+            log::info!("Enriching {} results with Finnhub ISIN data", all_results.len());
+            // Only enrich equity results (futures, crypto etc. don't have ISINs)
+            let symbols_to_enrich: Vec<String> = all_results.iter()
+                .filter(|r| r.isin.is_none())
+                .filter(|r| {
+                    let st = r.security_type.as_deref().unwrap_or("").to_lowercase();
+                    // Only enrich equities and ETFs, skip futures/options/crypto
+                    !st.contains("future") && !st.contains("option") && !st.contains("crypto")
+                        && !r.symbol.contains('=') // Yahoo futures use = in symbol
+                })
+                .map(|r| r.symbol.clone())
+                .take(8)
+                .collect();
+
+            log::info!("Enriching symbols: {:?}", symbols_to_enrich);
+            for symbol in symbols_to_enrich {
+                match finnhub::get_profile(&symbol, fh_key).await {
+                    Ok(profile) => {
+                        log::info!("Finnhub profile for {}: isin={:?}, currency={:?}", symbol, profile.isin, profile.currency);
+                        if let Some(ref isin) = profile.isin {
+                            if let Some(result) = all_results.iter_mut().find(|r| r.symbol == symbol) {
+                                result.isin = Some(isin.clone());
+                                if result.currency.is_none() {
+                                    result.currency = profile.currency.clone();
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::info!("Finnhub profile lookup failed for {}: {}", symbol, e);
+                    }
+                }
+            }
+            providers_used.push("FINNHUB".to_string());
+        }
+    } else {
+        log::info!("No Finnhub API key provided, skipping ISIN enrichment");
     }
 
     // Sort results: exact matches first, then by name length

@@ -3,7 +3,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt_with_options,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse,
@@ -924,7 +924,7 @@ pub async fn chat(
                 contents: gemini_contents,
                 system_instruction: Some(SystemInstruction {
                     parts: vec![TextPart {
-                        text: build_chat_system_prompt(context),
+                        text: build_chat_system_prompt_with_options(context, has_images),
                     }],
                 }),
                 generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_CHAT }),
@@ -947,7 +947,7 @@ pub async fn chat(
                 contents: gemini_contents,
                 system_instruction: Some(SystemInstruction {
                     parts: vec![TextPart {
-                        text: build_chat_system_prompt(context),
+                        text: build_chat_system_prompt_with_options(context, has_images),
                     }],
                 }),
                 generation_config: Some(GenerationConfig { max_output_tokens: MAX_TOKENS_CHAT }),

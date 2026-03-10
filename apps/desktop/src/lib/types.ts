@@ -963,6 +963,86 @@ export interface ExternalSearchResponse {
 }
 
 // ============================================================================
+// Market Screener Types
+// ============================================================================
+
+export interface MarketIndex {
+  id: string;
+  name: string;
+  region: string;
+  tickerCount: number;
+}
+
+export interface MarketScreenerProgress {
+  current: number;
+  total: number;
+  currentSymbol: string;
+  status: string;
+}
+
+// Breakout Scoring (6-Rule System)
+export interface BreakoutRuleScore {
+  ruleName: string;
+  points: number;
+  maxPoints: number;
+  description: string;
+}
+
+export interface BreakoutScore {
+  totalPoints: number;
+  maxPoints: number;
+  classification: 'veryLikely' | 'likely' | 'possible' | 'unlikely';
+  classificationLabel: string;
+  rules: BreakoutRuleScore[];
+  downgraded: boolean;
+  downgradeReason: string | null;
+}
+
+export interface MarketScreenerResult {
+  securityId: number;
+  securityName: string;
+  ticker?: string;
+  isin?: string;
+  currency?: string;
+  matchedFilters: string[];
+  currentValues: Record<string, number | undefined>;
+  lastPrice: number;
+  change1d?: number;
+  change5d?: number;
+  change20d?: number;
+  breakoutScore?: BreakoutScore;
+}
+
+export interface MarketScreenerResponse {
+  results: MarketScreenerResult[];
+  totalScanned: number;
+  totalErrors: number;
+  errors: string[];
+}
+
+export interface MarketScreenerAiRequest {
+  provider: string;
+  model: string;
+  apiKey: string;
+  indexName: string;
+  filterDescription: string;
+  results: MarketScreenerAiResultItem[];
+}
+
+export interface MarketScreenerAiResultItem {
+  symbol: string;
+  name: string;
+  price: number;
+  currency: string;
+  change1d?: number;
+  change5d?: number;
+  change20d?: number;
+  rsi?: number;
+  matchedFilters: string[];
+  breakoutScore?: BreakoutScore;
+}
+
+// ============================================================================
 // Corporate Actions Types
 // ============================================================================
 
@@ -1488,6 +1568,7 @@ export interface EnhancedAnnotationAnalysisResponse {
 export interface ChartAnnotationWithId extends ChartAnnotation {
   id: string;
 }
+
 
 /** Annotation style configuration */
 export interface AnnotationStyle {

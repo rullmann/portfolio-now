@@ -13,10 +13,11 @@ import { cn } from '../../lib/utils';
 
 interface VisionIndicatorProps {
   model: string;
+  provider?: string;
   className?: string;
 }
 
-export function VisionIndicator({ model, className }: VisionIndicatorProps) {
+export function VisionIndicator({ model, provider, className }: VisionIndicatorProps) {
   const [hasVision, setHasVision] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -24,7 +25,7 @@ export function VisionIndicator({ model, className }: VisionIndicatorProps) {
     const checkVision = async () => {
       setIsLoading(true);
       try {
-        const result = await invoke<boolean>('check_vision_support', { model });
+        const result = await invoke<boolean>('check_vision_support', { model, provider });
         setHasVision(result);
       } catch (error) {
         console.error('Failed to check vision support:', error);
@@ -40,7 +41,7 @@ export function VisionIndicator({ model, className }: VisionIndicatorProps) {
       setHasVision(false);
       setIsLoading(false);
     }
-  }, [model]);
+  }, [model, provider]);
 
   if (isLoading) {
     return (

@@ -3,7 +3,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt_with_options,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse,
@@ -26,6 +26,11 @@ fn uses_responses_api(model: &str) -> bool {
 /// Check if model is a reasoning model (o3, o4) which requires max_completion_tokens
 fn is_reasoning_model(model: &str) -> bool {
     model.starts_with("o3") || model.starts_with("o4")
+}
+
+/// Models that require max_completion_tokens instead of max_tokens
+fn uses_max_completion_tokens(model: &str) -> bool {
+    is_reasoning_model(model) || model.starts_with("gpt-5")
 }
 
 /// Extract text from Responses API response
@@ -55,7 +60,7 @@ struct ChatCompletionRequest {
 
 /// Returns (max_tokens, max_completion_tokens) based on model type
 fn token_limits(model: &str, tokens: u32) -> (Option<u32>, Option<u32>) {
-    if is_reasoning_model(model) {
+    if uses_max_completion_tokens(model) {
         (None, Some(tokens))
     } else {
         (Some(tokens), None)
@@ -1008,9 +1013,9 @@ pub async fn chat(
         .build()
         .map_err(|e| AiError::network_error("OpenAI", model, &e.to_string()))?;
 
-    let system_prompt = build_chat_system_prompt(context);
-    // GPT-5 uses Responses API, but only for text-only — images fall back to Chat Completions
     let has_images = messages.iter().any(|m| !m.attachments.is_empty());
+    let system_prompt = build_chat_system_prompt_with_options(context, has_images);
+    // GPT-5 uses Responses API, but only for text-only — images fall back to Chat Completions
     let use_responses_api = uses_responses_api(model) && !has_images;
 
     let mut last_error = AiError::other("OpenAI", model, "No attempts made");

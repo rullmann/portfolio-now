@@ -8,7 +8,7 @@
 use super::{
     build_analysis_prompt, build_annotation_prompt, parse_annotation_response,
     build_enhanced_annotation_prompt, parse_enhanced_annotation_response,
-    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt,
+    build_portfolio_insights_prompt, build_opportunities_prompt, build_chat_system_prompt_with_options,
     AiError, AiErrorKind, ChartAnalysisResponse, ChartContext, AnnotationAnalysisResponse,
     EnhancedChartContext, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsContext, PortfolioInsightsResponse,
@@ -413,8 +413,8 @@ pub async fn chat(
     context: &PortfolioInsightsContext,
 ) -> Result<PortfolioChatResponse, AiError> {
     let client = build_client(api_key, model)?;
-    let system_prompt = build_chat_system_prompt(context);
     let has_images = messages.iter().any(|m| !m.attachments.is_empty());
+    let system_prompt = build_chat_system_prompt_with_options(context, has_images);
 
     if has_images {
         // Use vision request format for messages with image attachments
@@ -508,6 +508,25 @@ pub async fn chat(
             pending_queries: vec![],
         })
     }
+}
+
+pub async fn analyze_with_custom_prompt(
+    image_base64: &str,
+    model: &str,
+    api_key: &str,
+    custom_prompt: &str,
+) -> Result<ChartAnalysisResponse, AiError> {
+    let client = build_client(api_key, model)?;
+    let (raw, tokens) = send_vision_request(&client, model, "", custom_prompt, image_base64, MAX_TOKENS).await?;
+
+    Ok(ChartAnalysisResponse {
+        analysis: normalize_markdown_response(&raw),
+        provider: PROVIDER_NAME.to_string(),
+        model: model.to_string(),
+        tokens_used: tokens,
+        input_tokens: None,
+        output_tokens: None,
+    })
 }
 
 pub async fn complete_text(

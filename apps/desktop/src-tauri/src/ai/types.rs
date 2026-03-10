@@ -26,8 +26,9 @@ pub const MAX_TOKENS: u32 = 4096;
 pub const MAX_TOKENS_INSIGHTS: u32 = 3000;
 
 /// Maximum tokens for chat responses
-/// Note: 8192 needed for longer answers with SQL queries + explanations + command markers (e.g. EXTRACTED_TRANSACTIONS JSON)
-pub const MAX_TOKENS_CHAT: u32 = 8192;
+/// Reduced from 8192 to 4096 for faster responses. SQL queries + explanations fit in 2-3K tokens.
+/// EXTRACTED_TRANSACTIONS JSON commands may need more, but are rare.
+pub const MAX_TOKENS_CHAT: u32 = 4096;
 
 // ============================================================================
 // Structured AI Errors
@@ -500,6 +501,7 @@ pub struct DividendPayment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchlistItem {
+    pub watchlist_name: String,
     pub name: String,
     pub isin: Option<String>,
     pub ticker: Option<String>,
@@ -654,6 +656,8 @@ pub struct PortfolioInsightsContext {
 
     // Watchlist
     pub watchlist: Vec<WatchlistItem>,
+    /// All watchlist names (including empty ones)
+    pub watchlist_names: Vec<String>,
 
     // Historical data
     pub sold_positions: Vec<SoldPosition>,

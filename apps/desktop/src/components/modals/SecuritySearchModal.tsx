@@ -53,7 +53,7 @@ export function SecuritySearchModal({
   const [addedSymbols, setAddedSymbols] = useState<Set<string>>(new Set());
 
   // Debounce timer
-  const debounceRef = useRef<NodeJS.Timeout>();
+  const debounceRef = useRef<NodeJS.Timeout>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Load watchlists on mount

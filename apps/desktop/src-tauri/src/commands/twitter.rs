@@ -93,11 +93,11 @@ static OAUTH_STATE: Mutex<Option<OAuthState>> = Mutex::new(None);
 // ============================================================================
 
 fn generate_code_verifier() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     (0..128)
         .map(|_| {
-            let idx = rng.gen_range(0..charset.len());
+            let idx = rng.random_range(0..charset.len());
             charset[idx] as char
         })
         .collect()
@@ -115,11 +115,11 @@ fn generate_code_challenge(verifier: &str) -> String {
 }
 
 fn generate_state() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     (0..32)
         .map(|_| {
-            let idx = rng.gen_range(0..charset.len());
+            let idx = rng.random_range(0..charset.len());
             charset[idx] as char
         })
         .collect()

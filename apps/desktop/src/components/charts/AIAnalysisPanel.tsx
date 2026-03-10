@@ -681,6 +681,7 @@ export function AIAnalysisPanel({
         calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
           .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
 
+
         // Clear annotations when using text mode
         onAnnotationsChange?.([]);
       }

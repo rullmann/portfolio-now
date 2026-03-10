@@ -126,7 +126,7 @@ apps/desktop/
 
 ## Tech Stack
 
-**Frontend:** React 18, TypeScript, Vite, TailwindCSS, Zustand, Recharts, Lightweight Charts v5, Lucide Icons
+**Frontend:** React 19, TypeScript, Vite, Tailwind CSS 4, Zustand, Recharts, Lightweight Charts v5, Lucide Icons
 **Backend:** Tauri 2.9, Rust, SQLite, prost (Protobuf), Tokio, reqwest
 **Build:** pnpm Workspaces, Turbo
 

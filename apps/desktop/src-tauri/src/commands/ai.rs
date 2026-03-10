@@ -9,8 +9,8 @@ use crate::ai::{
     claude, gemini, openai, openrouter, perplexity,
     list_claude_models, list_openai_models, list_gemini_models, list_perplexity_models,
     list_openrouter_models,
-    get_model_upgrade, get_models_for_provider, has_vision_support, ModelInfo,
-    AiModelInfo, AiError, ChartAnalysisRequest, ChartAnalysisResponse, AnnotationAnalysisResponse,
+    get_model_upgrade, get_fallback, get_models_for_provider, has_vision_support, ModelInfo,
+    AiModelInfo, AiError, AiErrorKind, ChartAnalysisRequest, ChartAnalysisResponse, AnnotationAnalysisResponse,
     EnhancedChartAnalysisRequest, EnhancedAnnotationAnalysisResponse,
     PortfolioInsightsResponse, ChatMessage, PortfolioChatResponse, ChatSuggestedAction,
     // Context loading from ai/context.rs
@@ -19,10 +19,31 @@ use crate::ai::{
     parse_response_with_suggestions,
     normalize_extracted_txn_type,
 };
+use crate::commands::crud::validate_isin;
 use crate::security;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Emitter};
+
+/// Resolve model: check for deprecated upgrade, then return final model string
+fn resolve_model(model: &str) -> String {
+    if let Some(upgraded) = get_model_upgrade(model) {
+        log::info!("Auto-upgrading deprecated model {} to {}", model, upgraded);
+        upgraded.to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+/// Convert AiError to JSON string for frontend parsing
+fn ai_err_to_string(e: AiError) -> String {
+    serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
+}
+
+/// Get fallback model for a provider, if the original model is not found
+fn get_fallback_model(provider: &str, model: &str) -> Option<String> {
+    get_fallback(provider, model).map(|s| s.to_string())
+}
 
 /// Analyze a chart using AI
 ///
@@ -34,27 +55,38 @@ pub async fn analyze_chart_with_ai(
 ) -> Result<ChartAnalysisResponse, String> {
     security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
 
-    // Check if the model is deprecated and auto-upgrade
-    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
-        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
-        upgraded.to_string()
-    } else {
-        request.model.clone()
-    };
+    let model = resolve_model(&request.model);
+    let provider = request.provider.as_str();
 
-    let result = match request.provider.as_str() {
+    let result = match provider {
         "claude" => claude::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openai" => openai::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openrouter" => openrouter::analyze(&request.image_base64, &model, &request.api_key, &request.context).await,
-        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", provider))),
     };
 
-    // Convert AiError to JSON string for frontend parsing
-    result.map_err(|e| {
-        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
-    })
+    // Auto-fallback on ModelNotFound
+    match result {
+        Err(ref e) if e.kind == AiErrorKind::ModelNotFound => {
+            if let Some(fb) = get_fallback_model(provider, &model) {
+                log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider);
+                let retry = match provider {
+                    "claude" => claude::analyze(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openai" => openai::analyze(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "gemini" => gemini::analyze(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "perplexity" => perplexity::analyze(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openrouter" => openrouter::analyze(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    _ => return Err(ai_err_to_string(e.clone())),
+                };
+                retry.map_err(ai_err_to_string)
+            } else {
+                Err(ai_err_to_string(e.clone()))
+            }
+        }
+        other => other.map_err(ai_err_to_string),
+    }
 }
 
 /// Fetch available models for a given AI provider
@@ -91,27 +123,38 @@ pub async fn get_ai_models(
 pub async fn analyze_chart_with_annotations(
     request: ChartAnalysisRequest,
 ) -> Result<AnnotationAnalysisResponse, String> {
-    // Check if the model is deprecated and auto-upgrade
-    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
-        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
-        upgraded.to_string()
-    } else {
-        request.model.clone()
-    };
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+    let model = resolve_model(&request.model);
+    let provider = request.provider.as_str();
 
-    let result = match request.provider.as_str() {
+    let result = match provider {
         "claude" => claude::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openai" => openai::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openrouter" => openrouter::analyze_with_annotations(&request.image_base64, &model, &request.api_key, &request.context).await,
-        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", provider))),
     };
 
-    // Convert AiError to JSON string for frontend parsing
-    result.map_err(|e| {
-        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
-    })
+    match result {
+        Err(ref e) if e.kind == AiErrorKind::ModelNotFound => {
+            if let Some(fb) = get_fallback_model(provider, &model) {
+                log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider);
+                let retry = match provider {
+                    "claude" => claude::analyze_with_annotations(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openai" => openai::analyze_with_annotations(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "gemini" => gemini::analyze_with_annotations(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "perplexity" => perplexity::analyze_with_annotations(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openrouter" => openrouter::analyze_with_annotations(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    _ => return Err(ai_err_to_string(e.clone())),
+                };
+                retry.map_err(ai_err_to_string)
+            } else {
+                Err(ai_err_to_string(e.clone()))
+            }
+        }
+        other => other.map_err(ai_err_to_string),
+    }
 }
 
 /// Analyze a chart using AI with enhanced context (indicator values, OHLC data, volume)
@@ -123,27 +166,38 @@ pub async fn analyze_chart_with_annotations(
 pub async fn analyze_chart_enhanced(
     request: EnhancedChartAnalysisRequest,
 ) -> Result<EnhancedAnnotationAnalysisResponse, String> {
-    // Check if the model is deprecated and auto-upgrade
-    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
-        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
-        upgraded.to_string()
-    } else {
-        request.model.clone()
-    };
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+    let model = resolve_model(&request.model);
+    let provider = request.provider.as_str();
 
-    let result = match request.provider.as_str() {
+    let result = match provider {
         "claude" => claude::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openai" => openai::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "gemini" => gemini::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
         "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
-        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", provider))),
     };
 
-    // Convert AiError to JSON string for frontend parsing
-    result.map_err(|e| {
-        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
-    })
+    match result {
+        Err(ref e) if e.kind == AiErrorKind::ModelNotFound => {
+            if let Some(fb) = get_fallback_model(provider, &model) {
+                log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider);
+                let retry = match provider {
+                    "claude" => claude::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openai" => openai::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "gemini" => gemini::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    _ => return Err(ai_err_to_string(e.clone())),
+                };
+                retry.map_err(ai_err_to_string)
+            } else {
+                Err(ai_err_to_string(e.clone()))
+            }
+        }
+        other => other.map_err(ai_err_to_string),
+    }
 }
 
 /// Get vision-capable models for a provider from the centralized registry.
@@ -162,9 +216,36 @@ pub fn get_vision_models(provider: String) -> Vec<ModelInfo> {
 ///
 /// Returns true if the model can process images, false otherwise.
 /// This is used by the frontend to show/hide image upload UI.
+///
+/// For OpenRouter models, the static registry doesn't contain entries,
+/// so we check the dynamic model cache or assume vision support if the
+/// model name contains known vision-capable model patterns.
 #[command]
-pub fn check_vision_support(model: String) -> bool {
-    has_vision_support(&model)
+pub fn check_vision_support(model: String, provider: Option<String>) -> bool {
+    // Static registry check (works for claude, openai, gemini, perplexity)
+    if has_vision_support(&model) {
+        return true;
+    }
+
+    // For OpenRouter: models aren't in the static registry.
+    // The dynamic model list from `list_openrouter_models` has `supports_vision`,
+    // but we can't query it synchronously here. Use heuristic based on model ID.
+    if provider.as_deref() == Some("openrouter") {
+        // Common vision-capable model patterns on OpenRouter
+        let vision_patterns = [
+            "claude-sonnet", "claude-haiku", "gpt-4o", "gpt-5", "gemini",
+            "sonar", "o3", "o4", "llama-4", "pixtral", "qwen2-vl", "qwen-vl",
+        ];
+        let model_lower = model.to_lowercase();
+        // Most OpenRouter models support vision; exclude known text-only patterns
+        let text_only_patterns = ["gpt-4.1", "command-r", "deepseek-r1", "codestral"];
+        if text_only_patterns.iter().any(|p| model_lower.contains(p)) {
+            return false;
+        }
+        return vision_patterns.iter().any(|p| model_lower.contains(p));
+    }
+
+    false
 }
 
 // ============================================================================
@@ -198,6 +279,8 @@ pub async fn analyze_portfolio_with_ai(
     _app: AppHandle,
     request: PortfolioInsightsRequest,
 ) -> Result<PortfolioInsightsResponse, String> {
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+
     // Load portfolio context without technical signals (AI does the analysis now)
     let context = load_portfolio_context(
         &request.base_currency,
@@ -211,43 +294,46 @@ pub async fn analyze_portfolio_with_ai(
         return Err("Keine Holdings im Portfolio gefunden. Bitte importiere zuerst Transaktionen.".to_string());
     }
 
-    // Auto-upgrade deprecated models
-    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
-        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
-        upgraded.to_string()
-    } else {
-        request.model.clone()
-    };
+    let model = resolve_model(&request.model);
+    let provider = request.provider.as_str();
 
     // Call the appropriate provider based on analysis type
-    let result = match request.analysis_type.as_str() {
-        "opportunities" => {
-            // Buy opportunity analysis
-            match request.provider.as_str() {
-                "claude" => claude::analyze_opportunities(&model, &request.api_key, &context).await,
-                "openai" => openai::analyze_opportunities(&model, &request.api_key, &context).await,
-                "gemini" => gemini::analyze_opportunities(&model, &request.api_key, &context).await,
-                "perplexity" => perplexity::analyze_opportunities(&model, &request.api_key, &context).await,
-                "openrouter" => openrouter::analyze_opportunities(&model, &request.api_key, &context).await,
-                _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+    macro_rules! portfolio_dispatch {
+        ($m:expr, $p:expr) => {
+            match request.analysis_type.as_str() {
+                "opportunities" => match $p {
+                    "claude" => claude::analyze_opportunities($m, &request.api_key, &context).await,
+                    "openai" => openai::analyze_opportunities($m, &request.api_key, &context).await,
+                    "gemini" => gemini::analyze_opportunities($m, &request.api_key, &context).await,
+                    "perplexity" => perplexity::analyze_opportunities($m, &request.api_key, &context).await,
+                    "openrouter" => openrouter::analyze_opportunities($m, &request.api_key, &context).await,
+                    _ => Err(AiError::other("Unknown", $m, &format!("Unbekannter Anbieter: {}", $p))),
+                },
+                _ => match $p {
+                    "claude" => claude::analyze_portfolio($m, &request.api_key, &context).await,
+                    "openai" => openai::analyze_portfolio($m, &request.api_key, &context).await,
+                    "gemini" => gemini::analyze_portfolio($m, &request.api_key, &context).await,
+                    "perplexity" => perplexity::analyze_portfolio($m, &request.api_key, &context).await,
+                    "openrouter" => openrouter::analyze_portfolio($m, &request.api_key, &context).await,
+                    _ => Err(AiError::other("Unknown", $m, &format!("Unbekannter Anbieter: {}", $p))),
+                },
             }
-        }
-        _ => {
-            // Default: portfolio insights
-            match request.provider.as_str() {
-                "claude" => claude::analyze_portfolio(&model, &request.api_key, &context).await,
-                "openai" => openai::analyze_portfolio(&model, &request.api_key, &context).await,
-                "gemini" => gemini::analyze_portfolio(&model, &request.api_key, &context).await,
-                "perplexity" => perplexity::analyze_portfolio(&model, &request.api_key, &context).await,
-                "openrouter" => openrouter::analyze_portfolio(&model, &request.api_key, &context).await,
-                _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
-            }
-        }
-    };
+        };
+    }
 
-    result.map_err(|e| {
-        serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
-    })
+    let result = portfolio_dispatch!(&model, provider);
+
+    match result {
+        Err(ref e) if e.kind == AiErrorKind::ModelNotFound => {
+            if let Some(fb) = get_fallback_model(provider, &model) {
+                log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider);
+                portfolio_dispatch!(&fb, provider).map_err(ai_err_to_string)
+            } else {
+                Err(ai_err_to_string(e.clone()))
+            }
+        }
+        other => other.map_err(ai_err_to_string),
+    }
 }
 
 // ============================================================================
@@ -343,6 +429,89 @@ pub struct PortfolioChatRequest {
 
 /// Chat with portfolio assistant
 ///
+/// Enrich external security search results with ISINs using AI.
+/// Sends a concise prompt listing securities, parses SYMBOL|ISIN pairs from response,
+/// and validates each ISIN with the Luhn checksum algorithm.
+async fn enrich_with_ai_isins(
+    results: &[crate::commands::quotes::ExternalSecuritySearchResult],
+    provider: &str,
+    model: &str,
+    api_key: &str,
+) -> Vec<(String, String)> {
+    // Only process results without ISIN, skip futures/options/crypto
+    let to_enrich: Vec<_> = results.iter()
+        .filter(|r| r.isin.is_none())
+        .filter(|r| {
+            let st = r.security_type.as_deref().unwrap_or("").to_lowercase();
+            !st.contains("future") && !st.contains("option") && !st.contains("crypto")
+                && !r.symbol.contains('=')
+        })
+        .take(15)
+        .collect();
+
+    if to_enrich.is_empty() {
+        return vec![];
+    }
+
+    // Build concise prompt
+    let mut prompt = String::from(
+        "For each security below, provide its ISIN (International Securities Identification Number).\n\
+         Reply ONLY with lines in format: SYMBOL|ISIN\n\
+         If you don't know the ISIN with certainty, skip that line. Do not guess.\n\n"
+    );
+    for r in &to_enrich {
+        prompt.push_str(&format!(
+            "{} - {} ({})\n",
+            r.symbol,
+            r.name,
+            r.region.as_deref().unwrap_or("?"),
+        ));
+    }
+
+    log::info!("AI ISIN enrichment: requesting ISINs for {} securities via {}", to_enrich.len(), provider);
+
+    // Call the AI provider
+    let ai_result = match provider {
+        "claude" => claude::complete_text(model, api_key, &prompt).await,
+        "openai" => openai::complete_text(model, api_key, &prompt).await,
+        "gemini" => gemini::complete_text(model, api_key, &prompt).await,
+        "perplexity" => perplexity::complete_text(model, api_key, &prompt).await,
+        "openrouter" => openrouter::complete_text(model, api_key, &prompt).await,
+        _ => return vec![],
+    };
+
+    let response_text = match ai_result {
+        Ok(text) => {
+            log::info!("AI ISIN enrichment response received");
+            text
+        }
+        Err(e) => {
+            log::warn!("AI ISIN enrichment failed: {}", e);
+            return vec![];
+        }
+    };
+
+    // Parse SYMBOL|ISIN pairs from response
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for line in response_text.lines() {
+        let trimmed = line.trim();
+        if let Some(idx) = trimmed.find('|') {
+            let symbol = trimmed[..idx].trim().to_string();
+            let isin = trimmed[idx + 1..].trim().to_uppercase();
+
+            // Validate ISIN with Luhn checksum
+            if validate_isin(&isin) {
+                log::info!("AI ISIN validated: {} -> {}", symbol, isin);
+                pairs.push((symbol, isin));
+            } else if isin.len() == 12 {
+                log::warn!("AI ISIN failed checksum: {} -> {} (rejected)", symbol, isin);
+            }
+        }
+    }
+
+    pairs
+}
+
 /// Sends user messages to AI with portfolio context injected.
 /// The AI can execute embedded commands for watchlist management and data queries.
 /// Supports image attachments if the model has vision capability.
@@ -356,16 +525,12 @@ pub async fn chat_with_portfolio_assistant(
     // Check if any message has image attachments
     let has_images = request.messages.iter().any(|m| !m.attachments.is_empty());
 
-    // Auto-upgrade deprecated models
-    let model = if let Some(upgraded) = get_model_upgrade(&request.model) {
-        log::info!("Auto-upgrading deprecated model {} to {}", request.model, upgraded);
-        upgraded.to_string()
-    } else {
-        request.model.clone()
-    };
+    let model = resolve_model(&request.model);
+    let provider_str = request.provider.as_str();
 
     // SECURITY: Check if model supports vision when images are attached
-    if has_images && !has_vision_support(&model) {
+    // Use provider-aware check (OpenRouter models aren't in the static registry)
+    if has_images && !check_vision_support(model.clone(), Some(provider_str.to_string())) {
         return Err(format!(
             "Das Modell '{}' unterstützt keine Bilder. Bitte wähle ein Vision-fähiges Modell wie Claude Sonnet, GPT-4o oder Gemini.",
             model
@@ -373,18 +538,40 @@ pub async fn chat_with_portfolio_assistant(
     }
 
     // Load portfolio context from database with user name
-    // For chat, we always include technical signals (no progress events needed)
+    let ctx_start = std::time::Instant::now();
     let mut context = load_portfolio_context(&request.base_currency, request.user_name.clone(), true, None)?;
     context.language = request.language.clone();
+    log::info!("Chat context loaded in {}ms", ctx_start.elapsed().as_millis());
 
-    // Call the appropriate provider
-    let result = match request.provider.as_str() {
-        "claude" => claude::chat(&model, &request.api_key, &request.messages, &context).await,
-        "openai" => openai::chat(&model, &request.api_key, &request.messages, &context).await,
-        "gemini" => gemini::chat(&model, &request.api_key, &request.messages, &context).await,
-        "perplexity" => perplexity::chat(&model, &request.api_key, &request.messages, &context).await,
-        "openrouter" => openrouter::chat(&model, &request.api_key, &request.messages, &context).await,
-        _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", request.provider))),
+    // Helper macro to dispatch chat to provider
+    macro_rules! chat_dispatch {
+        ($m:expr, $p:expr) => {
+            match $p {
+                "claude" => claude::chat($m, &request.api_key, &request.messages, &context).await,
+                "openai" => openai::chat($m, &request.api_key, &request.messages, &context).await,
+                "gemini" => gemini::chat($m, &request.api_key, &request.messages, &context).await,
+                "perplexity" => perplexity::chat($m, &request.api_key, &request.messages, &context).await,
+                "openrouter" => openrouter::chat($m, &request.api_key, &request.messages, &context).await,
+                _ => Err(AiError::other("Unknown", $m, &format!("Unbekannter Anbieter: {}", $p))),
+            }
+        };
+    }
+
+    let api_start = std::time::Instant::now();
+    let result = chat_dispatch!(&model, provider_str);
+    log::info!("Chat API call ({}/{}) took {}ms", provider_str, model, api_start.elapsed().as_millis());
+
+    // Auto-fallback on ModelNotFound
+    let result = match result {
+        Err(ref e) if e.kind == AiErrorKind::ModelNotFound => {
+            if let Some(fb) = get_fallback_model(provider_str, &model) {
+                log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider_str);
+                chat_dispatch!(&fb, provider_str)
+            } else {
+                result
+            }
+        }
+        _ => result,
     };
 
     // Process the result using the secure suggestion-based command parser
@@ -401,12 +588,96 @@ pub async fn chat_with_portfolio_assistant(
             // Update response with cleaned text
             response.response = parsed.cleaned_response;
 
+            // Execute external security searches (async) if any
+            let mut extra_results: Vec<String> = Vec::new();
+            if !parsed.security_search_queries.is_empty() {
+                // Read Finnhub API key from secure store for ISIN enrichment
+                let finnhub_key = {
+                    use tauri_plugin_store::StoreExt;
+                    let key = _app.store("secure-keys.json")
+                        .ok()
+                        .and_then(|store| {
+                            // Frontend stores keys with "apiKey." prefix
+                            let raw = store.get("apiKey.finnhub");
+                            raw.and_then(|v| {
+                                v.as_str().map(String::from)
+                                    .or_else(|| Some(v.to_string().trim_matches('"').to_string()))
+                            })
+                        })
+                        .filter(|k| !k.is_empty());
+                    log::info!("Finnhub key available for ISIN enrichment: {}", key.is_some());
+                    key
+                };
+
+                for query in &parsed.security_search_queries {
+                    log::info!("Executing external security search for: {}", query);
+                    match crate::commands::quotes::search_external_securities(
+                        query.clone(),
+                        None, // No AlphaVantage key needed
+                        finnhub_key.clone(),
+                    ).await {
+                        Ok(ext_response) => {
+                            if !ext_response.results.is_empty() {
+                                let mut results = ext_response.results;
+
+                                // AI ISIN enrichment for results without ISIN
+                                let needs_isin = results.iter().any(|r| r.isin.is_none());
+                                if needs_isin {
+                                    let isin_pairs = enrich_with_ai_isins(
+                                        &results,
+                                        provider_str,
+                                        &model,
+                                        &request.api_key,
+                                    ).await;
+
+                                    for (symbol, isin) in &isin_pairs {
+                                        if let Some(result) = results.iter_mut().find(|r|
+                                            r.symbol.eq_ignore_ascii_case(symbol)
+                                        ) {
+                                            if result.isin.is_none() {
+                                                result.isin = Some(isin.clone());
+                                            }
+                                        }
+                                    }
+                                    log::info!("AI enriched {} ISINs (validated)", isin_pairs.len());
+                                }
+
+                                let mut table = format!(
+                                    "**Externe Suche: \"{}\"** ({} Treffer via {})\n\n| Name | Symbol | ISIN | Typ | Börse |\n|------|--------|------|-----|-------|\n",
+                                    query,
+                                    results.len(),
+                                    ext_response.providers_used.join(", "),
+                                );
+                                for r in results.iter().take(10) {
+                                    table.push_str(&format!(
+                                        "| {} | {} | {} | {} | {} |\n",
+                                        r.name,
+                                        r.symbol,
+                                        r.isin.as_deref().unwrap_or("-"),
+                                        r.security_type.as_deref().unwrap_or("-"),
+                                        r.region.as_deref().unwrap_or("-"),
+                                    ));
+                                }
+                                extra_results.push(table);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("External security search failed: {}", e);
+                        }
+                    }
+                }
+            }
+
+            // Combine query results (DB search + external search)
+            let mut all_results = parsed.query_results;
+            all_results.extend(extra_results);
+
             // Append query results if any (only approved queries are executed)
-            if !parsed.query_results.is_empty() {
+            if !all_results.is_empty() {
                 if response.response.trim().is_empty() || response.response.len() < 10 {
-                    response.response = parsed.query_results.join("\n\n");
+                    response.response = all_results.join("\n\n");
                 } else {
-                    response.response = format!("{}\n\n{}", response.response, parsed.query_results.join("\n\n"));
+                    response.response = format!("{}\n\n{}", response.response, all_results.join("\n\n"));
                 }
             }
 
@@ -1859,6 +2130,8 @@ pub async fn transcribe_audio(
     api_key: String,
     language: Option<String>,
 ) -> Result<String, String> {
+    security::check_rate_limit("ai_analysis", &security::limits::ai_analysis())?;
+
     use base64::Engine;
     use reqwest::multipart;
 

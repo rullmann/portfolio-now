@@ -30,6 +30,8 @@ import {
   Check,
   Pencil,
   Newspaper,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { TradingViewChart } from '../../components/charts/TradingViewChart';
 import { IndicatorsPanel } from '../../components/charts/IndicatorsPanel';
@@ -44,7 +46,7 @@ import { SecurityLogo } from '../../components/common';
 import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
 import { convertToOHLC } from '../../lib/indicators';
 import { convertToHeikinAshi, getAllSignals as getAllSignalsRust } from '../../lib/indicators-rust';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, useAppStore, useUIStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
 import {
   getWatchlists,
@@ -53,10 +55,14 @@ import {
   getChartDrawings,
   saveChartDrawing,
   deleteChartDrawing,
+  searchExternalSecurities,
+  addExternalSecurityToWatchlist,
+  createWatchlist,
   type OutlierSummary,
   type ChartDrawingResponse,
 } from '../../lib/api';
-import type { WatchlistSecurityData, ChartAnnotationWithId } from '../../lib/types';
+import type { WatchlistSecurityData, ChartAnnotationWithId, ExternalSecuritySearchResult } from '../../lib/types';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { TechnicalSignal } from '../../lib/signals';
 import type { AggregatedHolding } from '../types';
 
@@ -136,7 +142,7 @@ interface PriceData {
 }
 
 type TimeRange = '1M' | '3M' | '6M' | '1Y' | '2Y' | '5Y' | 'MAX';
-type FilterMode = 'holdings' | 'all';
+type FilterMode = 'holdings' | 'watchlist' | 'all';
 
 // ============================================================================
 // Time Range Options
@@ -158,6 +164,7 @@ const timeRanges: { value: TimeRange; label: string }[] = [
 
 export function ChartsView() {
   const { theme, brandfetchApiKey, aiEnabled } = useSettingsStore();
+  const { keys: apiKeys } = useSecureApiKeys();
 
   // State
   const [securities, setSecurities] = useState<SecurityData[]>([]);
@@ -183,18 +190,30 @@ export function ChartsView() {
   ]);
 
   // Filter & Fullscreen state
-  const [filterMode, setFilterMode] = useState<FilterMode>('holdings');
+  const appMode = useAppStore((s) => s.appMode);
+  const [filterMode, setFilterMode] = useState<FilterMode>(appMode === 'analysis' ? 'watchlist' : 'holdings');
   const [holdingsSecurityIds, setHoldingsSecurityIds] = useState<Set<number>>(new Set());
   const [watchlistSecurityIds, setWatchlistSecurityIds] = useState<Set<number>>(new Set());
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
 
+  // Inline external search state
+  const [externalResults, setExternalResults] = useState<ExternalSecuritySearchResult[]>([]);
+  const [isSearchingExternal, setIsSearchingExternal] = useState(false);
+  const [isAddingExternal, setIsAddingExternal] = useState<string | null>(null); // symbol being added
+  const externalSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // AI Annotations state
   const [chartAnnotations, setChartAnnotations] = useState<ChartAnnotationWithId[]>([]);
 
+  // Lazy-load earlier data state
+
   // Heikin-Ashi mode
   const [useHeikinAshi, setUseHeikinAshi] = useState(false);
+
+  // Left sidebar collapsed state
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
 
   // Logarithmic scale mode
   const [useLogScale, setUseLogScale] = useState(false);
@@ -283,6 +302,138 @@ export function ChartsView() {
     }
   }, [holdingsSecurityIds, watchlistSecurityIds, securities]);
 
+  // Handle pending chart navigation from ChatBot
+  const pendingChartName = useUIStore(s => s.pendingChartSecurityName);
+  const pendingChartTimeRange = useUIStore(s => s.pendingChartTimeRange);
+  const pendingChartIndicators = useUIStore(s => s.pendingChartIndicators);
+  useEffect(() => {
+    if (!pendingChartName || securities.length === 0) return;
+
+    // Apply time range if provided
+    if (pendingChartTimeRange) {
+      const validRanges: TimeRange[] = ['1M', '3M', '6M', '1Y', '2Y', '5Y', 'MAX'];
+      if (validRanges.includes(pendingChartTimeRange as TimeRange)) {
+        setTimeRange(pendingChartTimeRange as TimeRange);
+      }
+    }
+
+    // Apply indicators if provided
+    if (pendingChartIndicators && pendingChartIndicators.length > 0) {
+      const newIndicators: IndicatorConfig[] = [];
+      const colorMap: Record<string, string> = {
+        sma: '#2196f3', sma50: '#ff9800', sma200: '#e91e63',
+        ema: '#ff9800', ema50: '#4caf50',
+        bollinger: '#9c27b0', vwap: '#e91e63', ichimoku: '#00bcd4',
+      };
+      for (const ind of pendingChartIndicators) {
+        const lower = ind.toLowerCase();
+        // Parse indicator string like "sma20", "rsi14", "macd", "bollinger"
+        const match = lower.match(/^(sma|ema|rsi|atr|adx)(\d+)$/);
+        if (match) {
+          const [, type, period] = match;
+          const colorKey = `${type}${period === '50' ? '50' : period === '200' ? '200' : ''}`;
+          newIndicators.push({
+            id: `chat-${type}-${period}`,
+            type: type as IndicatorConfig['type'],
+            enabled: true,
+            params: { period: parseInt(period) },
+            color: colorMap[colorKey] || colorMap[type],
+          });
+        } else if (lower === 'macd') {
+          newIndicators.push({ id: 'chat-macd', type: 'macd', enabled: true, params: { fast: 12, slow: 26, signal: 9 } });
+        } else if (lower === 'bollinger') {
+          newIndicators.push({ id: 'chat-bollinger', type: 'bollinger', enabled: true, params: { period: 20, stdDev: 2 }, color: '#9c27b0' });
+        } else if (lower === 'vwap') {
+          newIndicators.push({ id: 'chat-vwap', type: 'vwap', enabled: true, params: {}, color: '#e91e63' });
+        } else if (lower === 'stochastic') {
+          newIndicators.push({ id: 'chat-stochastic', type: 'stochastic', enabled: true, params: { kPeriod: 14, kSlowPeriod: 3, dPeriod: 3 } });
+        } else if (lower === 'obv') {
+          newIndicators.push({ id: 'chat-obv', type: 'obv', enabled: true, params: {} });
+        } else if (lower === 'ichimoku') {
+          newIndicators.push({ id: 'chat-ichimoku', type: 'ichimoku', enabled: true, params: { tenkan: 9, kijun: 26, senkouB: 52 }, color: '#00bcd4' });
+        }
+      }
+      if (newIndicators.length > 0) {
+        setIndicators(newIndicators);
+      }
+    }
+
+    const lowerPending = pendingChartName.toLowerCase();
+    // Try exact match first, then partial (includes), then ticker
+    const match =
+      securities.find(s => s.name.toLowerCase() === lowerPending) ||
+      securities.find(s => s.name.toLowerCase().includes(lowerPending)) ||
+      securities.find(s => lowerPending.includes(s.name.toLowerCase())) ||
+      securities.find(s => s.ticker?.toLowerCase() === lowerPending);
+
+    if (match) {
+      setSelectedSecurity(match);
+      // If security exists but is not on any watchlist, add it (check live from DB to avoid race)
+      (async () => {
+        try {
+          const watchlists = await getWatchlists();
+          let alreadyOnWatchlist = false;
+          for (const wl of watchlists) {
+            const secs = await getWatchlistSecurities(wl.id);
+            if (secs.some((s: WatchlistSecurityData) => s.securityId === match.id)) {
+              alreadyOnWatchlist = true;
+              break;
+            }
+          }
+          if (!alreadyOnWatchlist) {
+            let watchlistId: number;
+            if (watchlists.length === 0) {
+              const newWl = await createWatchlist('Watchlist');
+              watchlistId = newWl.id;
+            } else {
+              watchlistId = watchlists[0].id;
+            }
+            await invoke('add_to_watchlist', { watchlistId, securityId: match.id });
+            setWatchlistSecurityIds(prev => new Set([...prev, match.id]));
+          }
+        } catch (err) {
+          console.warn('Failed to auto-add security to watchlist:', err);
+        }
+      })();
+      useUIStore.getState().clearPendingChart();
+    } else {
+      // Security not in DB — search externally and add to watchlist automatically
+      const addExternal = async () => {
+        try {
+          const response = await searchExternalSecurities(
+            pendingChartName,
+            apiKeys.alphaVantageApiKey || undefined
+          );
+          if (response.results.length > 0) {
+            const best = response.results[0];
+            // Get or create default watchlist
+            let watchlists = await getWatchlists();
+            let watchlistId: number;
+            if (watchlists.length === 0) {
+              const newWl = await createWatchlist('Watchlist');
+              watchlistId = newWl.id;
+            } else {
+              watchlistId = watchlists[0].id;
+            }
+            const securityId = await addExternalSecurityToWatchlist(watchlistId, best);
+            await loadSecurities();
+            setWatchlistSecurityIds(prev => new Set([...prev, securityId]));
+            // After reload, find and select the new security
+            const data = await invoke<SecurityData[]>('get_securities', { importId: null });
+            const added = data.find(s => s.id === securityId);
+            if (added) {
+              setSelectedSecurity(added);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to add external security from chat:', err);
+        }
+        useUIStore.getState().clearPendingChart();
+      };
+      addExternal();
+    }
+  }, [pendingChartName, securities]);
+
   // Enrich securities with holding/watchlist status
   const enrichedSecurities = useMemo<EnrichedSecurity[]>(() => {
     return securities.map(s => ({
@@ -310,9 +461,12 @@ export function ChartsView() {
     if (filterMode === 'holdings') {
       return enrichedSecurities.filter(s => s.isInHoldings);
     }
+    if (filterMode === 'watchlist') {
+      return enrichedSecurities.filter(s => s.isWatchlistOnly || watchlistSecurityIds.has(s.id));
+    }
     // 'all' mode: holdings + watchlist securities
     return enrichedSecurities.filter(s => s.isInHoldings || s.isWatchlistOnly);
-  }, [enrichedSecurities, filterMode]);
+  }, [enrichedSecurities, filterMode, watchlistSecurityIds]);
 
   // Apply text search on displayed securities
   const filteredSecurities = useMemo(() => {
@@ -326,46 +480,92 @@ export function ChartsView() {
     );
   }, [displayedSecurities, searchQuery]);
 
-  // Load price data when security changes
+  // Auto-search externally when local search yields no results
+  useEffect(() => {
+    if (externalSearchRef.current) clearTimeout(externalSearchRef.current);
+
+    // Only search if query is long enough and no local results
+    if (searchQuery.length < 2 || filteredSecurities.length > 0) {
+      setExternalResults([]);
+      setIsSearchingExternal(false);
+      return;
+    }
+
+    setIsSearchingExternal(true);
+    externalSearchRef.current = setTimeout(async () => {
+      try {
+        const response = await searchExternalSecurities(
+          searchQuery,
+          apiKeys.alphaVantageApiKey || undefined
+        );
+        setExternalResults(response.results.slice(0, 8));
+      } catch (err) {
+        console.warn('External search failed:', err);
+        setExternalResults([]);
+      } finally {
+        setIsSearchingExternal(false);
+      }
+    }, 400);
+
+    return () => {
+      if (externalSearchRef.current) clearTimeout(externalSearchRef.current);
+    };
+  }, [searchQuery, filteredSecurities.length, apiKeys.alphaVantageApiKey]);
+
+  // Add external security and auto-select it
+  const handleAddExternal = async (result: ExternalSecuritySearchResult) => {
+    setIsAddingExternal(result.symbol);
+    try {
+      // Get or create a default watchlist
+      let watchlists = await getWatchlists();
+      let watchlistId: number;
+      if (watchlists.length === 0) {
+        const newWl = await createWatchlist('Watchlist');
+        watchlistId = newWl.id;
+      } else {
+        watchlistId = watchlists[0].id;
+      }
+
+      // Add security and get ID
+      const securityId = await addExternalSecurityToWatchlist(watchlistId, result);
+
+      // Reload securities list
+      await loadSecurities();
+
+      // Update watchlist IDs
+      setWatchlistSecurityIds(prev => new Set([...prev, securityId]));
+
+      // Auto-select the new security
+      const allSecurities = await invoke<SecurityData[]>('get_securities', { importId: null });
+      const added = allSecurities.find(s => s.id === securityId);
+      if (added) {
+        setSelectedSecurity(added);
+      }
+
+      // Clear search
+      setSearchQuery('');
+      setExternalResults([]);
+    } catch (err) {
+      console.error('Failed to add external security:', err);
+    } finally {
+      setIsAddingExternal(null);
+    }
+  };
+
+  // Load ALL price data when security changes (timeRange only controls visible window)
   const loadPriceData = useCallback(async () => {
     if (!selectedSecurity) {
       setPriceData([]);
-      setChartAnnotations([]); // Clear annotations when no security
+      setChartAnnotations([]);
       setOutlierSummary(null);
       return;
     }
 
     setIsLoading(true);
-    setChartAnnotations([]); // Clear annotations when loading new security
+    setChartAnnotations([]);
     setOutlierSummary(null);
     try {
-      let startDate: string;
-      const now = new Date();
-
-      switch (timeRange) {
-        case '1M':
-          startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()).toISOString().split('T')[0];
-          break;
-        case '3M':
-          startDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()).toISOString().split('T')[0];
-          break;
-        case '6M':
-          startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate()).toISOString().split('T')[0];
-          break;
-        case '1Y':
-          startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toISOString().split('T')[0];
-          break;
-        case '2Y':
-          startDate = new Date(now.getFullYear() - 2, now.getMonth(), now.getDate()).toISOString().split('T')[0];
-          break;
-        case '5Y':
-          startDate = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate()).toISOString().split('T')[0];
-          break;
-        case 'MAX':
-        default:
-          startDate = '2000-01-01';
-      }
-
+      const startDate = '2000-01-01'; // Always load ALL available data
       const endDate = new Date().toISOString().split('T')[0];
 
       // First try to get cached data with outlier detection
@@ -395,7 +595,6 @@ export function ChartsView() {
 
       setPriceData(data);
       setOutlierSummary(result.summary);
-
       // Log outliers if found
       if (result.summary.outlierCount > 0) {
         console.warn(
@@ -410,7 +609,7 @@ export function ChartsView() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedSecurity, timeRange]);
+  }, [selectedSecurity]); // No longer depends on timeRange
 
   useEffect(() => {
     loadPriceData();
@@ -517,10 +716,46 @@ export function ChartsView() {
     getAllSignalsRust(ohlcData).then(setChartSignals).catch(() => setChartSignals([]));
   }, [ohlcData]);
 
-  // Handle search modal security added
-  const handleSecurityAdded = (securityId: number) => {
+  // Set visible range based on timeRange selection (controls zoom, not data loading)
+  useEffect(() => {
+    if (!chartApiState || ohlcData.length === 0) return;
+
+    if (timeRange === 'MAX') {
+      chartApiState.timeScale().fitContent();
+      return;
+    }
+
+    const now = new Date();
+    const start = new Date();
+    switch (timeRange) {
+      case '1M': start.setMonth(now.getMonth() - 1); break;
+      case '3M': start.setMonth(now.getMonth() - 3); break;
+      case '6M': start.setMonth(now.getMonth() - 6); break;
+      case '1Y': start.setFullYear(now.getFullYear() - 1); break;
+      case '2Y': start.setFullYear(now.getFullYear() - 2); break;
+      case '5Y': start.setFullYear(now.getFullYear() - 5); break;
+    }
+
+    const startStr = start.toISOString().split('T')[0];
+    const endStr = now.toISOString().split('T')[0];
+
+    try {
+      chartApiState.timeScale().setVisibleRange({
+        from: startStr as string & Record<string, never>,
+        to: endStr as string & Record<string, never>,
+      });
+    } catch {
+      chartApiState.timeScale().fitContent();
+    }
+  }, [chartApiState, timeRange, ohlcData.length]);
+
+  // Handle search modal security added — auto-select the added security
+  const handleSecurityAdded = async (securityId: number) => {
     setWatchlistSecurityIds(prev => new Set([...prev, securityId]));
-    loadSecurities();
+    await loadSecurities();
+    const allSecurities = await invoke<SecurityData[]>('get_securities', { importId: null });
+    const added = allSecurities.find(s => s.id === securityId);
+    if (added) setSelectedSecurity(added);
   };
 
   // Load drawings when security changes
@@ -704,6 +939,43 @@ export function ChartsView() {
             >
               Log
             </button>
+
+            {/* Drawing Tools Toggle */}
+            <button
+              onClick={() => setIsDrawingMode(!isDrawingMode)}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                isDrawingMode
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              }`}
+              title={isDrawingMode ? 'Zeichnen beenden' : 'Zeichenwerkzeuge'}
+            >
+              <Pencil size={14} />
+              Zeichnen
+            </button>
+
+            {/* Share to X Button */}
+            {selectedSecurity && (
+              <ShareToXButton
+                variant="icon"
+                chartRef={fullscreenChartRef}
+                security={selectedSecurity}
+                currentPrice={ohlcData[ohlcData.length - 1]?.close || 0}
+                signals={chartSignals}
+              />
+            )}
+
+            {/* News Research Button */}
+            {selectedSecurity && aiEnabled && (
+              <button
+                onClick={() => setIsNewsModalOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors bg-muted text-muted-foreground hover:bg-muted/80"
+                title="Nachrichten recherchieren"
+              >
+                <Newspaper size={14} />
+                News
+              </button>
+            )}
           </div>
 
           <button
@@ -741,6 +1013,7 @@ export function ChartsView() {
                     symbol={selectedSecurity?.ticker || selectedSecurity?.name}
                     logScale={useLogScale}
                     annotations={chartAnnotations}
+                    onChartReady={handleChartReady}
                   />
                 </ChartErrorBoundary>
               )}
@@ -797,120 +1070,230 @@ export function ChartsView() {
 
         <div className="flex-1 flex gap-4 min-h-0">
           {/* Left Sidebar - Security Selection */}
-          <div className="w-64 flex-shrink-0 flex flex-col card-surface overflow-hidden">
-            {/* Filter Toggle */}
-            <div className="p-2 border-b border-border flex gap-1">
-              <button
-                onClick={() => setFilterMode('holdings')}
-                className={`flex-1 px-2 py-1 text-xs font-medium rounded flex items-center justify-center gap-1 transition-colors ${
-                  filterMode === 'holdings'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                }`}
-              >
-                <Briefcase size={12} />
-                Im Bestand
-              </button>
-              <button
-                onClick={() => setFilterMode('all')}
-                className={`flex-1 px-2 py-1 text-xs font-medium rounded flex items-center justify-center gap-1 transition-colors ${
-                  filterMode === 'all'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                }`}
-              >
-                <Eye size={12} />
-                Alle
-              </button>
-            </div>
+          <div className={`flex-shrink-0 flex flex-col card-surface overflow-hidden border border-border rounded-xl transition-[width] duration-200 ${leftSidebarCollapsed ? 'w-10' : 'w-72'}`}>
+            {leftSidebarCollapsed ? (
+              <div className="flex flex-col items-center py-2 gap-2">
+                <button
+                  onClick={() => setLeftSidebarCollapsed(false)}
+                  className="p-1.5 rounded hover:bg-muted transition-colors"
+                  title="Seitenleiste aufklappen"
+                >
+                  <PanelLeftOpen size={16} className="text-muted-foreground" />
+                </button>
+                <Search size={14} className="text-muted-foreground/50" />
+              </div>
+            ) : (
+            <>
+            {/* Filter Toggle — only show when securities exist */}
+            {securities.length > 0 && (
+              <div className="p-2 border-b border-border flex gap-1">
+                <button
+                  onClick={() => setFilterMode('holdings')}
+                  className={`flex-1 px-2 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1 transition-colors ${
+                    filterMode === 'holdings'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  <Briefcase size={12} />
+                  Bestand
+                </button>
+                <button
+                  onClick={() => setFilterMode('watchlist')}
+                  className={`flex-1 px-2 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1 transition-colors ${
+                    filterMode === 'watchlist'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  <Eye size={12} />
+                  Watchlist
+                </button>
+                <button
+                  onClick={() => setFilterMode('all')}
+                  className={`flex-1 px-2 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1 transition-colors ${
+                    filterMode === 'all'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  Alle
+                </button>
+              </div>
+            )}
 
-            {/* Search + Add Button */}
-            <div className="p-3 border-b border-border">
-              <div className="relative">
+            {/* Search Input */}
+            <div className="p-3 border-b border-border flex gap-2 items-center">
+              <div className="relative flex-1">
                 <Search
                   size={14}
-                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
                 />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Wertpapier suchen..."
-                  className="w-full pl-8 pr-10 py-1.5 text-sm bg-muted border-none rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder={securities.length === 0 ? 'Wertpapier suchen, z.B. AAPL' : 'Suchen...'}
+                  className="w-full pl-8 pr-3 py-2 text-sm bg-muted/60 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary placeholder:text-muted-foreground/60"
                 />
-                <button
-                  onClick={() => setIsSearchModalOpen(true)}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 hover:bg-primary/10 rounded transition-colors"
-                  title="Externes Wertpapier suchen"
-                >
-                  <Plus size={14} className="text-primary" />
-                </button>
               </div>
+              <button
+                onClick={() => setLeftSidebarCollapsed(true)}
+                className="p-1.5 rounded hover:bg-muted transition-colors shrink-0"
+                title="Seitenleiste einklappen"
+              >
+                <PanelLeftClose size={16} className="text-muted-foreground" />
+              </button>
             </div>
 
             {/* Securities List */}
             <div className="flex-1 overflow-auto">
-              {filteredSecurities.length === 0 ? (
-                <div className="p-4 text-center text-sm text-muted-foreground">
-                  {filterMode === 'holdings'
-                    ? 'Keine Wertpapiere im Bestand'
-                    : 'Keine Wertpapiere gefunden'}
-                </div>
-              ) : (
-                filteredSecurities.map(security => {
-                  const isSelected = isComparisonMode
-                    ? comparisonSecurities.has(security.id)
-                    : selectedSecurity?.id === security.id;
-
-                  return (
+              {/* Empty state — welcoming onboarding */}
+              {filteredSecurities.length === 0 && searchQuery.length < 2 && (
+                <div className="p-5 flex flex-col items-center text-center">
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-3">
+                    <Search size={20} className="text-primary" />
+                  </div>
+                  <p className="text-sm font-medium mb-1">
+                    {securities.length === 0 ? 'Wertpapier hinzufügen' : filterMode === 'holdings' ? 'Kein Bestand' : filterMode === 'watchlist' ? 'Watchlist leer' : 'Keine Treffer'}
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-4">
+                    {securities.length === 0
+                      ? 'Tippe einen Ticker oder Namen in die Suche — z.B. AAPL, SAP, Bitcoin'
+                      : filterMode === 'holdings'
+                        ? 'Wechsle zu "Watchlist" oder suche ein neues Wertpapier'
+                        : filterMode === 'watchlist'
+                          ? 'Füge Wertpapiere über die Suche zur Watchlist hinzu'
+                          : 'Nutze die Suche um Wertpapiere zu finden'}
+                  </p>
+                  {securities.length === 0 && (
                     <button
-                      key={security.id}
-                      onClick={() => {
-                        if (isComparisonMode) {
-                          toggleComparisonSecurity(security.id);
-                        } else {
-                          setSelectedSecurity(security);
-                        }
-                      }}
-                      className={`w-full text-left px-3 py-2 border-b border-border/50 hover:bg-muted/50 transition-colors ${
-                        isSelected
-                          ? 'bg-primary/10 border-l-2 border-l-primary'
-                          : ''
-                      }`}
+                      onClick={() => setIsSearchModalOpen(true)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors shadow-sm"
                     >
-                      <div className="flex items-center gap-2">
-                        {isComparisonMode && (
-                          <div
-                            className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 ${
-                              isSelected
-                                ? 'bg-primary border-primary text-primary-foreground'
-                                : 'border-muted-foreground'
-                            }`}
-                          >
-                            {isSelected && <Check size={12} />}
-                          </div>
-                        )}
-                        <SecurityLogo securityId={security.id} logos={logos} size={28} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <div className="font-medium text-sm truncate">{security.name}</div>
-                            {security.isWatchlistOnly && (
-                              <span className="px-1 py-0.5 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded flex-shrink-0">
-                                Watchlist
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {security.ticker && <span className="mr-2">{security.ticker}</span>}
-                            {security.isin && <span>{security.isin}</span>}
-                          </div>
+                      <Plus size={14} />
+                      Erweiterte Suche
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Local results */}
+              {filteredSecurities.map(security => {
+                const isSelected = isComparisonMode
+                  ? comparisonSecurities.has(security.id)
+                  : selectedSecurity?.id === security.id;
+
+                return (
+                  <button
+                    key={security.id}
+                    onClick={() => {
+                      if (isComparisonMode) {
+                        toggleComparisonSecurity(security.id);
+                      } else {
+                        setSelectedSecurity(security);
+                      }
+                    }}
+                    className={`w-full text-left px-3 py-2.5 border-b border-border/40 transition-colors ${
+                      isSelected
+                        ? 'bg-primary/10 border-l-[3px] border-l-primary'
+                        : 'hover:bg-muted/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      {isComparisonMode && (
+                        <div
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                            isSelected
+                              ? 'bg-primary border-primary text-primary-foreground'
+                              : 'border-muted-foreground/40 hover:border-primary/60'
+                          }`}
+                        >
+                          {isSelected && <Check size={12} />}
+                        </div>
+                      )}
+                      <SecurityLogo securityId={security.id} logos={logos} size={28} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium text-sm truncate">{security.name}</div>
+                          {security.isWatchlistOnly && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 rounded flex-shrink-0">
+                              Watchlist
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {security.ticker && <span className="font-mono mr-2">{security.ticker}</span>}
+                          {security.isin && <span>{security.isin}</span>}
                         </div>
                       </div>
-                    </button>
-                  );
-                })
+                    </div>
+                  </button>
+                );
+              })}
+
+              {/* Inline External Search Results */}
+              {searchQuery.length >= 2 && filteredSecurities.length === 0 && (
+                <>
+                  {isSearchingExternal ? (
+                    <div className="p-5 flex flex-col items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 size={18} className="animate-spin text-primary" />
+                      <span>Suche nach &quot;{searchQuery}&quot;...</span>
+                    </div>
+                  ) : externalResults.length > 0 ? (
+                    <>
+                      <div className="px-3 py-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 border-b border-border">
+                        Ergebnisse hinzufügen
+                      </div>
+                      {externalResults.map(result => (
+                        <button
+                          key={`${result.provider}-${result.symbol}`}
+                          onClick={() => handleAddExternal(result)}
+                          disabled={isAddingExternal !== null}
+                          className="w-full text-left px-3 py-2.5 border-b border-border/40 hover:bg-green-500/5 dark:hover:bg-green-500/10 transition-colors group disabled:opacity-50"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
+                              isAddingExternal === result.symbol
+                                ? 'bg-primary/20'
+                                : 'bg-green-500/10 group-hover:bg-green-500/20 dark:bg-green-500/10 dark:group-hover:bg-green-500/20'
+                            }`}>
+                              {isAddingExternal === result.symbol ? (
+                                <Loader2 size={14} className="animate-spin text-primary" />
+                              ) : (
+                                <Plus size={14} className="text-green-600 dark:text-green-400" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-sm truncate">{result.name}</div>
+                              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                                <span className="font-mono font-medium text-foreground/70">{result.symbol}</span>
+                                {result.currency && <span>· {result.currency}</span>}
+                                {result.securityType && (
+                                  <span className="px-1 py-0.5 text-[9px] font-medium bg-muted rounded">{result.securityType}</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="p-5 text-center">
+                      <p className="text-sm text-muted-foreground">Keine Ergebnisse für &quot;{searchQuery}&quot;</p>
+                      <button
+                        onClick={() => setIsSearchModalOpen(true)}
+                        className="mt-3 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                      >
+                        Erweiterte Suche starten
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
+            </>
+            )}
           </div>
 
           {/* Main Content */}
@@ -1156,6 +1539,7 @@ export function ChartsView() {
                 onAnnotationsChange={setChartAnnotations}
               />
             )}
+
           </div>
 
           {/* Right Sidebar - Trading Analysis, Indicators, Signals, Alerts & Pattern Statistics */}

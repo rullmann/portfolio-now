@@ -198,12 +198,23 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
         .collect();
 
     // 4. Check for allowed tables only (operates on comment-stripped SQL)
+    // Matches both unquoted identifiers and quoted identifiers ("table" or `table`)
     static RE_TABLE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bFROM\s+(\w+)|\bJOIN\s+(\w+)").unwrap()
+        Regex::new(r#"(?i)\bFROM\s+(?:"([^"]+)"|`([^`]+)`|(\w+))|\bJOIN\s+(?:"([^"]+)"|`([^`]+)`|(\w+))"#).unwrap()
     });
 
+    let mut found_any_table = false;
     for caps in RE_TABLE.captures_iter(&sql_clean) {
-        let table = caps.get(1).or(caps.get(2)).unwrap().as_str().to_lowercase();
+        let table = caps.get(1)
+            .or(caps.get(2))
+            .or(caps.get(3))
+            .or(caps.get(4))
+            .or(caps.get(5))
+            .or(caps.get(6))
+            .unwrap()
+            .as_str()
+            .to_lowercase();
+        found_any_table = true;
         if cte_aliases.contains(&table) {
             continue; // CTE alias, not a real table
         }
@@ -216,6 +227,17 @@ pub fn validate_sql(sql: &str) -> Result<String, SqlValidationError> {
                 )),
             });
         }
+    }
+
+    // Fail-closed: if no table was detected at all, reject (may indicate obfuscation)
+    if !found_any_table && !sql_upper.contains("SELECT 1") && !sql_upper.contains("SELECT DATE") && !sql_upper.contains("SELECT STRFTIME") {
+        return Err(SqlValidationError {
+            message: "Keine Tabelle in der Query erkannt.".to_string(),
+            suggestion: Some(format!(
+                "Erlaubte Tabellen: {}",
+                ALLOWED_TABLES.join(", ")
+            )),
+        });
     }
 
     // 4. Add LIMIT if missing

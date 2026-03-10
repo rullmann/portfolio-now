@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
-import { useSettingsStore, useUIStore, toast, type ChartTimeRange } from '../../store';
+import { useSettingsStore, useUIStore, useAppStore, getDefaultViewForMode, toast, type AppMode, type ChartTimeRange } from '../../store';
 import { open } from '@tauri-apps/plugin-shell';
 import { clearLogoCache, rebuildFifoLots, validateAllSecurities, getValidationStatus, getUserProfilePicture, setUserProfilePicture } from '../../lib/api';
 import { AIProviderLogo } from '../../components/common/AIProviderLogo';
@@ -107,6 +107,55 @@ function ApiKeyStatus({ provider, validationStates, compact = false }: {
     default:
       return null;
   }
+}
+
+function AppModeSelector() {
+  const appMode = useAppStore((s) => s.appMode);
+  const setAppMode = useAppStore((s) => s.setAppMode);
+  const setCurrentView = useUIStore((s) => s.setCurrentView);
+
+  const handleModeChange = (mode: AppMode) => {
+    if (!mode || mode === appMode) return;
+    setAppMode(mode);
+    setCurrentView(getDefaultViewForMode(mode));
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border p-6">
+      <h3 className="text-lg font-semibold mb-1">App-Modus</h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        Bestimmt, welche Funktionen in der Navigation sichtbar sind.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={() => handleModeChange('portfolio')}
+          className={`flex flex-col items-start gap-1 p-4 rounded-lg border-2 transition-all text-left ${
+            appMode === 'portfolio'
+              ? 'border-primary bg-primary/5'
+              : 'border-border hover:border-primary/50'
+          }`}
+        >
+          <span className="font-medium text-sm">Portfolio verwalten</span>
+          <span className="text-xs text-muted-foreground">
+            Alle Funktionen: Portfolios, Konten, Buchungen, Dividenden, Performance & Analyse
+          </span>
+        </button>
+        <button
+          onClick={() => handleModeChange('analysis')}
+          className={`flex flex-col items-start gap-1 p-4 rounded-lg border-2 transition-all text-left ${
+            appMode === 'analysis'
+              ? 'border-primary bg-primary/5'
+              : 'border-border hover:border-primary/50'
+          }`}
+        >
+          <span className="font-medium text-sm">Märkte analysieren</span>
+          <span className="text-xs text-muted-foreground">
+            Watchlist, Charts, Screener & technische Indikatoren — kein Portfolio nötig
+          </span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function SettingsView() {
@@ -229,6 +278,8 @@ export function SettingsView() {
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [isFactoryResetting, setIsFactoryResetting] = useState(false);
+  const [factoryResetConfirm, setFactoryResetConfirm] = useState('');
   const [attributesExpanded, setAttributesExpanded] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<ValidationStatusSummary | null>(null);
@@ -399,6 +450,33 @@ export function SettingsView() {
       toast.error(`Fehler beim Löschen: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleFactoryReset = async () => {
+    if (factoryResetConfirm !== 'ALLES LÖSCHEN') {
+      toast.error('Bitte gib "ALLES LÖSCHEN" ein, um zu bestätigen');
+      return;
+    }
+
+    setIsFactoryResetting(true);
+    try {
+      // 1. Delete DB, secure-keys.json, logo cache via Rust
+      await invoke('factory_reset');
+
+      toast.success('Alle Daten und Einstellungen wurden gelöscht. Die App wird neu gestartet...');
+      setFactoryResetConfirm('');
+
+      // 2. Clear localStorage (Zustand stores) right before reload
+      //    to prevent Zustand persist middleware from re-saving
+      setTimeout(() => {
+        localStorage.clear();
+        window.location.reload();
+      }, 1500);
+    } catch (err) {
+      toast.error(`Fehler beim Zurücksetzen: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsFactoryResetting(false);
     }
   };
 
@@ -606,6 +684,9 @@ export function SettingsView() {
                   </div>
                 </div>
               </div>
+
+              {/* App Mode */}
+              <AppModeSelector />
 
               {/* Display */}
               <div className="bg-card rounded-lg border border-border p-6">
@@ -1758,6 +1839,49 @@ export function SettingsView() {
                   >
                     <Trash2 size={16} />
                     {isDeleting ? 'Lösche...' : 'Alle Daten löschen'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Factory Reset */}
+              <div className="bg-card rounded-lg border-2 border-destructive p-6 mt-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <AlertTriangle size={20} className="text-destructive" />
+                  <h3 className="text-lg font-semibold text-destructive">Vollständiger Reset (Werkseinstellungen)</h3>
+                </div>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Löscht <strong>alle</strong> App-Daten unwiderruflich:
+                </p>
+                <ul className="text-sm text-muted-foreground mb-3 list-disc list-inside space-y-1">
+                  <li>Datenbank (Wertpapiere, Konten, Buchungen, Kurse, ...)</li>
+                  <li>Alle API-Schlüssel (Claude, OpenAI, Finnhub, ...)</li>
+                  <li>Einstellungen (Theme, Sprache, AI-Konfiguration, ...)</li>
+                  <li>Logo-Cache und Chat-Verläufe</li>
+                </ul>
+                <p className="text-sm text-destructive font-semibold mb-3">
+                  Die App wird danach im Ausgangszustand neu gestartet, als wäre sie frisch installiert.
+                </p>
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 max-w-xs">
+                    <label className="text-xs text-muted-foreground mb-1 block">
+                      Gib "ALLES LÖSCHEN" ein, um zu bestätigen:
+                    </label>
+                    <input
+                      type="text"
+                      value={factoryResetConfirm}
+                      onChange={(e) => setFactoryResetConfirm(e.target.value)}
+                      placeholder="ALLES LÖSCHEN"
+                      className="w-full rounded-md border-2 border-destructive bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleFactoryReset}
+                    disabled={isFactoryResetting || factoryResetConfirm !== 'ALLES LÖSCHEN'}
+                    className="flex items-center gap-2 px-4 py-2 text-sm bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Trash2 size={16} />
+                    {isFactoryResetting ? 'Lösche alles...' : 'Werksreset durchführen'}
                   </button>
                 </div>
               </div>

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::security::{self, RateLimitConfig};
+use crate::security;
 
 #[derive(Debug, Serialize)]
 pub struct ApiKeyValidationResult {

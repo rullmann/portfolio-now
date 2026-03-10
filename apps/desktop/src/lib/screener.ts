@@ -7,6 +7,7 @@
  */
 
 import type { OHLCData } from './indicators';
+import type { BreakoutScore } from './types';
 
 // ============================================================================
 // Types
@@ -81,6 +82,7 @@ export interface ScreenerResult {
   change1d?: number;
   change5d?: number;
   change20d?: number;
+  breakoutScore?: BreakoutScore;
 }
 
 // ============================================================================

@@ -20,13 +20,31 @@ use serde::{Deserialize, Serialize};
 
 /// Extract a JSON object from a string by counting braces.
 /// The string must start with (or near) a `{`. Returns the JSON substring including braces.
+/// Handles braces inside JSON string literals and escape sequences correctly.
 fn extract_json_brace(s: &str) -> Option<String> {
     let trimmed = s.trim_start();
     if !trimmed.starts_with('{') {
         return None;
     }
     let mut brace_count = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
     for (byte_offset, c) in trimmed.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if c == '\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+        if c == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
         match c {
             '{' => brace_count += 1,
             '}' => {
@@ -139,6 +157,176 @@ pub fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, Strin
     (commands, cleaned_response)
 }
 
+
+// ============================================================================
+// Show Chart Commands
+// ============================================================================
+
+/// Parsed SHOW_CHART command with security name, optional time range and indicators
+struct ShowChartCommand {
+    security_name: String,
+    time_range: Option<String>,
+    indicators: Vec<String>,
+}
+
+/// Parse [[SHOW_CHART:{"securityName":"...","timeRange":"6M","indicators":["sma20","rsi14"]}]] commands
+fn parse_show_chart_commands(response: &str) -> (Vec<ShowChartCommand>, String) {
+    let mut commands: Vec<ShowChartCommand> = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    // Find [[SHOW_CHART: then use brace counting for the JSON
+    let prefix = "[[SHOW_CHART:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(prefix) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + prefix.len();
+        if let Some(json_str) = extract_json_brace(&cleaned_response[json_start..]) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(name) = parsed.get("securityName").and_then(|v| v.as_str()) {
+                    let time_range = parsed.get("timeRange").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let indicators = parsed.get("indicators")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                        .unwrap_or_default();
+                    if !commands.iter().any(|c| c.security_name == name) {
+                        commands.push(ShowChartCommand {
+                            security_name: name.to_string(),
+                            time_range,
+                            indicators,
+                        });
+                    }
+                }
+            }
+        }
+        search_from = json_start + 1;
+    }
+
+    // Remove command tags from response
+    let clean_re = Regex::new(r#"\[\[SHOW_CHART:.*?\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (commands, cleaned_response)
+}
+
+// ============================================================================
+// Search Security Commands
+// ============================================================================
+
+/// Parse search security commands from AI response
+///
+/// Extracts `[[SEARCH_SECURITY:{"query":"..."}]]` commands.
+/// These are auto-executed (like SQL in "never" mode) and results injected into the response.
+///
+/// # Returns
+/// Tuple of (search queries as strings, cleaned_response_text)
+fn parse_search_security_commands(response: &str) -> (Vec<String>, String) {
+    let mut queries = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    let prefix = "[[SEARCH_SECURITY:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(prefix) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + prefix.len();
+        if let Some(json_str) = extract_json_brace(&cleaned_response[json_start..]) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(query) = parsed.get("query").and_then(|v| v.as_str()) {
+                    if !query.trim().is_empty() {
+                        queries.push(query.trim().to_string());
+                    }
+                }
+            }
+        }
+        search_from = json_start + 1;
+    }
+
+    // Remove command tags from response
+    let clean_re = Regex::new(r#"\[\[SEARCH_SECURITY:.*?\]\]"#).unwrap();
+    cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
+    cleaned_response = cleaned_response.trim_start().to_string();
+
+    (queries, cleaned_response)
+}
+
+// ============================================================================
+// Screener Run Commands
+// ============================================================================
+
+/// Parse screener run commands from AI response
+///
+/// Extracts `[[SCREENER_RUN:{...}]]` commands using brace-counting for robust JSON extraction.
+///
+/// # Returns
+/// Tuple of (JSON payloads as strings, cleaned_response_text)
+pub fn parse_screener_run_commands(response: &str) -> (Vec<String>, String) {
+    let mut payloads = Vec::new();
+    let mut cleaned_response = response.to_string();
+
+    let tag = "[[SCREENER_RUN:";
+    let mut search_from = 0;
+    while let Some(start) = cleaned_response[search_from..].find(tag) {
+        let abs_start = search_from + start;
+        let json_start = abs_start + tag.len();
+        let remaining = &cleaned_response[json_start..];
+        if let Some(json_str) = extract_json_brace(remaining) {
+            payloads.push(json_str);
+        }
+        search_from = json_start;
+    }
+
+    // Remove all SCREENER_RUN tags from response using brace-counting
+    // Cannot use simple regex because JSON contains ] characters (array end)
+    // Uses char_indices() for safe UTF-8 handling (Umlauts, Unicode)
+    let mut result = String::new();
+    let tag_prefix = "[[SCREENER_RUN:";
+    let chars: Vec<(usize, char)> = cleaned_response.char_indices().collect();
+    let mut ci = 0; // index into chars vec
+    while ci < chars.len() {
+        let (byte_pos, _) = chars[ci];
+        if cleaned_response[byte_pos..].starts_with(tag_prefix) {
+            // Find the start of JSON (after tag prefix)
+            let json_byte_start = byte_pos + tag_prefix.len();
+            // Find the char index for json_byte_start
+            let json_ci = match chars[ci..].iter().position(|(bp, _)| *bp >= json_byte_start) {
+                Some(offset) => ci + offset,
+                None => { ci += 1; continue; }
+            };
+            let mut depth = 0;
+            let mut j = json_ci;
+            let mut found_end = false;
+            while j < chars.len() {
+                match chars[j].1 {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            // Skip past closing ]]
+                            j += 1;
+                            while j < chars.len() && chars[j].1 == ']' { j += 1; }
+                            found_end = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            if found_end {
+                ci = j;
+            } else {
+                // Malformed — skip the tag prefix at least
+                ci = json_ci;
+            }
+        } else {
+            result.push(chars[ci].1);
+            ci += 1;
+        }
+    }
+    cleaned_response = result.trim().to_string();
+
+    (payloads, cleaned_response)
+}
 
 // ============================================================================
 // Transaction Create Commands
@@ -594,7 +782,7 @@ pub fn parse_extracted_transactions(response: &str) -> (Vec<ExtractedTransaction
                         }
                     }
                     Err(e) => {
-                        log::warn!("Failed to parse EXTRACTED_TRANSACTIONS: {} - JSON: {}", e, json_str);
+                        log::warn!("Failed to parse EXTRACTED_TRANSACTIONS: {} (payload length: {} chars)", e, json_str.len());
                         // JSON parsing failed, but we still need to remove the command
                         // to avoid showing raw JSON to the user
                     }
@@ -758,7 +946,7 @@ fn format_delete_description(cmd: &TransactionDeleteCommand) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestedAction {
-    /// Type of action: "watchlist_add", "watchlist_remove", "transaction_create", "portfolio_transfer"
+    /// Type of action: "watchlist_add", "watchlist_remove", "transaction_create", "portfolio_transfer", "screener_run"
     pub action_type: String,
     /// Human-readable description of the action
     pub description: String,
@@ -780,6 +968,9 @@ pub struct ParsedResponseWithSuggestions {
     /// SECURITY: These queries haven't been approved yet
     #[serde(default)]
     pub pending_queries: Vec<PendingQuery>,
+    /// Security search queries to be executed externally (async)
+    #[serde(default)]
+    pub security_search_queries: Vec<String>,
 }
 
 /// Parse AI response and extract suggestions without executing anything dangerous
@@ -792,13 +983,8 @@ pub struct ParsedResponseWithSuggestions {
 /// - Returns unapproved queries as PENDING_QUERIES for user approval
 /// - Returns structured result for frontend to handle
 pub fn parse_response_with_suggestions(response: String, sql_approval_mode: &str) -> ParsedResponseWithSuggestions {
-    // DEBUG: Log incoming response for troubleshooting
-    log::info!("=== PARSING AI RESPONSE ===");
-    log::info!("Response length: {} chars", response.len());
-    if response.len() > 0 {
-        let preview_len = response.len().min(400);
-        log::info!("First {} chars: {}", preview_len, &response[..preview_len]);
-    }
+    // Log response metadata only (no content — may contain sensitive financial data)
+    log::debug!("Parsing AI response: {} chars", response.len());
 
     // CENTRAL: Normalize once at the start, all parsers benefit
     let normalized = normalize_ai_response(&response);
@@ -889,6 +1075,143 @@ pub fn parse_response_with_suggestions(response: String, sql_approval_mode: &str
         });
     }
 
+    // Parse show chart commands - navigate to Charts view with selected security
+    let (chart_securities, cleaned) = parse_show_chart_commands(&current_response);
+    current_response = cleaned;
+
+    for cmd in chart_securities {
+        let mut payload = serde_json::json!({ "securityName": cmd.security_name });
+        if let Some(ref tr) = cmd.time_range {
+            payload["timeRange"] = serde_json::json!(tr);
+        }
+        if !cmd.indicators.is_empty() {
+            payload["indicators"] = serde_json::json!(cmd.indicators);
+        }
+        suggestions.push(SuggestedAction {
+            action_type: "show_chart".to_string(),
+            description: format!("Technische Analyse für \"{}\" öffnen", cmd.security_name),
+            payload: payload.to_string(),
+        });
+    }
+
+    // Parse screener run commands - DO NOT EXECUTE, return as suggestions
+    let (screener_payloads, cleaned) = parse_screener_run_commands(&current_response);
+    current_response = cleaned;
+
+    for json_payload in screener_payloads {
+        // Build a descriptive summary from the JSON payload
+        let description = {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_payload) {
+                let filter_count = parsed.get("filters")
+                    .and_then(|f| f.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let index_str = parsed.get("indexId")
+                    .and_then(|v| v.as_str())
+                    .map(|id| {
+                        match id {
+                            "dax40" => "DAX 40",
+                            "sp500" => "S&P 500",
+                            "nasdaq100" => "NASDAQ 100",
+                            "eurostoxx50" => "Euro Stoxx 50",
+                            "dowjones30" => "Dow Jones 30",
+                            "ftse100" => "FTSE 100",
+                            "smi20" => "SMI 20",
+                            "atx20" => "ATX 20",
+                            other => other,
+                        }
+                    });
+                let mode = parsed.get("mode").and_then(|v| v.as_str()).unwrap_or("market");
+                if mode == "local" {
+                    format!("Eigene Wertpapiere scannen ({} Filter)", filter_count)
+                } else if let Some(idx) = index_str {
+                    format!("{} scannen ({} Filter)", idx, filter_count)
+                } else {
+                    format!("Markt-Scan ({} Filter)", filter_count)
+                }
+            } else {
+                "Screener-Scan starten".to_string()
+            }
+        };
+        suggestions.push(SuggestedAction {
+            action_type: "screener_run".to_string(),
+            description,
+            payload: json_payload,
+        });
+    }
+
+    // Parse SEARCH_SECURITY commands - DB search sync, external search deferred to async caller
+    let (search_queries, cleaned) = parse_search_security_commands(&current_response);
+    current_response = cleaned;
+    // Store queries for async external search in the caller
+    let security_search_queries = search_queries.clone();
+
+    // Synchronous DB search (immediate results)
+    if !search_queries.is_empty() {
+        use crate::db::get_connection;
+        use rusqlite::params;
+
+        for search_query in &search_queries {
+            log::info!("Executing DB security search for: {}", search_query);
+            match get_connection() {
+                Ok(conn_guard) => {
+                    if let Some(conn) = conn_guard.as_ref() {
+                        let pattern = format!("%{}%", search_query.to_lowercase());
+                        let sql = r#"
+                            SELECT name, isin, ticker, wkn, currency
+                            FROM pp_security
+                            WHERE LOWER(name) LIKE ?1
+                               OR LOWER(ticker) LIKE ?1
+                               OR LOWER(isin) LIKE ?1
+                               OR LOWER(wkn) LIKE ?1
+                            ORDER BY name
+                            LIMIT 15
+                        "#;
+                        match conn.prepare(sql) {
+                            Ok(mut stmt) => {
+                                let rows: Vec<(String, Option<String>, Option<String>, Option<String>, String)> = stmt
+                                    .query_map(params![pattern], |row| {
+                                        Ok((
+                                            row.get::<_, String>(0)?,
+                                            row.get::<_, Option<String>>(1)?,
+                                            row.get::<_, Option<String>>(2)?,
+                                            row.get::<_, Option<String>>(3)?,
+                                            row.get::<_, String>(4)?,
+                                        ))
+                                    })
+                                    .ok()
+                                    .map(|r| r.flatten().collect())
+                                    .unwrap_or_default();
+
+                                if !rows.is_empty() {
+                                    let mut table = format!("**Datenbank-Treffer: \"{}\"** ({} Ergebnisse)\n\n| Name | ISIN | Ticker | WKN | Währung |\n|------|------|--------|-----|--------|\n", search_query, rows.len());
+                                    for (name, isin, ticker, wkn, currency) in &rows {
+                                        table.push_str(&format!(
+                                            "| {} | {} | {} | {} | {} |\n",
+                                            name,
+                                            isin.as_deref().unwrap_or("-"),
+                                            ticker.as_deref().unwrap_or("-"),
+                                            wkn.as_deref().unwrap_or("-"),
+                                            currency,
+                                        ));
+                                    }
+                                    query_results.push(table);
+                                }
+                                // If no DB results, external search will handle it
+                            }
+                            Err(e) => {
+                                log::warn!("DB security search error: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("DB connection error for security search: {}", e);
+                }
+            }
+        }
+    }
+
     // NEW: Parse dynamic SQL queries from ```sql``` blocks
     // This is the new system - LLM generates SQL directly
     let sql_queries = extract_sql_from_response(&current_response);
@@ -960,6 +1283,7 @@ pub fn parse_response_with_suggestions(response: String, sql_approval_mode: &str
         suggestions,
         query_results,
         pending_queries,
+        security_search_queries,
     }
 }
 

@@ -543,6 +543,12 @@ WICHTIG:
 
 /// Build the system prompt for portfolio chat
 pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
+    build_chat_system_prompt_with_options(ctx, false)
+}
+
+/// Build the system prompt for portfolio chat with options
+/// `has_images` controls whether the broker/image extraction section is included
+pub fn build_chat_system_prompt_with_options(ctx: &PortfolioInsightsContext, has_images: bool) -> String {
     // Format portfolios/depots list
     let portfolios_str = if ctx.portfolios.is_empty() {
         "Keine Depots vorhanden".to_string()
@@ -568,34 +574,33 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
             .join("\n")
     };
 
-    // Format ALL holdings for context (with extended details including portfolio names)
-    let holdings_str = ctx
-        .holdings
-        .iter()
-        .map(|h| {
-            let gl_str = h
-                .gain_loss_percent
-                .map(|g| format!("{:+.1}%", g))
-                .unwrap_or_else(|| "-".to_string());
+    // Format holdings for context — limit to top 20 by value, summarize rest
+    let max_holdings = 20;
+    let holdings_str = {
+        let mut sorted: Vec<_> = ctx.holdings.iter().collect();
+        sorted.sort_by(|a, b| b.current_value.partial_cmp(&a.current_value).unwrap_or(std::cmp::Ordering::Equal));
+
+        let shown: Vec<String> = sorted.iter().take(max_holdings).map(|h| {
+            let gl_str = h.gain_loss_percent.map(|g| format!("{:+.1}%", g)).unwrap_or_else(|| "-".to_string());
             let ticker_str = h.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
-            let price_str = h.current_price.map(|p| format!(", Kurs: {:.2}", p)).unwrap_or_default();
-            let avg_cost_str = h.avg_cost_per_share.map(|a| format!(", Ø-Kurs: {:.2}", a)).unwrap_or_default();
-            let first_buy_str = h.first_buy_date.as_ref().map(|d| format!(", Erstkauf: {}", d)).unwrap_or_default();
-            // Add portfolio names where this security is held
-            let portfolio_str = h.portfolio_names.as_ref()
-                .map(|names| format!(", Depot: {}", names.join(", ")))
-                .unwrap_or_default();
             format!(
-                "- {}{}: {:.4} Stk., Wert: {:.2} {} ({:.1}%), Einstand: {:.2} {}, G/V: {}{}{}{}{}",
-                h.name, ticker_str, h.shares, h.current_value, ctx.base_currency,
-                h.weight_percent, h.cost_basis, ctx.base_currency, gl_str, price_str, avg_cost_str, first_buy_str, portfolio_str
+                "- {}{}: {:.4} Stk., Wert: {:.2} {}, G/V: {}",
+                h.name, ticker_str, h.shares, h.current_value, ctx.base_currency, gl_str
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+        }).collect();
+
+        if ctx.holdings.len() > max_holdings {
+            let rest_value: f64 = sorted.iter().skip(max_holdings).map(|h| h.current_value).sum();
+            let rest_count = ctx.holdings.len() - max_holdings;
+            format!("{}\n(+ {} weitere Positionen, Wert: {:.2} {} — für Details SQL verwenden)",
+                shown.join("\n"), rest_count, rest_value, ctx.base_currency)
+        } else {
+            shown.join("\n")
+        }
+    };
 
     // Format recent transactions (with truncation hint)
-    let txn_limit = 20;
+    let txn_limit = 10;
     let txn_str = if ctx.recent_transactions.is_empty() {
         "Keine aktuellen Transaktionen".to_string()
     } else {
@@ -617,7 +622,7 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
     };
 
     // Format recent dividends (with truncation hint)
-    let div_limit = 15;
+    let div_limit = 10;
     let div_str = if ctx.recent_dividends.is_empty() {
         "Keine Dividenden im letzten Jahr".to_string()
     } else {
@@ -637,42 +642,41 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
         }
     };
 
-    // Format watchlist
-    let watchlist_str = if ctx.watchlist.is_empty() {
-        "Keine Watchlist-Einträge".to_string()
+    // Format watchlist — grouped by watchlist name, including empty watchlists
+    let watchlist_str = if ctx.watchlist_names.is_empty() {
+        "Keine Watchlists vorhanden".to_string()
     } else {
-        ctx.watchlist
-            .iter()
-            .map(|w| {
-                let ticker_str = w.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
-                let price_str = w.current_price.map(|p| format!(", Kurs: {:.2} {}", p, w.currency)).unwrap_or_default();
-                format!("- {}{}{}", w.name, ticker_str, price_str)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        ctx.watchlist_names.iter().map(|wl_name| {
+            let items: Vec<String> = ctx.watchlist.iter()
+                .filter(|w| w.watchlist_name == *wl_name)
+                .map(|w| {
+                    let ticker_str = w.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
+                    let price_str = w.current_price.map(|p| format!(", Kurs: {:.2} {}", p, w.currency)).unwrap_or_default();
+                    format!("  - {}{}{}", w.name, ticker_str, price_str)
+                })
+                .collect();
+            if items.is_empty() {
+                format!("Watchlist \"{}\": (leer)", wl_name)
+            } else {
+                format!("Watchlist \"{}\":\n{}", wl_name, items.join("\n"))
+            }
+        }).collect::<Vec<_>>().join("\n")
     };
 
-    // Format sold positions (historical holdings that are now fully sold)
+    // Format sold positions — limit to 10 most recent
+    let max_sold = 10;
     let sold_positions_str = if ctx.sold_positions.is_empty() {
-        "Keine verkauften Positionen".to_string()
+        "Keine".to_string()
     } else {
-        ctx.sold_positions
-            .iter()
-            .map(|s| {
-                let ticker_str = s.ticker.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default();
-                let gain_str = if s.realized_gain_loss >= 0.0 {
-                    format!("+{:.2}", s.realized_gain_loss)
-                } else {
-                    format!("{:.2}", s.realized_gain_loss)
-                };
-                format!(
-                    "- {}{}: Gekauft: {:.4} Stk., Verkauft: {:.4} Stk., Realisiert: {} {}, Letzte Txn: {}",
-                    s.name, ticker_str, s.total_bought_shares, s.total_sold_shares,
-                    gain_str, ctx.base_currency, s.last_transaction_date
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let items: Vec<String> = ctx.sold_positions.iter().take(max_sold).map(|s| {
+            let gain_str = if s.realized_gain_loss >= 0.0 { format!("+{:.2}", s.realized_gain_loss) } else { format!("{:.2}", s.realized_gain_loss) };
+            format!("- {}: {} {}, {}", s.name, gain_str, ctx.base_currency, s.last_transaction_date)
+        }).collect();
+        if ctx.sold_positions.len() > max_sold {
+            format!("{}\n(+ {} weitere — SQL für Details)", items.join("\n"), ctx.sold_positions.len() - max_sold)
+        } else {
+            items.join("\n")
+        }
     };
 
     // Format yearly overview
@@ -746,7 +750,7 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
             .map(|s| {
                 let allocs = s.allocations
                     .iter()
-                    .take(5)
+                    .take(3)
                     .map(|(name, pct)| format!("{}: {:.1}%", name, pct))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -758,15 +762,17 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
 
     // Portfolio extremes
     let extremes_str = match &ctx.portfolio_extremes {
-        Some(e) => format!(
-            "Allzeithoch: {:.2} {} ({}), Allzeittief: {:.2} {} ({})\nJahreshoch {}: {:.2} {} ({}), Jahrestief: {:.2} {} ({})",
-            e.all_time_high, ctx.base_currency, e.all_time_high_date,
-            e.all_time_low, ctx.base_currency, e.all_time_low_date,
-            chrono::Utc::now().format("%Y"),
-            e.year_high, ctx.base_currency, e.year_high_date,
-            e.year_low, ctx.base_currency, e.year_low_date
-        ),
-        None => "Keine historischen Daten verfügbar".to_string(),
+        Some(e) => {
+            let y = chrono::Utc::now().format("%Y");
+            format!(
+                "ATH: {:.2} {} ({}), ATL: {:.2} {} ({}), {}-Hoch: {:.2} ({}), {}-Tief: {:.2} ({})",
+                e.all_time_high, ctx.base_currency, e.all_time_high_date,
+                e.all_time_low, ctx.base_currency, e.all_time_low_date,
+                y, e.year_high, e.year_high_date,
+                y, e.year_low, e.year_low_date,
+            )
+        }
+        None => "Keine".to_string(),
     };
 
     // User greeting (sanitize to prevent prompt injection)
@@ -836,307 +842,211 @@ pub fn build_chat_system_prompt(ctx: &PortfolioInsightsContext) -> String {
         None => String::new(),
     };
 
-    format!(
-        r##"Du bist ein Portfolio-Assistent für "Portfolio Now".
+    // Build image extraction section only when images are attached
+    let image_section = if has_images {
+        r##"
+=== BILD-EXTRAKTION (KRITISCH bei Bildern!) ===
+Bei JEDEM Bild MUSST du den Command ausgeben!
 
-🚨 PFLICHT-REGEL FÜR DATENFRAGEN 🚨
-Bei Fragen nach Transaktionen, Käufen, Verkäufen, Dividenden etc. MUSST du SOFORT einen ```sql``` Block ausgeben!
+REIHENFOLGE: 1. ZUERST [[EXTRACTED_TRANSACTIONS:{{...}}]] Command, 2. DANACH Zusammenfassung
 
-BEISPIEL - User fragt "Was habe ich letzten Monat gekauft?":
-FALSCH: "Ich werde die Käufe abfragen..." ← DAS FUNKTIONIERT NICHT!
-RICHTIG: Direkt SQL ausgeben:
-```sql
-SELECT t.date, s.name, t.shares/100000000.0 as stk, t.amount/100.0 as eur
-FROM pp_txn t JOIN pp_security s ON s.id=t.security_id
-WHERE t.txn_type='BUY' AND t.date>=date('now','start of month','-1 month')
-ORDER BY t.date DESC
-```
-
-Ohne ```sql``` Block in deiner Antwort passiert NICHTS - das System kann nur SQL ausführen!
-
-WICHTIG: SQL nur bei DATENFRAGEN verwenden! Bei allgemeinen Fragen (Finanzwissen, Smalltalk, Meinungen, Erklärungen) oder wenn die Antwort bereits in der Portfolio-Übersicht oben steht → direkt antworten, KEIN SQL!
-
-=== BENUTZER ===
-{}
-
-=== PORTFOLIO-ÜBERSICHT ===
-- Gesamtwert: {:.2} {}
-- Einstandswert: {:.2} {}
-- Gesamtrendite: {:+.1}%
-- {}
-- Jährliche Dividenden: {:.2} {}
-- Dividendenrendite: {:.2}%
-- Währungsverteilung: {}
-- Portfolio-Alter: {} Tage
-- Stand: {}{}
-
-=== DEPOTS/PORTFOLIOS ===
-{}
-
-=== ALLE HOLDINGS ({} Positionen) ===
-{}
-
-=== LETZTE TRANSAKTIONEN ===
-{}
-
-=== LETZTE DIVIDENDEN (12 Monate) ===
-{}
-
-=== WATCHLIST ===
-{}
-
-=== VERKAUFTE POSITIONEN (Historisch) ===
-{}
-
-=== JAHRESÜBERSICHT ===
-{}
-
-=== GEBÜHREN & STEUERN ===
-{}
-
-=== INVESTITIONSÜBERSICHT ===
-{}
-
-=== SEKTOR-ALLOKATION ===
-{}
-
-=== PORTFOLIO EXTREMWERTE ===
-{}
-
-=== FÄHIGKEITEN ===
-Portfolio-Fragen | Web-Recherche (Kurse, News) | Finanzkonzepte | Watchlist | Haltefrist | FIFO-Lots | Konten | Steuern
-
-=== BEFEHLE (COMMAND AM ANFANG DER ANTWORT!) ===
-
-WATCHLIST:
-[[WATCHLIST_ADD:{{"watchlist":"Standard","security":"Apple"}}]]
-[[WATCHLIST_REMOVE:{{"watchlist":"Standard","security":"Microsoft"}}]]
-
-=== SQL-ABFRAGEN ===
-
-SQL ist dein Zugang zur Datenbank. Bei Datenfragen die NICHT aus dem Kontext oben beantwortet werden können, generiere einen ```sql``` Block.
-
-WICHTIG: Sage NICHT "Ich werde abfragen..." — generiere direkt den SQL-Block! Ohne ```sql``` Block wird nichts abgefragt.
-
-KEIN SQL bei: Allgemeinen Fragen, Finanzwissen, Smalltalk, Meinungen, oder wenn die Daten bereits im Kontext (Holdings, Transaktionen, Dividenden, Portfolio-Übersicht) stehen.
-
-ERLAUBT: Nur SELECT auf pp_* Tabellen (KEIN INSERT/UPDATE/DELETE!)
-AUTOMATISCH: LIMIT wird auf 100 begrenzt
-
-KRITISCHE SKALIERUNGSFAKTOREN:
-- amount: ÷ 100 (10050 = 100.50 EUR)
-- shares: ÷ 100000000 (150000000 = 1.5 Stück)
-- value (Kurse): ÷ 100000000 (15025000000 = 150.25 EUR)
-
-TABELLEN: pp_security, pp_txn, pp_portfolio, pp_account, pp_price, pp_latest_price, pp_fifo_lot, pp_fifo_consumption, pp_watchlist, pp_watchlist_security, pp_exchange_rate, pp_txn_unit, pp_taxonomy, pp_classification, pp_classification_assignment, pp_portfolio_history, pp_investment_plan
-
-TXN-TYPES (WICHTIG - beachte die Unterschiede!):
-- Portfolio (owner_type='portfolio'):
-  - KÄUFE: BUY oder DELIVERY_INBOUND (Einlieferung = auch Kauf!)
-  - VERKÄUFE: SELL oder DELIVERY_OUTBOUND (Auslieferung = auch Verkauf!)
-  - TRANSFERS: TRANSFER_IN, TRANSFER_OUT
-- Account (owner_type='account'): DEPOSIT, REMOVAL, DIVIDENDS, INTEREST, FEES, TAXES, TAX_REFUND
-
-⚠️ WICHTIG: Bei "Käufe" IMMER beide Typen prüfen: BUY UND DELIVERY_INBOUND!
-⚠️ WICHTIG: Bei "Verkäufe" IMMER beide Typen prüfen: SELL UND DELIVERY_OUTBOUND!
-
-BEISPIEL "Letzte Käufe anzeigen" (BEIDE Typen, nach Datum sortiert!):
-```sql
-SELECT t.date, s.name, t.shares / 100000000.0 as shares, t.amount / 100.0 as amount, t.currency
-FROM pp_txn t
-JOIN pp_security s ON s.id = t.security_id
-WHERE t.txn_type IN ('BUY', 'DELIVERY_INBOUND') AND t.owner_type = 'portfolio'
-ORDER BY t.date DESC LIMIT 15
-```
-Bei "letzte X" immer ORDER BY date DESC + angemessenes LIMIT (10-20)!
-
-BEISPIEL "Holdings mit Kurs":
-```sql
-SELECT s.name, s.ticker, SUM(CASE
-    WHEN t.txn_type IN ('BUY', 'TRANSFER_IN', 'DELIVERY_INBOUND') THEN t.shares
-    WHEN t.txn_type IN ('SELL', 'TRANSFER_OUT', 'DELIVERY_OUTBOUND') THEN -t.shares
-END) / 100000000.0 as shares, lp.value / 100000000.0 as kurs
-FROM pp_txn t
-JOIN pp_security s ON s.id = t.security_id
-LEFT JOIN pp_latest_price lp ON lp.security_id = s.id
-WHERE t.owner_type = 'portfolio'
-GROUP BY t.security_id HAVING shares > 0.00001
-ORDER BY shares * lp.value DESC LIMIT 100
-```
-
-BEISPIEL "Käufe letzten Monat" (relativ mit date()):
-```sql
-SELECT t.date, s.name, t.shares / 100000000.0 as shares, t.amount / 100.0 as amount, t.currency
-FROM pp_txn t
-JOIN pp_security s ON s.id = t.security_id
-WHERE t.txn_type IN ('BUY', 'DELIVERY_INBOUND') AND t.owner_type = 'portfolio'
-  AND t.date >= date('now', 'start of month', '-1 month')
-  AND t.date < date('now', 'start of month')
-ORDER BY t.date DESC
-```
-
-BEISPIEL "Dividenden dieses Jahr":
-```sql
-SELECT t.date, s.name, t.amount / 100.0 as betrag, t.currency
-FROM pp_txn t
-JOIN pp_security s ON s.id = t.security_id
-WHERE t.txn_type = 'DIVIDENDS' AND t.owner_type = 'account'
-  AND t.date >= date('now', 'start of year')
-ORDER BY t.date DESC
-```
-
-BEISPIEL "Einstandskurs für ein Wertpapier":
-```sql
-SELECT s.name, SUM(f.remaining_shares) / 100000000.0 as shares,
-  SUM(f.gross_amount) / 100.0 / (SUM(f.remaining_shares) / 100000000.0) as avg_price
-FROM pp_fifo_lot f
-JOIN pp_security s ON s.id = f.security_id
-WHERE f.remaining_shares > 0 AND s.name LIKE '%Apple%'
-GROUP BY f.security_id
-```
-
-RELATIVE DATUM-FUNKTIONEN (SQLite):
-- date('now') → heute
-- date('now', '-7 days') → vor 7 Tagen
-- date('now', 'start of month') → Anfang dieses Monats
-- date('now', 'start of month', '-1 month') → Anfang letzter Monat
-- date('now', 'start of year') → Anfang dieses Jahres
-
-=== ANTWORT-STIL ===
-- KURZ + PRÄGNANT, Bullet Points
-- AGGREGIERT: Summen statt Listen (außer explizit gewünscht)
-- KONTEXT ZUERST: Nutze die Portfolio-Daten oben. SQL nur wenn Daten nicht im Kontext. Web nur für externe Infos
-- SYNONYME ERKENNEN: "mehrere"="verschiedene"="verteilt", "Depot"="Portfolio"
-
-=== TRANSAKTIONEN ERSTELLEN/LÖSCHEN ===
-SKALIERUNG: Betrag × 100 (100 EUR = 10000), Stückzahl × 100000000 (10 Stk = 1000000000)
-TYPEN: BUY, SELL, DEPOSIT, REMOVAL, DIVIDENDS, DELIVERY_INBOUND/OUTBOUND
-
-Erstellen: [[TRANSACTION_CREATE:{{"preview":true,"type":"DEPOSIT","accountId":1,"amount":10000,"currency":"EUR","date":"2026-01-21"}}]]
-Löschen: [[TRANSACTION_DELETE:{{"transactionId":123,"description":"Entnahme vom 02.10.2025"}}]]
-
-=== BILD-EXTRAKTION (ABSOLUT KRITISCH bei Bildern!) ===
-⛔⛔⛔ STOP! Bei JEDEM Bild MUSST du den Command ausgeben! ⛔⛔⛔
-
-🚫 SO NICHT (FALSCH!):
-"Kauf: 1 Stück Microsoft zu 423,85 USD..."
-→ FEHLT der [[EXTRACTED_TRANSACTIONS:...]] Command!
-
-✅ SO RICHTIG (IMMER!):
-[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-29","txnType":"BUY",...}}],"sourceDescription":"DEGIRO Kauf"}}]]
-Kauf: 1 Stück Microsoft zu 423,85 USD (355,02 EUR + 2,89 EUR Gebühren).
-
-⚠️ REIHENFOLGE:
-1. ZUERST: [[EXTRACTED_TRANSACTIONS:{{...}}]] Command (PFLICHT!)
-2. DANACH: Kurze Zusammenfassung in Textform
-
-❌ NIEMALS nur Text ohne Command - das System braucht den Command um die Transaktion anzuzeigen!
-
-=== BROKER-FELD-ERKENNUNG (Muster-basiert) ===
-Erkenne diese Feld-Muster unabhängig vom Broker-Layout:
-
-DATUM erkennen:
-- "Datum", "Date", "Schlusstag", "Ausführungstag", "Valuta", "Wertstellung"
-- DEGIRO: DD/MM/YYYY (mit Slash!) → 29/01/2026 = 2026-01-29
-- DE-Broker (TR, Scalable, Comdirect): DD.MM.YYYY → 29.01.2026 = 2026-01-29
-- US-Broker (IBKR US, Fidelity): MM/DD/YYYY → 01/29/2026 = 2026-01-29
-- Im Zweifel bei EUR/deutscher Sprache: Tag zuerst annehmen
-
-TRANSAKTIONSTYP erkennen:
-- BUY: "Kauf", "Buy", "Bought", "Aktion: K" (DEGIRO)
-- SELL: "Verkauf", "Sell", "Sold", "Aktion: V" (DEGIRO)
-- DIVIDENDS: "Dividende", "Dividend", "Ausschüttung", "Ertrag"
-
-STÜCKZAHL erkennen:
-- "Anz.", "Anzahl", "Stk.", "Stück", "Nominale", "Quantity", "Shares", "Units"
-
-KURS erkennen:
-- "Kurs", "Ausführungskurs", "Price", "Preis pro Stück", "Kurs pro Aktie"
-- Bei Fremdwährung: Währungssymbol beachten (USD, $, GBP, £, CHF)
-
-GEBÜHREN erkennen (ALLE addieren!):
-- "Gebühr", "Provision", "Ordergebühr", "Transaktionsgebühr", "Fee"
-- "AutoFX", "AutoFX-Gebühr", "FX-Kosten" (Währungsumrechnung)
-- "Börsengebühr", "Fremdspesen", "Externe Kosten"
-- "Stamp Duty" (UK), "SEC Fee" (US)
-
-STEUERN erkennen:
-- "Steuer", "Tax", "Quellensteuer", "Kapitalertragsteuer", "Soli"
-- "Withholding Tax", "WHT"
-
-=== WECHSELKURS-BERECHNUNG (Fremdwährungen) ===
-Wenn Transaktion in Fremdwährung (USD, GBP, CHF, etc.):
-
-1. exchangeRate = Verhältnis EUR zu Fremdwährung
-   - Beispiel: "Wechselkurs 1.1939" bedeutet 1 EUR = 1.1939 USD
-   - exchangeRate im JSON = 1.1939
-
-2. Berechnung:
-   - grossAmount = shares × pricePerShare (in Fremdwährung)
-   - amount (EUR) = grossAmount / exchangeRate
-   - Kontrolle: amount + fees ≈ "Gesamt"/"Total" im Bild
-
-3. Felder setzen:
-   - pricePerShare + pricePerShareCurrency: Originalkurs + Währung
-   - grossAmount + grossCurrency: Bruttobetrag in Originalwährung
-   - exchangeRate: Umrechnungskurs
-   - amount + currency: Endbetrag in EUR
-
-=== JSON-FORMAT ===
-Zahlen OHNE Anführungszeichen, camelCase!
+[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-29","txnType":"BUY","securityName":"Microsoft Corp","isin":"US5949181045","shares":1.0,"pricePerShare":423.85,"pricePerShareCurrency":"USD","grossAmount":423.85,"grossCurrency":"USD","exchangeRate":1.1939,"amount":355.01,"currency":"EUR","fees":2.89}}],"sourceDescription":"DEGIRO Kauf"}}]]
 
 Felder: date, txnType (BUY/SELL/DIVIDENDS/DEPOSIT/REMOVAL), securityName, isin?, ticker?, shares, pricePerShare?, pricePerShareCurrency?, grossAmount?, grossCurrency?, exchangeRate?, amount, currency, fees?, taxes?, note?
 
-BEISPIEL 1 - Fremdwährungskauf (z.B. DEGIRO US-Aktie):
-[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-29","txnType":"BUY","securityName":"Microsoft Corp","isin":"US5949181045","ticker":"MSFT","shares":1.0,"pricePerShare":423.85,"pricePerShareCurrency":"USD","grossAmount":423.85,"grossCurrency":"USD","exchangeRate":1.1939,"amount":355.01,"currency":"EUR","fees":2.89,"note":"Nasdaq"}}],"sourceDescription":"DEGIRO Kauf"}}]]
-Kauf: 1× Microsoft zu 423,85 USD (355,01 EUR + 2,89 EUR Gebühren).
+DATUM: DEGIRO DD/MM/YYYY, DE-Broker DD.MM.YYYY, US-Broker MM/DD/YYYY
+GEBÜHREN: Alle addieren (Provision+AutoFX+Börsengebühr+Fremdspesen)
+WECHSELKURS: exchangeRate = EUR/Foreign (1.1939 = 1 EUR = 1.1939 USD). amount(EUR) = grossAmount / exchangeRate
+GBX/GBp: Durch 100 teilen für GBP-Wert"##.to_string()
+    } else {
+        String::new()
+    };
 
-BEISPIEL 2 - EUR-Kauf (z.B. Trade Republic):
-[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-15","txnType":"BUY","securityName":"Apple Inc.","isin":"US0378331005","shares":10.0,"pricePerShare":185.50,"amount":1855.00,"currency":"EUR","fees":1.00}}],"sourceDescription":"Trade Republic Kauf"}}]]
-Kauf: 10× Apple zu 185,50 EUR + 1 EUR Gebühr.
+    let lang_str = match ctx.language.as_deref() {
+        Some("en") => "Respond in English.",
+        _ => "Antworte auf Deutsch.",
+    };
 
-BEISPIEL 3 - Dividende mit Quellensteuer:
-[[EXTRACTED_TRANSACTIONS:{{"transactions":[{{"date":"2026-01-20","txnType":"DIVIDENDS","securityName":"Microsoft Corp.","isin":"US5949181045","grossAmount":12.50,"grossCurrency":"USD","exchangeRate":1.08,"amount":11.57,"currency":"EUR","taxes":1.88}}],"sourceDescription":"Trade Republic Dividende"}}]]
-Dividende von Microsoft: 12,50 USD (11,57 EUR nach 1,88 EUR Steuern).
+    format!(
+        r##"Du bist ein Portfolio-Assistent für "Portfolio Now". {lang}
 
-ERINNERUNG: Bei Datenfragen einen ```sql``` Block generieren — aber NUR wenn die Daten nicht bereits im Kontext oben stehen. Keine SQL bei allgemeinen Fragen!
+{user}
 
-=== WÄHRUNGSHINWEIS GBX/GBp ===
-UK-Aktien werden oft in GBX (Pence) notiert, nicht GBP (Pfund). 1 GBP = 100 GBX. Wenn currency = "GBX" oder "GBp", teile den Kurs durch 100 für den GBP-Wert.
+=== PORTFOLIO ({date}) ===
+Wert: {value:.2} {cur}, Einstand: {cost:.2} {cur}, Rendite: {gl:+.1}%, {perf}
+Dividenden/Jahr: {div:.2} {cur} ({div_yield:.2}%), Währungen: {currencies}, Alter: {age} Tage{provider}
 
-=== SPRACHE ===
-{}"##,
-        // Language directive
-        match ctx.language.as_deref() {
-            Some("en") => "Respond in English. Use English for all explanations, summaries, and labels.",
-            _ => "Antworte auf Deutsch.",
-        },
-        user_greeting,
-        ctx.total_value,
-        ctx.base_currency,
-        ctx.total_cost_basis,
-        ctx.base_currency,
-        ctx.total_gain_loss_percent,
-        perf_str,
-        ctx.annual_dividends,
-        ctx.base_currency,
-        ctx.dividend_yield.unwrap_or(0.0),
-        currency_str,
-        ctx.portfolio_age_days,
-        ctx.analysis_date,
-        provider_status_str,
-        portfolios_str,
-        ctx.holdings.len(),
-        holdings_str,
-        txn_str,
-        div_str,
-        watchlist_str,
-        sold_positions_str,
-        yearly_str,
-        fees_taxes_str,
-        investment_str,
-        sector_str,
-        extremes_str,
+=== DEPOTS ===
+{portfolios}
+
+=== HOLDINGS ({h_count} Positionen) ===
+{holdings}
+
+=== TRANSAKTIONEN (letzte) ===
+{txns}
+
+=== DIVIDENDEN (12 Mon.) ===
+{divs}
+
+=== WATCHLIST ===
+{watchlist}
+
+=== VERKAUFTE POSITIONEN ===
+{sold}
+
+=== JAHRESÜBERSICHT ===
+{yearly}
+
+=== GEBÜHREN/STEUERN ===
+{fees}
+
+=== INVESTITION ===
+{invest}
+
+=== SEKTOREN ===
+{sectors}
+
+=== EXTREMWERTE ===
+{extremes}
+
+=== BEFEHLE ===
+WATCHLIST:
+Wenn der User eine Aktie auf die Watchlist setzen will:
+1. ZUERST fragen: Auf welche bestehende Watchlist (liste die vorhandenen aus dem Kontext oben auf), ODER eine neue Watchlist erstellen?
+2. Bei neuer Watchlist: Nach dem gewünschten Namen fragen.
+3. ERST wenn der User eine Watchlist gewählt/benannt hat → Command ausgeben:
+[[WATCHLIST_ADD:{{"watchlist":"<Name>","security":"Apple"}}]]
+Entfernen: [[WATCHLIST_REMOVE:{{"watchlist":"<Name>","security":"Apple"}}]]
+Gibt es nur EINE Watchlist, kannst du diese direkt vorschlagen ohne extra zu fragen.
+TRANSAKTION: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","accountId":1,"amount":10000,"currency":"EUR","date":"2026-01-21"}}]]
+Skalierung: amount×100, shares×100000000
+
+=== WERTPAPIERSUCHE ===
+Wenn der User nach einem Wertpapier, einer ISIN, WKN oder einem Ticker sucht → SEARCH_SECURITY Command!
+[[SEARCH_SECURITY:{{"query":"Silber"}}]]
+Sucht ZUERST in der lokalen Datenbank (Name, ISIN, Ticker, WKN), DANN extern über Yahoo Finance.
+Die Ergebnisse werden automatisch als Tabelle angezeigt.
+WICHTIG: Verwende SEARCH_SECURITY statt SQL wenn der User nach Wertpapieren, ISINs, WKNs oder Tickern sucht!
+Bei der Suche nach Rohstoffen (Gold, Silber, Öl) verwende den englischen Begriff als query (z.B. "Silver", "Gold", "Oil").
+
+=== TECHNISCHE ANALYSE / CHART ===
+Wenn der User einen Chart, technische Analyse oder Kursverlauf sehen will → SHOW_CHART Command!
+Syntax: [[SHOW_CHART:{{"securityName":"Linde","timeRange":"1Y","indicators":["sma20","sma50","rsi14","macd"]}}]]
+Erlaubte timeRange-Werte: 1M, 3M, 6M, 1Y, 2Y, 5Y, MAX (Standard: 1Y)
+Erlaubte Indikatoren: sma20, sma50, sma200, ema20, ema50, rsi14, macd, bollinger, atr14, vwap, stochastic, obv, adx14, ichimoku
+Wenn der User bestimmte Indikatoren erwähnt oder du welche empfiehlst, setze sie in indicators.
+Wenn der User einen bestimmten Zeitraum nennt (z.B. "6 Monate", "letzte 2 Jahre"), setze timeRange entsprechend.
+Verwende den Security-Namen EXAKT wie im Kontext oben. Gib eine kurze Zusammenfassung dazu, was im Chart zu sehen sein wird.
+
+=== SCREENER ===
+Wenn der User Aktien suchen/filtern/scannen will oder nach Kaufgelegenheiten, Ausbrüchen, Trends, Momentum fragt → SCREENER_RUN Command!
+Erkläre KURZ die Strategie, dann gib den Command.
+
+Syntax: [[SCREENER_RUN:{{"filters":[{{"indicator":"rsi","condition":"below","value":30}}],"mode":"market","indexId":"dax40"}}]]
+
+Strategien → Filter-Kombinationen:
+- "Überverkaufte Aktien" → rsi below 30
+- "Überkaufte Aktien" → rsi above 70
+- "Ausbruchs-Kandidaten" → bollinger_width below 5 + volume above 150 (Squeeze + Volumen-Spike)
+- "Starker Aufwärtstrend" → adx above 25 + sma_50 above sma_200 (via di_plus above, vergleicht DI+>DI-)
+- "Momentum-Aktien" → macd_histogram above 0 + change_5d above 3
+- "Mean Reversion" → rsi below 35 + stochastic_k below 20 + sma_200 above 0
+- "Trendumkehr" → change_20d below -10 + rsi below 35 (stark gefallen + überverkauft)
+- "Breakout mit Volumen" → change_1d above 2 + volume above 200
+
+Filter: rsi, price, volume, macd, macd_signal, macd_histogram, bollinger_upper/lower/width, stochastic_k/d, adx, di_plus/minus, obv, sma_20/50/200, change_1d/5d/20d
+Bedingungen: above, below, crosses_above/below, between, increasing, decreasing
+di_plus mit "above" vergleicht DI+ > DI- (nicht gegen value). Analog di_minus.
+mode: "market" (Index scannen), "local" (eigene Wertpapiere)
+Indizes: dax40, eurostoxx50, smi20, atx20, sp500, nasdaq100, dowjones30, ftse100
+
+Wenn User unsicher ist → schlage 2-3 passende Scans vor und lass ihn wählen.
+
+=== TA-WISSEN ===
+RSI(14): <30=überverkauft(Kaufgelegenheit), >70=überkauft. Divergenz=starkes Umkehrsignal.
+MACD(12,26,9): Signal-Kreuzung=Ein/Ausstieg. Histogramm=Momentum-Stärke.
+Bollinger(20,2): Squeeze(Breite<5%)=Ausbruch erwartet. Oberes Band=überkauft, unteres=überverkauft.
+ADX(14): >25=starker Trend, <20=seitwärts. +DI>-DI=Aufwärts, -DI>+DI=Abwärts.
+SMA: Golden Cross(50>200)=bullisch, Death Cross=bärisch. Kurs>SMA200=Aufwärtstrend.
+Stochastic(14,3): <20=überverkauft, >80=überkauft. %K>%D=Kaufsignal.
+ATR(14): Volatilität. Stop-Loss=2×ATR unter Einstieg.
+OBV: Steigende OBV+Kurs=Trendbestätigung. Divergenz=Umkehr.
+Breakout-Score(0-12): Trend+Konsolidierung+Trigger+Volumen+Pullback+Rel.Stärke (je 0-2). 10-12=sehr wahrscheinlich, 7-9=wahrscheinlich, 4-6=möglich, 0-3=unwahrscheinlich.
+
+=== SQL ===
+Bei Datenfragen die NICHT im Kontext stehen → direkt ```sql``` Block ausgeben! Ohne SQL-Block passiert NICHTS.
+KEIN SQL bei: Allgemeinen Fragen, Finanzwissen, oder wenn Daten bereits im Kontext stehen.
+Nur SELECT auf pp_* Tabellen.
+
+Skalierung: amount÷100, shares÷100000000, value/price÷100000000
+
+Wichtige Spalten:
+- pp_security: id, name, currency, isin, wkn, ticker, feed, is_retired
+- pp_txn: id, owner_type('portfolio'|'account'), owner_id, security_id, txn_type, date, amount, currency, shares, note
+- pp_txn_unit: txn_id, unit_type('FEE'|'TAX'|'GROSS_VALUE'), amount, currency, forex_amount, forex_currency
+- pp_latest_price: security_id, date, value, high, low, volume
+- pp_price: security_id, date, value, volume
+- pp_fifo_lot: id, security_id, portfolio_id, purchase_date, remaining_shares, gross_amount, net_amount, currency
+- pp_account: id, name, currency, is_retired
+- pp_portfolio: id, name, reference_account_id
+
+Txn-Types:
+- Portfolio (owner_type='portfolio'): BUY, SELL, DELIVERY_INBOUND, DELIVERY_OUTBOUND, TRANSFER_IN, TRANSFER_OUT
+- Account (owner_type='account'): DEPOSIT, REMOVAL, DIVIDENDS, INTEREST, FEES, TAXES, TAX_REFUND, BUY, SELL
+- WICHTIG: Käufe = BUY + DELIVERY_INBOUND, Verkäufe = SELL + DELIVERY_OUTBOUND
+- WICHTIG: Dividenden liegen in pp_txn mit owner_type='account' (NICHT 'portfolio'!)
+
+Holdings-Berechnung:
+SUM(CASE WHEN txn_type IN ('BUY','TRANSFER_IN','DELIVERY_INBOUND') THEN shares WHEN txn_type IN ('SELL','TRANSFER_OUT','DELIVERY_OUTBOUND') THEN -shares END)/100000000.0
+
+Datum: date('now'), date('now','-7 days'), date('now','start of month','-1 month'), date('now','start of year'), strftime('%Y',date)
+
+```sql
+-- Letzte Käufe
+SELECT t.date, s.name, t.shares/100000000.0 as stk, t.amount/100.0 as eur
+FROM pp_txn t JOIN pp_security s ON s.id=t.security_id
+WHERE t.txn_type IN ('BUY','DELIVERY_INBOUND') AND t.owner_type='portfolio'
+ORDER BY t.date DESC LIMIT 15
+```
+
+```sql
+-- Dividenden eines Jahres
+SELECT s.name, SUM(t.amount)/100.0 as brutto, COUNT(*) as anzahl
+FROM pp_txn t JOIN pp_security s ON s.id=t.security_id
+WHERE t.txn_type='DIVIDENDS' AND t.owner_type='account' AND t.date>=date('now','start of year')
+GROUP BY s.id ORDER BY brutto DESC
+```
+
+Alle Tabellen: pp_security, pp_txn, pp_portfolio, pp_account, pp_price, pp_latest_price, pp_fifo_lot, pp_fifo_consumption, pp_watchlist, pp_watchlist_security, pp_exchange_rate, pp_txn_unit, pp_taxonomy, pp_classification, pp_classification_assignment, pp_cross_entry, pp_investment_plan{image_section}
+
+=== STIL ===
+Kurz, prägnant, Bullet Points. Kontext-Daten zuerst nutzen, SQL nur für fehlende Daten. Bei Screener-Fragen proaktiv Scan-Vorschläge machen."##,
+        lang = lang_str,
+        user = user_greeting,
+        date = ctx.analysis_date,
+        value = ctx.total_value,
+        cur = ctx.base_currency,
+        cost = ctx.total_cost_basis,
+        gl = ctx.total_gain_loss_percent,
+        perf = perf_str,
+        div = ctx.annual_dividends,
+        div_yield = ctx.dividend_yield.unwrap_or(0.0),
+        currencies = currency_str,
+        age = ctx.portfolio_age_days,
+        provider = provider_status_str,
+        portfolios = portfolios_str,
+        h_count = ctx.holdings.len(),
+        holdings = holdings_str,
+        txns = txn_str,
+        divs = div_str,
+        watchlist = watchlist_str,
+        sold = sold_positions_str,
+        yearly = yearly_str,
+        fees = fees_taxes_str,
+        invest = investment_str,
+        sectors = sector_str,
+        extremes = extremes_str,
+        image_section = image_section,
     )
 }
 

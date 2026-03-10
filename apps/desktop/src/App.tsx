@@ -51,7 +51,10 @@ import {
 import { ChatButton, ChatPanel } from './components/chat';
 
 // Modals
-import { WelcomeModal, AiMigrationModal } from './components/modals';
+import { AiMigrationModal } from './components/modals';
+
+// Onboarding
+import { OnboardingWizard } from './components/onboarding';
 
 // Secure Storage
 import { useSecureApiKeys } from './hooks/useSecureApiKeys';
@@ -99,7 +102,7 @@ const PROVIDER_NAMES: Record<AiProvider, string> = {
 function App() {
   const { currentView } = useUIStore();
   const { setLoading, setError } = useAppStore();
-  const { theme, userName, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration, symbolValidation, setSymbolValidationSettings, setProfilePicture } = useSettingsStore();
+  const { theme, aiEnabled, aiFeatureSettings, setAiFeatureSetting, setPendingFeatureMigration, symbolValidation, setSymbolValidationSettings, setProfilePicture } = useSettingsStore();
 
   // Load API keys from secure storage on app start
   // This syncs secure storage with the Zustand store for component access
@@ -119,30 +122,6 @@ function App() {
     };
     loadProfilePicture();
   }, [setProfilePicture]);
-
-  // Welcome modal state - show only on first launch when no userName is set
-  const [showWelcome, setShowWelcome] = useState<boolean | null>(null);
-
-  // Check if we should show the welcome modal (only once on first mount)
-  useEffect(() => {
-    // Zustand persist might not have rehydrated yet, wait a tick
-    const timer = setTimeout(() => {
-      // Show welcome only if userName has never been set (is empty string from default)
-      // Once user skips or sets a name, it's been "seen"
-      const hasSeenWelcome = localStorage.getItem('portfolio-welcome-seen');
-      if (!hasSeenWelcome && !userName) {
-        setShowWelcome(true);
-      } else {
-        setShowWelcome(false);
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const handleWelcomeClose = () => {
-    setShowWelcome(false);
-    localStorage.setItem('portfolio-welcome-seen', 'true');
-  };
 
   // ============================================================================
   // AI Feature Provider Migration Check
@@ -655,8 +634,40 @@ function App() {
   };
 
   // ============================================================================
+  // ============================================================================
+  // App Mode
+  // ============================================================================
+
+  const appMode = useAppStore((s) => s.appMode);
+  const setCurrentView = useUIStore((s) => s.setCurrentView);
+
+  // Validate currentView matches appMode on startup
+  useEffect(() => {
+    if (appMode === 'analysis') {
+      const analysisViews = ['watchlist', 'charts', 'screener', 'settings'];
+      if (!analysisViews.includes(currentView)) {
+        setCurrentView('watchlist');
+      }
+    } else if (appMode === 'portfolio') {
+      const portfolioViews = ['dashboard', 'widget-dashboard', 'portfolio', 'accounts', 'transactions', 'holdings', 'dividends', 'asset-statement', 'taxonomies', 'optimization', 'watchlist', 'securities', 'charts', 'screener', 'settings', 'plans', 'reports', 'rebalancing', 'benchmark', 'consortium'];
+      if (!portfolioViews.includes(currentView)) {
+        setCurrentView('dashboard');
+      }
+    }
+  }, [appMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Render
   // ============================================================================
+
+  // Onboarding wizard (first launch)
+  if (appMode === null) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <OnboardingWizard />
+        <ToastContainer />
+      </QueryClientProvider>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -670,7 +681,7 @@ function App() {
         <Sidebar />
 
         {/* Main Content */}
-        <main id="main-content" className="flex-1 flex flex-col overflow-hidden">
+        <main id="main-content" className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Header */}
           <Header
             onImportPP={handleImportPP}
@@ -690,22 +701,21 @@ function App() {
           </div>
         </main>
 
+        {/* Chat interface - flex flow for Charts, overlay for other views */}
+        {aiEnabled && (
+          <>
+            {!isChatOpen && <ChatButton onClick={() => setIsChatOpen(true)} />}
+            {isChatOpen && (
+              <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} overlay={currentView !== 'charts'} />
+            )}
+          </>
+        )}
+
         {/* Quote sync progress overlay */}
         <QuoteSyncOverlay />
 
         {/* Toast notifications */}
         <ToastContainer />
-
-        {/* Chat interface - only visible when AI is enabled */}
-        {aiEnabled && (
-          <>
-            <ChatButton onClick={() => setIsChatOpen(true)} />
-            <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
-          </>
-        )}
-
-        {/* Welcome modal for first-time users */}
-        <WelcomeModal isOpen={showWelcome === true} onClose={handleWelcomeClose} />
 
         {/* AI feature migration modal - shown when API keys are removed */}
         <AiMigrationModal />

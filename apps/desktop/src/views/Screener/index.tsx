@@ -2,7 +2,7 @@
  * Screener view for filtering securities by technical indicators.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Search,
   Filter,
@@ -16,10 +16,27 @@ import {
   AlertCircle,
   Play,
   X,
+  Globe,
+  Database,
+  Bot,
+  Loader2,
+  Square,
+  Eye,
+  AlertTriangle,
+  ChevronDown,
+  Info,
 } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import {
   getSecurities,
   getPriceHistory,
+  getMarketIndices,
+  screenMarket,
+  cancelMarketScreener,
+  analyzeMarketScreenerWithAi,
+  addExternalSecurityToWatchlist,
+  createWatchlist,
+  getWatchlists,
 } from '../../lib/api';
 import { convertToOHLC } from '../../lib/indicators';
 import {
@@ -36,11 +53,79 @@ import {
   type ScreenerPreset,
 } from '../../lib/screener';
 import { runScreener, detectRegime, scoreSetup } from '../../lib/indicators-rust';
-import { SecurityLogo, RegimeBadge, SetupScoreBadge } from '../../components/common';
+import { SecurityLogo, RegimeBadge, SetupScoreBadge, SafeMarkdown } from '../../components/common';
 import type { RegimeAnalysis, SetupScore } from '../../lib/indicators';
 import { useCachedLogos, type CachedLogo } from '../../lib/hooks';
 import { useSettingsStore, useUIStore } from '../../store';
-import type { SecurityData as APISecurity, PriceData } from '../../lib/types';
+import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+import type { SecurityData as APISecurity, PriceData, MarketScreenerProgress, BreakoutScore } from '../../lib/types';
+
+// ============================================================================
+// Breakout Score Components
+// ============================================================================
+
+function BreakoutBadge({ score }: { score: BreakoutScore }) {
+  const colorMap: Record<BreakoutScore['classification'], string> = {
+    veryLikely: 'bg-green-500/20 text-green-400',
+    likely: 'bg-blue-500/20 text-blue-400',
+    possible: 'bg-amber-500/20 text-amber-400',
+    unlikely: 'bg-muted text-muted-foreground',
+  };
+  const colorClass = colorMap[score.classification];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${colorClass}`}>
+      {score.totalPoints}/{score.maxPoints}
+      {score.downgraded && (
+        <AlertTriangle size={10} className="text-amber-400 shrink-0" />
+      )}
+    </span>
+  );
+}
+
+function BreakoutDetailPanel({ score }: { score: BreakoutScore }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mt-1">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        Regeldetails
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1.5 p-3 bg-muted/50 rounded-lg border border-border text-xs" onClick={(e) => e.stopPropagation()}>
+          {score.rules.map((rule, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <div className="flex gap-0.5 mt-0.5 shrink-0">
+                {Array.from({ length: rule.maxPoints }).map((_, dot) => (
+                  <span
+                    key={dot}
+                    className={`w-2 h-2 rounded-full border ${dot < rule.points ? 'bg-primary border-primary' : 'bg-transparent border-muted-foreground/40'}`}
+                  />
+                ))}
+              </div>
+              <div className="min-w-0">
+                <span className="font-medium">{rule.ruleName}</span>
+                <span className="text-muted-foreground ml-1">({rule.points}/{rule.maxPoints})</span>
+                {rule.description && (
+                  <p className="text-muted-foreground mt-0.5">{rule.description}</p>
+                )}
+              </div>
+            </div>
+          ))}
+          {score.downgraded && score.downgradeReason && (
+            <div className="flex items-start gap-1.5 mt-2 pt-2 border-t border-border text-amber-400">
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <span>{score.downgradeReason}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================================================
 // Filter Builder Component
@@ -252,6 +337,113 @@ function FilterBuilder({
 }
 
 // ============================================================================
+// Market Results Table Component (with Breakout column)
+// ============================================================================
+
+function MarketResultsTable({
+  results,
+  sortBy,
+  onSortChange,
+}: {
+  results: ScreenerResult[];
+  sortBy: 'default' | 'breakout';
+  onSortChange: (sort: 'default' | 'breakout') => void;
+}) {
+  const formatChange = (change: number | undefined) => {
+    if (change === undefined) return null;
+    const isPositive = change >= 0;
+    return (
+      <span className={`flex items-center gap-1 ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+        {isPositive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+        {isPositive ? '+' : ''}{change.toFixed(2)}%
+      </span>
+    );
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/50">
+              <th className="text-left py-3 px-4 font-medium">Wertpapier</th>
+              <th className="text-right py-3 px-4 font-medium">Kurs</th>
+              <th className="text-right py-3 px-4 font-medium">1T</th>
+              <th className="text-right py-3 px-4 font-medium">5T</th>
+              <th className="text-right py-3 px-4 font-medium">RSI</th>
+              <th className="text-left py-3 px-4 font-medium">Erfüllte Filter</th>
+              <th
+                className="text-center py-3 px-4 font-medium cursor-pointer hover:text-primary transition-colors select-none"
+                onClick={() => onSortChange(sortBy === 'breakout' ? 'default' : 'breakout')}
+                title="Nach Breakout-Score sortieren"
+              >
+                Breakout {sortBy === 'breakout' ? '\u2193' : ''}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((result) => (
+              <tr
+                key={result.securityId}
+                className="border-b border-border last:border-0 hover:bg-muted/30"
+              >
+                <td className="py-3 px-4">
+                  <div>
+                    <div className="font-medium">{result.securityName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {result.ticker || result.isin || '-'}
+                    </div>
+                  </div>
+                </td>
+                <td className="py-3 px-4 text-right font-mono">
+                  {result.lastPrice.toFixed(2)} {result.currency}
+                </td>
+                <td className="py-3 px-4 text-right">
+                  {formatChange(result.change1d)}
+                </td>
+                <td className="py-3 px-4 text-right">
+                  {formatChange(result.change5d)}
+                </td>
+                <td className="py-3 px-4 text-right font-mono">
+                  {result.currentValues.rsi !== undefined ? result.currentValues.rsi.toFixed(1) : '-'}
+                </td>
+                <td className="py-3 px-4">
+                  <div className="flex flex-wrap gap-1">
+                    {result.matchedFilters.slice(0, 2).map((filter, i) => (
+                      <span
+                        key={i}
+                        className="px-1.5 py-0.5 text-xs bg-primary/10 text-primary rounded"
+                      >
+                        {filter}
+                      </span>
+                    ))}
+                    {result.matchedFilters.length > 2 && (
+                      <span className="px-1.5 py-0.5 text-xs bg-muted text-muted-foreground rounded">
+                        +{result.matchedFilters.length - 2}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-3 px-4">
+                  {result.breakoutScore ? (
+                    <div>
+                      <BreakoutBadge score={result.breakoutScore} />
+                      <BreakoutDetailPanel score={result.breakoutScore} />
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // Results Table Component
 // ============================================================================
 
@@ -265,7 +457,7 @@ function ResultsTable({
 }: {
   results: ScreenerResult[];
   logos: Map<number, CachedLogo>;
-  onSelectSecurity: (securityId: number) => void;
+  onSelectSecurity?: (securityId: number) => void;
   tradingData: Record<number, { regime: RegimeAnalysis; setup: SetupScore }>;
   sortBy: 'default' | 'score';
   onSortChange: (sort: 'default' | 'score') => void;
@@ -315,8 +507,8 @@ function ResultsTable({
             {results.map((result) => (
               <tr
                 key={result.securityId}
-                className="border-b border-border last:border-0 hover:bg-muted/30 cursor-pointer"
-                onClick={() => onSelectSecurity(result.securityId)}
+                className={`border-b border-border last:border-0 hover:bg-muted/30 ${onSelectSecurity ? 'cursor-pointer' : ''}`}
+                onClick={() => onSelectSecurity?.(result.securityId)}
               >
                 <td className="py-3 px-4">
                   <div className="flex items-center gap-3">
@@ -405,9 +597,170 @@ export function ScreenerView() {
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
   const [tradingData, setTradingData] = useState<Record<number, { regime: RegimeAnalysis; setup: SetupScore }>>({});
   const [sortBy, setSortBy] = useState<'default' | 'score'>('default');
+  const [marketSortBy, setMarketSortBy] = useState<'default' | 'breakout'>('breakout');
 
-  const { brandfetchApiKey } = useSettingsStore();
+  // Market Screener state
+  const [mode, setMode] = useState<'local' | 'market'>('market');
+  const [marketIndices, setMarketIndices] = useState<import('../../lib/types').MarketIndex[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState('dax40');
+  const [marketProgress, setMarketProgress] = useState<import('../../lib/types').MarketScreenerProgress | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const { brandfetchApiKey, aiEnabled, aiProvider, aiModel } = useSettingsStore();
   const { setCurrentView, setScrollTarget } = useUIStore();
+  const pendingScreener = useUIStore((s) => s.pendingScreenerFilters);
+  const clearPendingScreener = useUIStore((s) => s.clearPendingScreener);
+  const { keys: apiKeys } = useSecureApiKeys();
+
+  // Track whether we need to auto-run after applying chat filters
+  const chatAutoRunRef = useRef<'market' | 'local' | null>(null);
+
+  // Apply screener filters sent from ChatPanel
+  useEffect(() => {
+    if (!pendingScreener) return;
+
+    const newFilters = pendingScreener.filters.map((f, i) => ({
+      ...f,
+      id: `chat-${i}-${Date.now()}`,
+      enabled: true,
+    })) as ScreenerFilter[];
+    setFilters(newFilters);
+    setResults([]);
+    setAiAnalysis(null);
+
+    if (pendingScreener.mode === 'market') {
+      setMode('market');
+      if (pendingScreener.indexId) {
+        setSelectedIndex(pendingScreener.indexId);
+      }
+      chatAutoRunRef.current = 'market';
+    } else {
+      setMode('local');
+      chatAutoRunRef.current = 'local';
+    }
+
+    clearPendingScreener();
+  }, [pendingScreener, clearPendingScreener]);
+
+  // Load market indices on mount
+  useEffect(() => {
+    getMarketIndices().then(setMarketIndices).catch(() => {});
+  }, []);
+
+  // Listen for market screener progress events
+  useEffect(() => {
+    const unlisten = listen<MarketScreenerProgress>('market_screener_progress', (event) => {
+      setMarketProgress(event.payload);
+      if (event.payload.status === 'done') {
+        setTimeout(() => setMarketProgress(null), 500);
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  // Market screener run handler
+  const handleRunMarketScreener = useCallback(async () => {
+    setIsRunning(true);
+    setError(null);
+    setResults([]);
+    setAiAnalysis(null);
+    setMarketSortBy('breakout');
+    try {
+      const response = await screenMarket(selectedIndex, filters);
+      setResults(response.results);
+      if (response.totalErrors > 0) {
+        setError(`${response.totalErrors} von ${response.totalScanned + response.totalErrors} Ticker konnten nicht geladen werden`);
+      }
+      // Compute regime + setup for results
+      const trading: Record<number, { regime: RegimeAnalysis; setup: SetupScore }> = {};
+      // For market results, regime/setup data comes from the screener engine
+      setTradingData(trading);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [selectedIndex, filters]);
+
+  // AI analysis of market results
+  const handleAiAnalysis = useCallback(async () => {
+    if (!aiEnabled || !aiProvider || !aiModel || results.length === 0) return;
+
+    const providerKeyMap: Record<string, string> = {
+      claude: 'anthropicApiKey',
+      openai: 'openaiApiKey',
+      gemini: 'geminiApiKey',
+      perplexity: 'perplexityApiKey',
+      openrouter: 'openrouterApiKey',
+    };
+    const apiKey = (apiKeys as Record<string, string>)[providerKeyMap[aiProvider] || ''];
+    if (!apiKey) {
+      setError('Kein API-Key für den KI-Anbieter hinterlegt. Bitte in den Einstellungen konfigurieren.');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAiAnalysis(null);
+    try {
+      const indexName = marketIndices.find(i => i.id === selectedIndex)?.name || selectedIndex;
+      const filterDesc = filters.filter(f => f.enabled).map(f =>
+        `${indicatorLabels[f.indicator as ScreenerIndicator] || f.indicator} ${conditionLabels[f.condition as ScreenerCondition] || f.condition} ${f.value}${f.value2 ? `-${f.value2}` : ''}`
+      ).join(', ') || 'Keine Filter';
+
+      const aiResults = results.slice(0, 20).map(r => ({
+        symbol: r.ticker || r.securityName,
+        name: r.securityName,
+        price: r.lastPrice,
+        currency: r.currency || 'USD',
+        change1d: r.change1d,
+        change5d: r.change5d,
+        change20d: r.change20d,
+        rsi: r.currentValues?.rsi ?? undefined,
+        matchedFilters: r.matchedFilters,
+        breakoutScore: r.breakoutScore,
+      }));
+
+      const analysis = await analyzeMarketScreenerWithAi({
+        provider: aiProvider,
+        model: aiModel,
+        apiKey,
+        indexName,
+        filterDescription: filterDesc,
+        results: aiResults,
+      });
+      setAiAnalysis(analysis);
+
+    } catch (err) {
+      const errStr = err instanceof Error ? err.message : String(err);
+      setError(`KI-Analyse fehlgeschlagen: ${errStr}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [aiEnabled, aiProvider, aiModel, apiKeys, results, marketIndices, selectedIndex, filters]);
+
+  // Add market result to watchlist
+  const handleAddToWatchlist = useCallback(async (result: ScreenerResult) => {
+    try {
+      // Ensure a watchlist exists
+      let watchlists = await getWatchlists();
+      if (watchlists.length === 0) {
+        await createWatchlist('Watchlist');
+        watchlists = await getWatchlists();
+      }
+      await addExternalSecurityToWatchlist(watchlists[0].id, {
+        symbol: result.ticker || '',
+        name: result.securityName,
+        securityType: 'Equity',
+        currency: result.currency,
+        provider: 'YAHOO',
+        providerId: result.ticker || '',
+      });
+      // Show brief success state
+    } catch (err) {
+      console.error('Failed to add to watchlist:', err);
+    }
+  }, []);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -502,6 +855,22 @@ export function ScreenerView() {
     runScreener(securitiesData, filters).then(setResults).catch(() => setResults([]));
   }, [securitiesData, filters, loadPriceData]);
 
+  // Auto-run screener after chat navigation applied filters
+  useEffect(() => {
+    if (!chatAutoRunRef.current) return;
+    const runMode = chatAutoRunRef.current;
+    chatAutoRunRef.current = null;
+
+    // Use setTimeout to ensure state (filters, mode, selectedIndex) is settled
+    setTimeout(() => {
+      if (runMode === 'market') {
+        handleRunMarketScreener();
+      } else {
+        handleRunScreener();
+      }
+    }, 100);
+  }, [filters, mode, selectedIndex, handleRunMarketScreener, handleRunScreener]);
+
   // Re-run screener when data is loaded
   useEffect(() => {
     if (securitiesData.length > 0 && filters.some((f) => f.enabled)) {
@@ -561,7 +930,7 @@ export function ScreenerView() {
 
   const activeFilterCount = filters.filter((f) => f.enabled).length;
 
-  // Sort results
+  // Sort results (local screener)
   const sortedResults = useMemo(() => {
     if (sortBy === 'score') {
       return [...results].sort((a, b) => {
@@ -572,6 +941,18 @@ export function ScreenerView() {
     }
     return results;
   }, [results, sortBy, tradingData]);
+
+  // Sort market results by breakout score
+  const sortedMarketResults = useMemo(() => {
+    if (marketSortBy === 'breakout') {
+      return [...results].sort((a, b) => {
+        const scoreA = a.breakoutScore?.totalPoints ?? -1;
+        const scoreB = b.breakoutScore?.totalPoints ?? -1;
+        return scoreB - scoreA;
+      });
+    }
+    return results;
+  }, [results, marketSortBy]);
 
   return (
     <div className="space-y-6">
@@ -596,15 +977,27 @@ export function ScreenerView() {
               Filter löschen
             </button>
           )}
+          {mode === 'market' && results.length > 0 && aiEnabled && (
+            <button
+              onClick={handleAiAnalysis}
+              disabled={isAnalyzing}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-primary/50 text-primary rounded-md hover:bg-primary/10 transition-colors disabled:opacity-50"
+            >
+              {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
+              KI-Analyse
+            </button>
+          )}
           <button
-            onClick={handleRunScreener}
+            onClick={mode === 'market' ? handleRunMarketScreener : handleRunScreener}
             disabled={isRunning || activeFilterCount === 0}
             className="flex items-center gap-2 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isRunning ? (
               <>
                 <RefreshCw size={16} className="animate-spin" />
-                {loadingProgress.current}/{loadingProgress.total}
+                {mode === 'market' && marketProgress
+                  ? `${marketProgress.current}/${marketProgress.total}`
+                  : `${loadingProgress.current}/${loadingProgress.total}`}
               </>
             ) : (
               <>
@@ -613,7 +1006,67 @@ export function ScreenerView() {
               </>
             )}
           </button>
+          {isRunning && mode === 'market' && (
+            <button
+              onClick={() => cancelMarketScreener()}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm border border-destructive/50 text-destructive rounded-md hover:bg-destructive/10 transition-colors"
+            >
+              <Square size={14} />
+              Stopp
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Mode Toggle + Index Selector */}
+      <div className="flex items-center gap-4">
+        <div className="flex gap-1 p-1 bg-muted rounded-lg">
+          <button
+            onClick={() => { setMode('local'); setResults([]); setAiAnalysis(null); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              mode === 'local'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Database size={14} />
+            Meine Wertpapiere
+          </button>
+          <button
+            onClick={() => { setMode('market'); setResults([]); setAiAnalysis(null); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              mode === 'market'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Globe size={14} />
+            Markt-Screener
+          </button>
+        </div>
+
+        {mode === 'market' && (
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedIndex}
+              onChange={(e) => { setSelectedIndex(e.target.value); setResults([]); setAiAnalysis(null); }}
+              className="px-3 py-1.5 text-sm bg-card border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              {marketIndices.map((idx) => (
+                <option key={idx.id} value={idx.id}>
+                  {idx.name} ({idx.tickerCount} Aktien)
+                </option>
+              ))}
+            </select>
+            {marketProgress && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 size={14} className="animate-spin text-primary" />
+                <span>{marketProgress.currentSymbol}</span>
+                <span className="text-xs">({marketProgress.current}/{marketProgress.total})</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (
@@ -632,16 +1085,87 @@ export function ScreenerView() {
         onApplyPreset={handleApplyPreset}
       />
 
+      {/* AI Analysis Panel */}
+      {aiAnalysis && (
+        <div className="bg-card rounded-lg border border-primary/30 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Bot size={18} className="text-primary" />
+            <h3 className="font-semibold text-sm">KI-Analyse &amp; Handlungsempfehlung</h3>
+            <button onClick={() => setAiAnalysis(null)} className="ml-auto p-1 hover:bg-muted rounded">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="flex items-start gap-2 mb-3 p-2.5 bg-muted/60 rounded-md text-xs text-muted-foreground">
+            <Info size={14} className="shrink-0 mt-0.5 text-primary/70" />
+            <span>Die KI analysiert die Breakout-Kandidaten und gibt konkrete Handlungsempfehlungen basierend auf dem 6-Regeln-System.</span>
+          </div>
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <SafeMarkdown content={aiAnalysis} />
+          </div>
+        </div>
+      )}
+
+
       {/* Results */}
-      {sortedResults.length > 0 ? (
-        <ResultsTable
-          results={sortedResults}
-          logos={logos}
-          onSelectSecurity={handleSelectSecurity}
-          tradingData={tradingData}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-        />
+      {(mode === 'market' ? sortedMarketResults : sortedResults).length > 0 ? (
+        <>
+          {mode === 'market' ? (
+            <MarketResultsTable
+              results={sortedMarketResults}
+              sortBy={marketSortBy}
+              onSortChange={setMarketSortBy}
+            />
+          ) : (
+            <ResultsTable
+              results={sortedResults}
+              logos={logos}
+              onSelectSecurity={handleSelectSecurity}
+              tradingData={tradingData}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+            />
+          )}
+          {/* Add to Watchlist for market results */}
+          {mode === 'market' && (
+            <div className="bg-card rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="text-left py-2 px-4 font-semibold">Ergebnisse zur Watchlist hinzufügen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedMarketResults.map((r) => (
+                    <tr key={r.securityId} className="border-b border-border/50 hover:bg-muted/30">
+                      <td className="py-2 px-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="font-medium">{r.ticker || r.securityName}</span>
+                          <span className="text-muted-foreground text-xs">{r.securityName}</span>
+                          <span className="text-xs">{r.lastPrice.toFixed(2)} {r.currency || ''}</span>
+                          {r.change1d != null && (
+                            <span className={`text-xs ${r.change1d >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                              {r.change1d >= 0 ? '+' : ''}{r.change1d.toFixed(1)}%
+                            </span>
+                          )}
+                          {r.breakoutScore && (
+                            <BreakoutBadge score={r.breakoutScore} />
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleAddToWatchlist(r)}
+                          className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-primary border border-primary/50 rounded hover:bg-primary/10 transition-colors"
+                        >
+                          <Plus size={12} />
+                          Watchlist
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       ) : (
         <div className="bg-card rounded-lg border border-border p-8 text-center text-muted-foreground">
           {activeFilterCount === 0 ? (
@@ -649,15 +1173,19 @@ export function ScreenerView() {
               <Filter className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>Füge Filter hinzu oder wähle ein Preset.</p>
               <p className="text-sm mt-1">
-                Der Screener durchsucht {securities.length} Wertpapiere.
+                {mode === 'market'
+                  ? `Der Markt-Screener scannt den ${marketIndices.find(i => i.id === selectedIndex)?.name || selectedIndex} live via Yahoo Finance.`
+                  : `Der Screener durchsucht ${securities.length} Wertpapiere.`}
               </p>
             </>
           ) : isLoading || isRunning ? (
             <>
               <RefreshCw className="w-12 h-12 mx-auto mb-3 opacity-50 animate-spin" />
-              <p>Lade Kursdaten...</p>
+              <p>{mode === 'market' ? 'Scanne Marktdaten...' : 'Lade Kursdaten...'}</p>
               <p className="text-sm mt-1">
-                {loadingProgress.current}/{loadingProgress.total} Wertpapiere
+                {mode === 'market' && marketProgress
+                  ? `${marketProgress.currentSymbol} (${marketProgress.current}/${marketProgress.total})`
+                  : `${loadingProgress.current}/${loadingProgress.total} Wertpapiere`}
               </p>
             </>
           ) : (
@@ -674,9 +1202,10 @@ export function ScreenerView() {
 
       {/* Info Box */}
       <div className="text-xs text-muted-foreground p-3 bg-muted/50 rounded-lg">
-        <strong>Hinweis:</strong> Der Screener analysiert Kursdaten der letzten 6 Monate.
-        Wertpapiere mit weniger als 20 Datenpunkten werden übersprungen.
-        Klicke auf ein Ergebnis, um die detaillierte Chart-Analyse zu öffnen.
+        <strong>Hinweis:</strong> {mode === 'market'
+          ? 'Der Markt-Screener lädt live Kursdaten via Yahoo Finance (6 Monate). Die Daten werden nicht gespeichert.'
+          : 'Der Screener analysiert Kursdaten der letzten 6 Monate. Wertpapiere mit weniger als 20 Datenpunkten werden übersprungen.'}
+        {' '}Klicke auf ein Ergebnis, um die detaillierte Chart-Analyse zu öffnen.
       </div>
     </div>
   );

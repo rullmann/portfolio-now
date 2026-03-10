@@ -1,7 +1,7 @@
 //! Centralized registry of vision-capable AI models.
 //!
 //! This is the single source of truth for all AI models that support image/vision input.
-//! Updated: January 2026
+//! Updated: March 2026
 
 use serde::Serialize;
 
@@ -37,7 +37,7 @@ impl From<&VisionModel> for ModelInfo {
 }
 
 // ============================================================================
-// Vision Models Registry (January 2026)
+// Vision Models Registry (March 2026)
 // ============================================================================
 
 /// All vision-capable models across all providers
@@ -117,13 +117,13 @@ pub const VISION_MODELS: &[VisionModel] = &[
     },
     VisionModel {
         id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash",
+        name: "Gemini 3 Flash (Preview)",
         description: "Neuestes Modell (Preview)",
         provider: "gemini",
     },
     VisionModel {
         id: "gemini-3-pro-preview",
-        name: "Gemini 3 Pro",
+        name: "Gemini 3 Pro (Preview)",
         description: "Neuestes Pro (Preview)",
         provider: "gemini",
     },
@@ -193,7 +193,7 @@ pub const DEPRECATED_MODELS: &[(&str, &str)] = &[
 pub const FALLBACK_CHAINS: &[(&str, &[&str])] = &[
     ("claude", &["claude-sonnet-4-5-20250514", "claude-haiku-4-5-20251015"]),
     ("openai", &["gpt-5-mini", "o3", "gpt-4o", "gpt-4o-mini"]),
-    ("gemini", &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"]),
+    ("gemini", &["gemini-2.5-flash", "gemini-2.5-pro"]),
     ("perplexity", &["sonar-pro", "sonar"]),
     ("openrouter", &["anthropic/claude-sonnet-4.5", "openai/gpt-4o", "google/gemini-2.5-flash"]),
 ];
