@@ -1427,6 +1427,40 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
               }
             }
 
+            // Pre-validate watchlist_remove: check if security is actually in watchlist
+            if (suggestion.actionType === 'watchlist_remove') {
+              try {
+                const cmd = JSON.parse(suggestion.payload);
+                const watchlists = await invoke<Array<{ id: number; name: string; securities: Array<{ name: string; ticker: string | null }> }>>('ai_list_watchlists');
+                const wl = watchlists.find(w => w.name.toLowerCase() === (cmd.watchlist || '').toLowerCase());
+                if (wl) {
+                  const query = (cmd.security || '').toLowerCase().split('(')[0].trim();
+                  const found = wl.securities.some(s =>
+                    s.name.toLowerCase().includes(query) ||
+                    (s.ticker && s.ticker.toLowerCase().includes(query))
+                  );
+                  if (!found) {
+                    // Security not in watchlist — skip suggestion, show info message
+                    const infoContent = `\"${cmd.security}\" ist nicht in der Watchlist \"${cmd.watchlist}\".`;
+                    const infoMsgId = await invoke<number>('save_chat_message', {
+                      role: 'assistant',
+                      content: infoContent,
+                      conversationId: currentConversationId,
+                    });
+                    setMessages(prev => [...prev, {
+                      id: String(infoMsgId),
+                      role: 'assistant',
+                      content: infoContent,
+                      timestamp: new Date(),
+                    }]);
+                    continue;
+                  }
+                }
+              } catch (checkErr) {
+                console.warn('Watchlist pre-check failed, showing suggestion anyway:', checkErr);
+              }
+            }
+
             const suggestionId = await invoke<number>('save_chat_suggestion', {
               messageId: Number(assistantMsgId),
               conversationId: currentConversationId,
@@ -2575,7 +2609,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
         )}
 
         {/* Input */}
-        <div className="p-4 border-t border-border">
+        <div className="p-4 border-t border-border overflow-visible">
           {!hasApiKey() ? (
             <div className="text-center text-sm text-muted-foreground p-2">
               Bitte konfiguriere deinen {aiProvider.toUpperCase()} API-Key in den Einstellungen.
@@ -2687,13 +2721,14 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
           )}
 
           {/* Model selector with Vision indicator */}
-          <div className="mt-2 flex items-center justify-between">
+          <div className="mt-2 flex items-center justify-between overflow-visible">
             <AIModelSelector
               featureId="chatAssistant"
               value={{ provider: aiProvider, model: aiModel }}
               onChange={setTempSelection}
               compact
               disabled={isLoading}
+              forceDirection="up"
             />
             <VisionIndicator model={aiModel} provider={aiProvider} className="ml-2" />
           </div>

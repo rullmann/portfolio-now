@@ -1,6 +1,6 @@
 /**
  * Trading Analysis Panel
- * Shows regime detection, setup scoring, risk calculator, and optional AI analysis.
+ * Shows regime detection, setup scoring, and risk calculator.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -11,41 +11,29 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  Sparkles,
   Calculator,
   Activity,
   Shield,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { RegimeBadge } from '../common/RegimeBadge';
 import { SetupScoreBadge } from '../common/SetupScoreBadge';
-import { SafeMarkdown } from '../common/SafeMarkdown';
-import { useSettingsStore } from '../../store';
-import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { fullTradingAnalysis, calculateRisk } from '../../lib/indicators-rust';
 import type { OHLCData, TradingAnalysis, RiskAnalysis } from '../../lib/indicators';
 
 interface TradingAnalysisPanelProps {
   data: OHLCData[];
-  securityName?: string;
-  ticker?: string;
   currency?: string;
   currentPrice?: number;
 }
 
 export function TradingAnalysisPanel({
   data,
-  securityName,
-  ticker,
   currency = 'EUR',
   currentPrice,
 }: TradingAnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<TradingAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [riskExpanded, setRiskExpanded] = useState(false);
-  const [aiExpanded, setAiExpanded] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiResponse, setAiResponse] = useState<string | null>(null);
 
   // Risk calculator inputs
   const [accountSize, setAccountSize] = useState('100000');
@@ -53,16 +41,12 @@ export function TradingAnalysisPanel({
   const [entryPrice, setEntryPrice] = useState('');
   const [customRisk, setCustomRisk] = useState<RiskAnalysis | null>(null);
 
-  const { keys } = useSecureApiKeys();
-  const settings = useSettingsStore();
-
   const loadAnalysis = useCallback(async () => {
     if (data.length < 20) return;
     setLoading(true);
     try {
       const result = await fullTradingAnalysis(data);
       setAnalysis(result);
-      setAiResponse(null);
     } catch (err) {
       console.error('Trading analysis failed:', err);
     } finally {
@@ -86,50 +70,6 @@ export function TradingAnalysisPanel({
       setCustomRisk(result);
     } catch (err) {
       console.error('Risk calculation failed:', err);
-    }
-  };
-
-  // AI analysis
-  const handleAiAnalysis = async () => {
-    if (!analysis) return;
-
-    const featureSettings = settings.aiFeatureSettings?.chartAnalysis;
-    const provider = featureSettings?.provider || settings.aiProvider || 'claude';
-    const model = featureSettings?.model || settings.aiModel || '';
-
-    const apiKeyMap: Record<string, string | undefined> = {
-      claude: keys.anthropicApiKey,
-      openai: keys.openaiApiKey,
-      gemini: keys.geminiApiKey,
-      perplexity: keys.perplexityApiKey,
-      openrouter: keys.openrouterApiKey,
-    };
-    const apiKey = apiKeyMap[provider];
-    if (!apiKey) return;
-
-    setAiLoading(true);
-    try {
-      const response = await invoke<string>('analyze_trading_setup_with_ai', {
-        provider,
-        model,
-        apiKey,
-        securityName: securityName || 'Unbekannt',
-        ticker: ticker || '',
-        currency,
-        currentPrice: currentPrice || data[data.length - 1]?.close || 0,
-        regimeLabel: analysis.regime.regime,
-        regimeConfidence: analysis.regime.confidence,
-        regimeEvidence: analysis.regime.supportingEvidence,
-        setupScore: analysis.setup.totalScore,
-        setupLabel: analysis.setup.setupLabel,
-        setupFactors: analysis.setup.factors,
-        riskData: analysis.risk || customRisk,
-      });
-      setAiResponse(response);
-    } catch (err) {
-      console.error('AI analysis failed:', err);
-    } finally {
-      setAiLoading(false);
     }
   };
 
@@ -310,42 +250,6 @@ export function TradingAnalysisPanel({
                   <span className="text-muted-foreground">Max. Verlust</span>
                   <span className="text-red-500">{risk.riskPerTrade.toFixed(0)} {currency} ({risk.maxLossPercent.toFixed(1)}%)</span>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* AI Analysis (collapsible) */}
-      <div className="bg-card rounded-lg border border-border">
-        <button
-          onClick={() => setAiExpanded(!aiExpanded)}
-          className="w-full flex items-center justify-between p-3 hover:bg-muted/50 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles size={14} className="text-primary" />
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">KI-Analyse</span>
-          </div>
-          {aiExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-        {aiExpanded && (
-          <div className="px-3 pb-3">
-            {!aiResponse ? (
-              <button
-                onClick={handleAiAnalysis}
-                disabled={aiLoading}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
-              >
-                {aiLoading ? (
-                  <RefreshCw size={12} className="animate-spin" />
-                ) : (
-                  <Sparkles size={12} />
-                )}
-                {aiLoading ? 'Analysiere...' : 'KI-Analyse anfordern'}
-              </button>
-            ) : (
-              <div className="prose prose-sm dark:prose-invert max-w-none">
-                <SafeMarkdown>{aiResponse}</SafeMarkdown>
               </div>
             )}
           </div>

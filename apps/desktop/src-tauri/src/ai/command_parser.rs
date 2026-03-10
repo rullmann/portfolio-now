@@ -154,6 +154,38 @@ pub fn parse_watchlist_commands(response: &str) -> (Vec<WatchlistCommand>, Strin
     cleaned_response = clean_re.replace_all(&cleaned_response, "").to_string();
     cleaned_response = cleaned_response.trim_start().to_string();
 
+    // Fallback: detect natural language watchlist intent when AI forgets command tag
+    // Pattern: "SecurityName (TICKER) ... zur ... Watchlist "WatchlistName""
+    if commands.is_empty() {
+        let nl_add_re = Regex::new(
+            r#"(?i)(?:\*\*)?([A-Za-zÄÖÜäöü][\w\s.,&'-]+?)\s*\(([A-Z0-9.]+)\)(?:\*\*)?\s.*?(?:zur|auf(?:\s+die)?)\s+(?:einzigen?\s+)?[Ww]atchlist\s+["""]([^"""]+)["""]"#
+        ).unwrap();
+        if let Some(cap) = nl_add_re.captures(&cleaned_response) {
+            let security = cap[1].trim().to_string();
+            let watchlist = cap[3].trim().to_string();
+            log::info!("Watchlist fallback parser: detected add '{}' to '{}'", security, watchlist);
+            commands.push(WatchlistCommand {
+                action: "add".to_string(),
+                watchlist,
+                security,
+            });
+        }
+
+        let nl_remove_re = Regex::new(
+            r#"(?i)(?:\*\*)?([A-Za-zÄÖÜäöü][\w\s.,&'-]+?)\s*\(([A-Z0-9.]+)\)(?:\*\*)?\s.*?(?:von|aus)(?:\s+der)?\s+[Ww]atchlist\s+["""]([^"""]+)["""](?:\s+entfern)"#
+        ).unwrap();
+        if let Some(cap) = nl_remove_re.captures(&cleaned_response) {
+            let security = cap[1].trim().to_string();
+            let watchlist = cap[3].trim().to_string();
+            log::info!("Watchlist fallback parser: detected remove '{}' from '{}'", security, watchlist);
+            commands.push(WatchlistCommand {
+                action: "remove".to_string(),
+                watchlist,
+                security,
+            });
+        }
+    }
+
     (commands, cleaned_response)
 }
 

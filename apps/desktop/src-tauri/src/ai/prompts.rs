@@ -6,7 +6,6 @@
 //! - Chat system prompts
 
 use crate::ai::types::{ChartContext, EnhancedChartContext, PortfolioInsightsContext};
-use crate::indicators::types::{SetupFactorDetail, RiskAnalysis};
 
 /// Determine if a model is a "fast" tier (haiku, mini, flash, sonar base)
 pub fn is_fast_model(model: &str) -> bool {
@@ -912,12 +911,13 @@ Dividenden/Jahr: {div:.2} {cur} ({div_yield:.2}%), Währungen: {currencies}, Alt
 === BEFEHLE ===
 WATCHLIST:
 Wenn der User eine Aktie auf die Watchlist setzen will:
-1. ZUERST fragen: Auf welche bestehende Watchlist (liste die vorhandenen aus dem Kontext oben auf), ODER eine neue Watchlist erstellen?
-2. Bei neuer Watchlist: Nach dem gewünschten Namen fragen.
-3. ERST wenn der User eine Watchlist gewählt/benannt hat → Command ausgeben:
-[[WATCHLIST_ADD:{{"watchlist":"<Name>","security":"Apple"}}]]
+- Gibt es nur EINE Watchlist → SOFORT den Command ausgeben, NICHT fragen.
+- Gibt es mehrere Watchlists → fragen auf welche.
+- Neue Watchlist → nach Namen fragen, dann Command.
+PFLICHT: Du MUSST den Command-Tag ausgeben, sonst passiert nichts!
+Hinzufügen: [[WATCHLIST_ADD:{{"watchlist":"<Name>","security":"Apple"}}]]
 Entfernen: [[WATCHLIST_REMOVE:{{"watchlist":"<Name>","security":"Apple"}}]]
-Gibt es nur EINE Watchlist, kannst du diese direkt vorschlagen ohne extra zu fragen.
+Der security-Wert muss der EXAKTE Name des Wertpapiers aus dem Kontext sein (z.B. "Amazon.com Inc.").
 TRANSAKTION: [[TRANSACTION_CREATE:{{"preview":true,"type":"BUY","accountId":1,"amount":10000,"currency":"EUR","date":"2026-01-21"}}]]
 Skalierung: amount×100, shares×100000000
 
@@ -985,7 +985,7 @@ Wichtige Spalten:
 - pp_txn: id, owner_type('portfolio'|'account'), owner_id, security_id, txn_type, date, amount, currency, shares, note
 - pp_txn_unit: txn_id, unit_type('FEE'|'TAX'|'GROSS_VALUE'), amount, currency, forex_amount, forex_currency
 - pp_latest_price: security_id, date, value, high, low, volume
-- pp_price: security_id, date, value, volume
+- pp_price: security_id, date, value, volume, open, high, low
 - pp_fifo_lot: id, security_id, portfolio_id, purchase_date, remaining_shares, gross_amount, net_amount, currency
 - pp_account: id, name, currency, is_retired
 - pp_portfolio: id, name, reference_account_id
@@ -1326,109 +1326,3 @@ pub fn build_quote_assistant_user_message(
     msg
 }
 
-/// Build a prompt for AI trading analysis based on regime, setup scoring, and risk data
-pub fn build_trading_analysis_prompt(
-    model: &str,
-    security_name: &str,
-    ticker: &str,
-    currency: &str,
-    current_price: f64,
-    regime_label: &str,
-    regime_confidence: f64,
-    regime_evidence: &[String],
-    setup_score: f64,
-    setup_label: &str,
-    factors: &[SetupFactorDetail],
-    risk: Option<&RiskAnalysis>,
-) -> String {
-    let factors_str = factors
-        .iter()
-        .map(|f| format!("- {}: {:.0}/100 (Gewicht: {:.0}%) — {}", f.name, f.score, f.weight * 100.0, f.description))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let evidence_str = regime_evidence.join(", ");
-
-    let risk_str = if let Some(r) = risk {
-        format!(
-            "\n**Risiko-Daten:**\n- ATR: {:.2} {}\n- Stop-Preis: {:.2} {} ({:.1}% unter Entry)\n- Entry: {:.2} {}\n- Ziel: {:.2} {}\n- Position: {:.0} Stück ({:.2} {} Wert)\n- Risk/Reward: 1:{:.1}\n- Max. Verlust: {:.1}%",
-            r.atr_value, currency,
-            r.stop_price, currency, r.atr_stop_percent,
-            r.entry_price, currency,
-            r.target_price, currency,
-            r.suggested_position_size, r.suggested_position_value, currency,
-            r.risk_reward_ratio,
-            r.max_loss_percent,
-        )
-    } else {
-        String::new()
-    };
-
-    if is_fast_model(model) {
-        format!(
-            r#"Trading-Analyse für {name} ({ticker}), {price:.2} {currency}.
-
-Regime: {regime} (Konfidenz: {conf:.0}%)
-Setup: {setup_label} — Score {score:.0}/100
-{risk}
-
-Antworte auf Deutsch in 3-5 Sätzen:
-1. Regime-Einschätzung
-2. Setup-Bewertung
-3. Handlungsempfehlung (Kaufen/Halten/Abwarten)"#,
-            name = security_name,
-            ticker = ticker,
-            price = current_price,
-            currency = currency,
-            regime = regime_label,
-            conf = regime_confidence * 100.0,
-            setup_label = setup_label,
-            score = setup_score,
-            risk = risk_str,
-        )
-    } else {
-        format!(
-            r##"Du bist ein erfahrener Trading-Analyst. Analysiere das folgende Setup und gib eine fundierte Einschätzung.
-
-**Wertpapier:** {name} ({ticker})
-**Kurs:** {price:.2} {currency}
-
-**Markt-Regime:** {regime}
-- Konfidenz: {conf:.0}%
-- Evidenz: {evidence}
-
-**Setup-Score:** {score:.0}/100 — Typ: {setup_label}
-**Faktoren:**
-{factors}
-{risk}
-
-Antworte auf Deutsch im folgenden Markdown-Format:
-
-## Zusammenfassung
-[2-3 Sätze Gesamteinschätzung]
-
-## Regime-Einschätzung
-[Aktueller Markttrend, Stärke, was das bedeutet]
-
-## Setup-Bewertung
-[Stärken und Schwächen des aktuellen Setups, welche Faktoren positiv/negativ]
-
-## Risiko & Positionsgröße
-[Stop-Loss-Empfehlung, Positionsgröße, Risk/Reward Verhältnis]
-
-## Handlungsempfehlung
-[Konkrete Empfehlung: Kaufen/Halten/Abwarten mit Begründung und Bedingungen]"##,
-            name = security_name,
-            ticker = ticker,
-            price = current_price,
-            currency = currency,
-            regime = regime_label,
-            conf = regime_confidence * 100.0,
-            evidence = evidence_str,
-            score = setup_score,
-            setup_label = setup_label,
-            factors = factors_str,
-            risk = risk_str,
-        )
-    }
-}

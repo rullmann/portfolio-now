@@ -156,6 +156,9 @@ pub fn init_database(path: &Path) -> Result<()> {
             security_id INTEGER NOT NULL,
             date TEXT NOT NULL,
             value INTEGER NOT NULL,
+            open INTEGER,
+            high INTEGER,
+            low INTEGER,
             volume INTEGER,
             UNIQUE(security_id, date),
             FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
@@ -1209,6 +1212,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Added volume column to pp_price");
     }
 
+    // Migration: Add OHLC columns to pp_price for real candlestick data
+    if !column_exists(conn, "pp_price", "open") {
+        conn.execute("ALTER TABLE pp_price ADD COLUMN open INTEGER", [])?;
+        conn.execute("ALTER TABLE pp_price ADD COLUMN high INTEGER", [])?;
+        conn.execute("ALTER TABLE pp_price ADD COLUMN low INTEGER", [])?;
+        log::info!("Migration: Added open, high, low columns to pp_price");
+    }
+
     // Seed: Ensure a default pp_import record exists (required for FK constraints)
     let import_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM pp_import", [], |r| r.get(0))
@@ -1235,6 +1246,33 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "#,
         )?;
         log::info!("Migration: Created pp_quote_error table");
+    }
+
+    // Migration: Create pp_chart_analysis table for persisted AI analysis text
+    if !table_exists(conn, "pp_chart_analysis") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_chart_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                security_id INTEGER NOT NULL,
+                analysis_text TEXT NOT NULL,
+                trend_direction TEXT,
+                trend_strength TEXT,
+                trend_confidence REAL,
+                alerts_json TEXT,
+                risk_reward_json TEXT,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                tokens_used INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_pp_chart_analysis_security ON pp_chart_analysis(security_id);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_chart_analysis table");
     }
 
     Ok(())

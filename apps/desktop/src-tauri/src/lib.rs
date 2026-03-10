@@ -308,8 +308,6 @@ pub fn run() {
             commands::ai::check_extracted_transactions_for_duplicates,
             // AI News Research
             commands::ai::research_security_news,
-            // AI Trading Analysis
-            commands::ai::analyze_trading_setup_with_ai,
             // Speech-to-Text
             commands::ai::transcribe_audio,
             // Chat History Persistence
@@ -335,6 +333,10 @@ pub fn run() {
             commands::chat::execute_sql_query,
             commands::chat::approve_sql_pattern_for_session,
             commands::chat::clear_all_sql_approvals,
+            // Chart Analysis Persistence
+            commands::chart_analysis::save_chart_analysis,
+            commands::chart_analysis::get_chart_analysis,
+            commands::chart_analysis::delete_chart_analysis,
             // Chart Annotations (Persistence)
             commands::annotations::save_annotations,
             commands::annotations::get_annotations,

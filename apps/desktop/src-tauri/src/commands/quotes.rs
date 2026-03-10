@@ -1487,10 +1487,11 @@ fn save_quote_to_db(security_id: i64, quote: &LatestQuote) -> anyhow::Result<()>
     )?;
 
     // Auch in historische Preise einfügen
+    let open_value = quote.quote.open.map(quotes::price_to_db);
     conn.execute(
-        "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume)
-         VALUES (?, ?, ?, ?)",
-        params![security_id, quote.quote.date.to_string(), price_value, quote.quote.volume],
+        "INSERT OR REPLACE INTO pp_price (security_id, date, value, open, high, low, volume)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![security_id, quote.quote.date.to_string(), price_value, open_value, high_value, low_value, quote.quote.volume],
     )?;
 
     // Clear any previous error on success (using same connection to avoid deadlock)
@@ -1570,13 +1571,16 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
                 )?;
 
                 let mut stmt_insert = tx.prepare_cached(
-                    "INSERT INTO pp_price (security_id, date, value, volume) VALUES (?, ?, ?, ?)"
+                    "INSERT INTO pp_price (security_id, date, value, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)"
                 )?;
 
                 for quote in quotes {
                     let date_str = quote.date.to_string();
                     let new_value = quotes::price_to_db(quote.close);
-                    stmt_insert.execute(params![security_id, date_str, new_value, quote.volume])?;
+                    let new_open = quote.open.map(quotes::price_to_db);
+                    let new_high = quote.high.map(quotes::price_to_db);
+                    let new_low = quote.low.map(quotes::price_to_db);
+                    stmt_insert.execute(params![security_id, date_str, new_value, new_open, new_high, new_low, quote.volume])?;
                     stats.inserted += 1;
                 }
             }
@@ -1584,12 +1588,18 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
         } else {
             // Normal mode: Compare with existing and insert/update as needed
             // Step 1: Get existing prices for comparison (using index)
-            let existing_prices: std::collections::HashMap<String, (i64, Option<i64>)> = {
+            let existing_prices: std::collections::HashMap<String, (i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = {
                 let mut stmt = conn.prepare_cached(
-                    "SELECT date, value, volume FROM pp_price WHERE security_id = ?"
+                    "SELECT date, value, volume, open, high, low FROM pp_price WHERE security_id = ?"
                 )?;
                 let rows = stmt.query_map(params![security_id], |row| {
-                    Ok((row.get::<_, String>(0)?, (row.get::<_, i64>(1)?, row.get::<_, Option<i64>>(2)?)))
+                    Ok((row.get::<_, String>(0)?, (
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                    )))
                 })?;
                 rows.filter_map(|r| r.ok()).collect()
             };
@@ -1600,27 +1610,32 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
             {
                 // Prepare statements once, reuse many times
                 let mut stmt_insert = tx.prepare_cached(
-                    "INSERT INTO pp_price (security_id, date, value, volume) VALUES (?, ?, ?, ?)"
+                    "INSERT INTO pp_price (security_id, date, value, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)"
                 )?;
                 let mut stmt_update = tx.prepare_cached(
-                    "UPDATE pp_price SET value = ?, volume = ? WHERE security_id = ? AND date = ?"
+                    "UPDATE pp_price SET value = ?, open = ?, high = ?, low = ?, volume = ? WHERE security_id = ? AND date = ?"
                 )?;
 
                 for quote in quotes {
                     let date_str = quote.date.to_string();
                     let new_value = quotes::price_to_db(quote.close);
+                    let new_open = quote.open.map(quotes::price_to_db);
+                    let new_high = quote.high.map(quotes::price_to_db);
+                    let new_low = quote.low.map(quotes::price_to_db);
 
                     match existing_prices.get(&date_str) {
-                        Some(&(existing_value, existing_volume)) => {
-                            if existing_value == new_value && existing_volume == quote.volume {
+                        Some(&(existing_value, existing_volume, existing_open, existing_high, existing_low)) => {
+                            if existing_value == new_value && existing_volume == quote.volume
+                                && existing_open == new_open && existing_high == new_high && existing_low == new_low
+                            {
                                 stats.skipped += 1;
                             } else {
-                                stmt_update.execute(params![new_value, quote.volume, security_id, date_str])?;
+                                stmt_update.execute(params![new_value, new_open, new_high, new_low, quote.volume, security_id, date_str])?;
                                 stats.updated += 1;
                             }
                         }
                         None => {
-                            stmt_insert.execute(params![security_id, date_str, new_value, quote.volume])?;
+                            stmt_insert.execute(params![security_id, date_str, new_value, new_open, new_high, new_low, quote.volume])?;
                             stats.inserted += 1;
                         }
                     }

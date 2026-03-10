@@ -153,7 +153,6 @@ pub use prompts::{
     build_chat_system_prompt,
     build_chat_system_prompt_with_options,
     build_news_research_prompt,
-    build_trading_analysis_prompt,
 };
 
 // ============================================================================

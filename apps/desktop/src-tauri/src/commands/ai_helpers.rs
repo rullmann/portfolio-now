@@ -228,14 +228,22 @@ pub fn ai_remove_from_watchlist(
     security_query: String,
 ) -> Result<AiWatchlistResult, String> {
     let watchlist_name = watchlist_name.trim();
-    let security_query = security_query.trim().to_lowercase();
+    let raw_query = security_query.trim().to_lowercase();
 
     if watchlist_name.is_empty() {
         return Err("Watchlist name cannot be empty".to_string());
     }
-    if security_query.is_empty() {
+    if raw_query.is_empty() {
         return Err("Security query cannot be empty".to_string());
     }
+
+    // Clean up LLM-generated security names: strip "(TICKER)" suffix, extra whitespace
+    let security_query = raw_query
+        .split('(')
+        .next()
+        .unwrap_or(&raw_query)
+        .trim()
+        .to_string();
 
     let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
     let conn = conn_guard
@@ -251,18 +259,23 @@ pub fn ai_remove_from_watchlist(
         )
         .map_err(|_| format!("Watchlist \"{}\" nicht gefunden.", watchlist_name))?;
 
-    // Find security in watchlist
+    // Find security in watchlist — try exact name first, then LIKE, then ticker/ISIN from raw query
+    let find_sql = r#"
+        SELECT s.id, s.name, s.ticker
+        FROM pp_watchlist_security ws
+        JOIN pp_security s ON s.id = ws.security_id
+        WHERE ws.watchlist_id = ?1
+          AND (LOWER(s.name) LIKE ?2 OR LOWER(s.ticker) LIKE ?2 OR LOWER(s.isin) LIKE ?2
+               OR LOWER(s.ticker) LIKE ?3 OR LOWER(s.isin) LIKE ?3)
+        LIMIT 1
+    "#;
+    // Also search with the raw query (may contain ticker like "raa.sg")
+    let raw_like = format!("%{}%", raw_query);
+    let clean_like = format!("%{}%", security_query);
     let (security_id, security_name, security_ticker): (i64, String, Option<String>) = conn
         .query_row(
-            r#"
-            SELECT s.id, s.name, s.ticker
-            FROM pp_watchlist_security ws
-            JOIN pp_security s ON s.id = ws.security_id
-            WHERE ws.watchlist_id = ?1
-              AND (LOWER(s.name) LIKE ?2 OR LOWER(s.ticker) LIKE ?2 OR LOWER(s.isin) LIKE ?2)
-            LIMIT 1
-            "#,
-            params![watchlist_id, format!("%{}%", security_query)],
+            find_sql,
+            params![watchlist_id, clean_like, raw_like],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|_| {
@@ -552,7 +565,18 @@ async fn find_or_create_security(
     query: &str,
     alpha_vantage_api_key: Option<String>,
 ) -> Result<(i64, String, Option<String>), String> {
-    let query_lower = query.to_lowercase();
+    // Clean up LLM-generated names: strip "(TICKER)", "EXCHANGE" suffixes
+    let cleaned = query
+        .split('(')
+        .next()
+        .unwrap_or(query)
+        .trim();
+    // Remove trailing exchange names like "NASDAQ", "NYSE", "XETRA"
+    let cleaned = cleaned
+        .trim_end_matches(|c: char| c.is_whitespace())
+        .trim_end_matches("NASDAQ").trim_end_matches("NYSE").trim_end_matches("XETRA")
+        .trim();
+    let query_lower = if cleaned.is_empty() { query.to_lowercase() } else { cleaned.to_lowercase() };
 
     // First, try to find in database
     {

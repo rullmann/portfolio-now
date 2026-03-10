@@ -451,9 +451,12 @@ fn save_historical_quotes(security_id: i64, quotes: &[quotes::Quote]) -> Result<
 
     for quote in quotes {
         let price_value = quotes::price_to_db(quote.close);
+        let open_value = quote.open.map(quotes::price_to_db);
+        let high_value = quote.high.map(quotes::price_to_db);
+        let low_value = quote.low.map(quotes::price_to_db);
         tx.execute(
-            "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume) VALUES (?1, ?2, ?3, ?4)",
-            params![security_id, quote.date.to_string(), price_value, quote.volume],
+            "INSERT OR REPLACE INTO pp_price (security_id, date, value, volume, open, high, low) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![security_id, quote.date.to_string(), price_value, quote.volume, open_value, high_value, low_value],
         )
         .map_err(|e| e.to_string())?;
     }

@@ -9,6 +9,7 @@ pub mod dashboard;
 pub mod annotations;
 pub mod benchmark;
 pub mod brandfetch;
+pub mod chart_analysis;
 pub mod corporate_actions;
 pub mod crud;
 pub mod csv;

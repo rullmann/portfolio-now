@@ -310,10 +310,13 @@ pub fn apply_stock_split(app: AppHandle, request: ApplyStockSplitRequest) -> Res
         let result = conn.execute(
             r#"
             UPDATE pp_price
-            SET value = ROUND(value * ?)
+            SET value = ROUND(value * ?),
+                open = ROUND(open * ?),
+                high = ROUND(high * ?),
+                low = ROUND(low * ?)
             WHERE security_id = ? AND date < ?
             "#,
-            rusqlite::params![inverse_ratio, request.security_id, request.effective_date],
+            rusqlite::params![inverse_ratio, inverse_ratio, inverse_ratio, inverse_ratio, request.security_id, request.effective_date],
         );
         if let Ok(count) = result {
             prices_adjusted = count as i64;

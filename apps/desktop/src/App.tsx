@@ -450,7 +450,7 @@ function App() {
 
       // Fetch historical prices
       fetchHistoricalPricesBatch(
-        { securityIds: [securityId], fromYear: 2010, onlyHeld: false, force: false },
+        { securityIds: [securityId], fromYear: 2000, onlyHeld: false, force: false },
         quoteApiKeys
       )
         .then((result) => {

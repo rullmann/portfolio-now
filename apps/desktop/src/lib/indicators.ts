@@ -292,11 +292,25 @@ export interface TradingAnalysis {
 // ============================================================================
 
 export function convertToOHLC(
-  priceData: Array<{ date: string; value: number; volume?: number }>,
+  priceData: Array<{ date: string; value: number; open?: number; high?: number; low?: number; volume?: number }>,
   volatilityPercent: number = 1.5
 ): OHLCData[] {
   return priceData.map((d, i) => {
     const close = d.value;
+
+    // Use real OHLC data from Yahoo when available, otherwise synthesize
+    if (d.open != null && d.high != null && d.low != null) {
+      return {
+        time: d.date,
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close,
+        volume: d.volume ?? 0,
+      };
+    }
+
+    // Fallback: synthetic OHLC for legacy data without real OHLC
     const variance = close * (volatilityPercent / 100);
     const open = i > 0 ? priceData[i - 1].value : close;
     const high = Math.max(open, close) + Math.random() * variance;
@@ -311,4 +325,51 @@ export function convertToOHLC(
       volume: d.volume ?? Math.floor(Math.random() * 1000000) + 100000,
     };
   });
+}
+
+export type CandleInterval = 'D' | 'W' | 'M';
+
+/**
+ * Aggregate daily OHLC data into weekly or monthly candles.
+ */
+export function aggregateOHLC(
+  dailyData: OHLCData[],
+  interval: CandleInterval
+): OHLCData[] {
+  if (interval === 'D' || dailyData.length === 0) return dailyData;
+
+  const groups = new Map<string, OHLCData[]>();
+
+  for (const candle of dailyData) {
+    const date = new Date(candle.time);
+    let key: string;
+
+    if (interval === 'W') {
+      // Group by ISO week: find Monday of that week
+      const day = date.getUTCDay();
+      const diff = date.getUTCDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), diff));
+      key = monday.toISOString().split('T')[0];
+    } else {
+      // Monthly: first day of month
+      key = `${candle.time.substring(0, 7)}-01`;
+    }
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(candle);
+  }
+
+  const result: OHLCData[] = [];
+  for (const [periodStart, candles] of groups) {
+    result.push({
+      time: periodStart,
+      open: candles[0].open,
+      high: Math.max(...candles.map(c => c.high)),
+      low: Math.min(...candles.map(c => c.low)),
+      close: candles[candles.length - 1].close,
+      volume: candles.reduce((sum, c) => sum + (c.volume ?? 0), 0),
+    });
+  }
+
+  return result.sort((a, b) => a.time.localeCompare(b.time));
 }

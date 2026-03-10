@@ -813,6 +813,9 @@ export interface OutlierSummary {
 export interface PriceDataWithOutliers {
   date: string;
   value: number;
+  open?: number;
+  high?: number;
+  low?: number;
   volume?: number;
   /** Whether this price is detected as an outlier (>75% daily change) */
   isOutlier: boolean;
@@ -2951,6 +2954,60 @@ export async function toggleAnnotationVisibility(annotationId: number): Promise<
  */
 export async function clearAiAnnotations(securityId: number): Promise<number> {
   return invoke<number>('clear_ai_annotations', { securityId });
+}
+
+// ============================================================================
+// Chart Analysis Persistence
+// ============================================================================
+
+export interface PersistedChartAnalysis {
+  id: number;
+  securityId: number;
+  analysisText: string;
+  trendDirection: string | null;
+  trendStrength: string | null;
+  trendConfidence: number | null;
+  alertsJson: string | null;
+  riskRewardJson: string | null;
+  provider: string;
+  model: string;
+  tokensUsed: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  createdAt: string;
+}
+
+export interface SaveChartAnalysisRequest {
+  securityId: number;
+  analysisText: string;
+  trendDirection?: string | null;
+  trendStrength?: string | null;
+  trendConfidence?: number | null;
+  alertsJson?: string | null;
+  riskRewardJson?: string | null;
+  provider: string;
+  model: string;
+  tokensUsed?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+}
+
+export async function saveChartAnalysis(
+  request: SaveChartAnalysisRequest
+): Promise<PersistedChartAnalysis> {
+  return invoke<PersistedChartAnalysis>('save_chart_analysis', { request });
+}
+
+export async function getChartAnalysis(
+  securityId: number
+): Promise<PersistedChartAnalysis | null> {
+  return invoke<PersistedChartAnalysis | null>('get_chart_analysis', { securityId });
+}
+
+export async function deleteChartAnalysis(
+  securityId: number
+): Promise<void> {
+  return invoke('delete_chart_analysis', { securityId });
 }
 
 // ============================================================================

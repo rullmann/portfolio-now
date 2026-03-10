@@ -31,7 +31,7 @@ import { AIModelSelector } from '../common';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import type { AiProvider } from '../../store';
 import { captureAndOptimizeChart, RateLimiter } from '../../lib/imageOptimization';
-import { saveAnnotations, getAnnotations } from '../../lib/api';
+import { saveAnnotations, getAnnotations, saveChartAnalysis, getChartAnalysis, deleteChartAnalysis } from '../../lib/api';
 import { calculateAiCost } from '../../lib/ai-cost';
 import { ShareToXButton } from './ShareToXButton';
 
@@ -87,6 +87,7 @@ export function AIAnalysisPanel({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [analysisInfo, setAnalysisInfo] = useState<{ provider: string; model: string; tokens?: number; costDisplay?: string } | null>(null);
+  const [analysisDate, setAnalysisDate] = useState<string | null>(null);
   const [error, setError] = useState<AiError | null>(null);
   const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -212,6 +213,7 @@ export function AIAnalysisPanel({
     // Clear analysis text and related state
     setAnalysis(null);
     setAnalysisInfo(null);
+    setAnalysisDate(null);
     setTrendInfo(null);
     setAlerts([]);
     setRiskReward(null);
@@ -226,6 +228,11 @@ export function AIAnalysisPanel({
         await saveAnnotations(security.id, [], true);
       } catch (err) {
         console.warn('Failed to clear annotations from database:', err);
+      }
+      try {
+        await deleteChartAnalysis(security.id);
+      } catch (err) {
+        console.warn('Failed to clear analysis from database:', err);
       }
     }
 
@@ -262,16 +269,38 @@ export function AIAnalysisPanel({
     }
   }, [security?.id, annotations, onAnnotationsChange]);
 
-  // Clear analysis when security changes
+  // Load persisted analysis when security changes
   useEffect(() => {
     setAnalysis(null);
     setAnalysisInfo(null);
+    setAnalysisDate(null);
     setTrendInfo(null);
     setAlerts([]);
     setRiskReward(null);
     setError(null);
     setAnnotations([]);
     onAnnotationsChange?.([]);
+
+    if (!security?.id) return;
+    getChartAnalysis(security.id).then(persisted => {
+      if (!persisted) return;
+      setAnalysis(persisted.analysisText);
+      setAnalysisDate(persisted.createdAt);
+      setAnalysisInfo({ provider: persisted.provider, model: persisted.model, tokens: persisted.tokensUsed ?? undefined });
+      if (persisted.trendDirection) {
+        setTrendInfo({
+          direction: persisted.trendDirection as TrendInfo['direction'],
+          strength: (persisted.trendStrength || 'moderate') as TrendInfo['strength'],
+          confidence: persisted.trendConfidence ?? 0.5,
+        });
+      }
+      if (persisted.alertsJson) {
+        try { setAlerts(JSON.parse(persisted.alertsJson)); } catch { /* ignore */ }
+      }
+      if (persisted.riskRewardJson) {
+        try { setRiskReward(JSON.parse(persisted.riskRewardJson)); } catch { /* ignore */ }
+      }
+    }).catch(err => console.warn('Failed to load persisted analysis:', err));
   }, [security?.id]);
 
   // Load persisted annotations when security changes
@@ -547,11 +576,13 @@ export function AIAnalysisPanel({
             id: `${Date.now()}-${idx}`,
           }));
 
+          const now = new Date().toISOString();
           setAnalysis(result.analysis);
           setAnnotations(annotationsWithIds);
           setTrendInfo(result.trend);
           setAlerts(result.alerts || []);
           setRiskReward(result.riskReward || null);
+          setAnalysisDate(now);
           setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
           calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
             .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
@@ -559,7 +590,7 @@ export function AIAnalysisPanel({
           // Notify parent about new annotations
           onAnnotationsChange?.(annotationsWithIds);
 
-          // Persist annotations to database
+          // Persist annotations and analysis to database
           if (security.id) {
             try {
               await saveAnnotations(
@@ -580,6 +611,26 @@ export function AIAnalysisPanel({
               );
             } catch (persistErr) {
               console.warn('Failed to persist annotations:', persistErr);
+            }
+
+            // Persist analysis text
+            try {
+              await saveChartAnalysis({
+                securityId: security.id,
+                analysisText: result.analysis,
+                trendDirection: result.trend?.direction,
+                trendStrength: result.trend?.strength,
+                trendConfidence: result.trend?.confidence,
+                alertsJson: result.alerts?.length ? JSON.stringify(result.alerts) : null,
+                riskRewardJson: result.riskReward ? JSON.stringify(result.riskReward) : null,
+                provider: result.provider,
+                model: result.model,
+                tokensUsed: result.tokensUsed,
+                inputTokens: result.inputTokens,
+                outputTokens: result.outputTokens,
+              });
+            } catch (persistErr) {
+              console.warn('Failed to persist analysis:', persistErr);
             }
 
             // Update portfolio analysis store for Dashboard trend indicators
@@ -613,11 +664,13 @@ export function AIAnalysisPanel({
             id: `${Date.now()}-${idx}`,
           }));
 
+          const now2 = new Date().toISOString();
           setAnalysis(result.analysis);
           setAnnotations(annotationsWithIds);
           setTrendInfo(result.trend);
           setAlerts([]); // Clear alerts when using standard endpoint
           setRiskReward(null);
+          setAnalysisDate(now2);
           setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
           calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
             .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
@@ -625,7 +678,7 @@ export function AIAnalysisPanel({
           // Notify parent about new annotations
           onAnnotationsChange?.(annotationsWithIds);
 
-          // Persist annotations to database
+          // Persist annotations and analysis to database
           if (security.id) {
             try {
               await saveAnnotations(
@@ -646,6 +699,24 @@ export function AIAnalysisPanel({
               );
             } catch (persistErr) {
               console.warn('Failed to persist annotations:', persistErr);
+            }
+
+            // Persist analysis text
+            try {
+              await saveChartAnalysis({
+                securityId: security.id,
+                analysisText: result.analysis,
+                trendDirection: result.trend?.direction,
+                trendStrength: result.trend?.strength,
+                trendConfidence: result.trend?.confidence,
+                provider: result.provider,
+                model: result.model,
+                tokensUsed: result.tokensUsed,
+                inputTokens: result.inputTokens,
+                outputTokens: result.outputTokens,
+              });
+            } catch (persistErr) {
+              console.warn('Failed to persist analysis:', persistErr);
             }
 
             // Update portfolio analysis store for Dashboard trend indicators
@@ -674,13 +745,31 @@ export function AIAnalysisPanel({
           },
         });
 
+        const now3 = new Date().toISOString();
         setAnalysis(result.analysis);
         setAnnotations([]);
         setTrendInfo(null);
+        setAnalysisDate(now3);
         setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
         calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
           .then(c => c?.costDisplay && setAnalysisInfo(prev => prev ? { ...prev, costDisplay: c.costDisplay } : prev));
 
+        // Persist analysis text
+        if (security?.id) {
+          try {
+            await saveChartAnalysis({
+              securityId: security.id,
+              analysisText: result.analysis,
+              provider: result.provider,
+              model: result.model,
+              tokensUsed: result.tokensUsed,
+              inputTokens: result.inputTokens,
+              outputTokens: result.outputTokens,
+            });
+          } catch (persistErr) {
+            console.warn('Failed to persist analysis:', persistErr);
+          }
+        }
 
         // Clear annotations when using text mode
         onAnnotationsChange?.([]);
@@ -991,6 +1080,14 @@ export function AIAnalysisPanel({
                         </span>
                       </>
                     )}
+                  </div>
+                )}
+
+                {/* Analysis date */}
+                {analysisDate && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Clock size={12} />
+                    <span>Analyse vom {new Date(analysisDate).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                 )}
 

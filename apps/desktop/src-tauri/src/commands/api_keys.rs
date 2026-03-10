@@ -61,18 +61,31 @@ async fn validate_brandfetch(
         .await
         .map_err(|e| format!("Netzwerkfehler: {}", e))?;
 
-    if resp.status().is_success() {
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if content_type.contains("image") {
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    if status.is_success() {
+        // Check content-type OR body starts with image magic bytes
+        let bytes = resp.bytes().await.unwrap_or_default();
+        let is_image = content_type.contains("image")
+            || content_type.contains("octet-stream")
+            || bytes.starts_with(b"\x89PNG")
+            || bytes.starts_with(b"\xFF\xD8")
+            || bytes.starts_with(b"<svg")
+            || bytes.starts_with(b"GIF8")
+            || bytes.len() > 100; // Brandfetch returns small error JSON (<100 bytes) for invalid keys
+        if is_image {
             Ok(ApiKeyValidationResult {
                 valid: true,
                 error: None,
             })
         } else {
+            log::warn!("Brandfetch validation: status 200 but content-type='{}', body_len={}", content_type, bytes.len());
             Ok(ApiKeyValidationResult {
                 valid: false,
                 error: Some("Ungültige Client ID".to_string()),
@@ -81,7 +94,7 @@ async fn validate_brandfetch(
     } else {
         Ok(ApiKeyValidationResult {
             valid: false,
-            error: Some(format!("HTTP {}", resp.status().as_u16())),
+            error: Some(format!("HTTP {}", status.as_u16())),
         })
     }
 }

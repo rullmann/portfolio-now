@@ -13,6 +13,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Component, type ReactNode } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   Search,
   RefreshCw,
@@ -43,8 +44,8 @@ import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingToo
 import { SecuritySearchModal } from '../../components/modals';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { SecurityLogo } from '../../components/common';
-import type { IndicatorConfig, OHLCData } from '../../lib/indicators';
-import { convertToOHLC } from '../../lib/indicators';
+import type { IndicatorConfig, OHLCData, CandleInterval } from '../../lib/indicators';
+import { convertToOHLC, aggregateOHLC } from '../../lib/indicators';
 import { convertToHeikinAshi, getAllSignals as getAllSignalsRust } from '../../lib/indicators-rust';
 import { useSettingsStore, useAppStore, useUIStore } from '../../store';
 import { useCachedLogos } from '../../lib/hooks';
@@ -158,6 +159,12 @@ const timeRanges: { value: TimeRange; label: string }[] = [
   { value: 'MAX', label: 'Max' },
 ];
 
+const candleIntervals: { value: CandleInterval; label: string }[] = [
+  { value: 'D', label: 'T' },   // Tag (Daily)
+  { value: 'W', label: 'W' },   // Woche (Weekly)
+  { value: 'M', label: 'M' },   // Monat (Monthly)
+];
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -173,6 +180,7 @@ export function ChartsView() {
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('1Y');
+  const [candleInterval, setCandleInterval] = useState<CandleInterval>('D');
   const [indicators, setIndicators] = useState<IndicatorConfig[]>([
     {
       id: 'sma-default',
@@ -241,6 +249,10 @@ export function ChartsView() {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const fullscreenChartRef = useRef<HTMLDivElement>(null);
 
+  // Ref for API keys (avoids adding to loadPriceData dependency array)
+  const apiKeysRef = useRef(apiKeys);
+  useEffect(() => { apiKeysRef.current = apiKeys; }, [apiKeys]);
+
   // ============================================================================
   // Data Loading
   // ============================================================================
@@ -294,6 +306,38 @@ export function ChartsView() {
   useEffect(() => {
     loadSecurities();
   }, [loadSecurities]);
+
+  // Listen for watchlist updates (e.g. from ChatBot adding/removing securities)
+  useEffect(() => {
+    const unlisten = listen('watchlist-updated', () => {
+      loadSecurities();
+      // Reload watchlist IDs so sidebar filter updates
+      (async () => {
+        try {
+          const watchlists = await getWatchlists();
+          const newIds = new Set<number>();
+          for (const wl of watchlists) {
+            const secs = await getWatchlistSecurities(wl.id);
+            secs.forEach((s: WatchlistSecurityData) => newIds.add(s.securityId));
+          }
+          // If current security was removed from watchlist and we're in watchlist filter mode,
+          // deselect it so the chart clears
+          if (
+            filterMode === 'watchlist' &&
+            selectedSecurity &&
+            watchlistSecurityIds.has(selectedSecurity.id) &&
+            !newIds.has(selectedSecurity.id)
+          ) {
+            setSelectedSecurity(null);
+          }
+          setWatchlistSecurityIds(newIds);
+        } catch (err) {
+          console.error('Failed to reload watchlist securities:', err);
+        }
+      })();
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [loadSecurities, filterMode, selectedSecurity, watchlistSecurityIds]);
 
   // Auto-select first security when filter changes
   useEffect(() => {
@@ -587,10 +631,44 @@ export function ChartsView() {
         }
       }
 
-      // Extract price data and outlier info
+      // Sync stale data (last price > 3 days old, covers weekends)
+      if (result.prices.length > 0) {
+        const lastDate = new Date(result.prices[result.prices.length - 1].date);
+        const daysSince = Math.floor((Date.now() - lastDate.getTime()) / 86_400_000);
+        if (daysSince > 3) {
+          try {
+            const keys = apiKeysRef.current;
+            await invoke('sync_security_prices', {
+              securityIds: [selectedSecurity.id],
+              apiKeys: {
+                finnhub: keys.finnhubApiKey || null,
+                alphaVantage: keys.alphaVantageApiKey || null,
+                coingecko: keys.coingeckoApiKey || null,
+                twelveData: keys.twelveDataApiKey || null,
+              },
+            });
+            // Fill gap with historical data
+            await invoke('fetch_historical_prices', {
+              securityId: selectedSecurity.id,
+              from: result.prices[result.prices.length - 1].date,
+              to: endDate,
+              apiKeys: null,
+            });
+            result = await getPriceHistoryWithOutliers(selectedSecurity.id, startDate, undefined);
+          } catch (syncErr) {
+            console.warn('Failed to sync stale prices:', syncErr);
+          }
+        }
+      }
+
+      // Extract price data and outlier info (including OHLC when available)
       const data: PriceData[] = result.prices.map(p => ({
         date: p.date,
         value: p.value,
+        open: p.open,
+        high: p.high,
+        low: p.low,
+        volume: p.volume,
       }));
 
       setPriceData(data);
@@ -697,17 +775,18 @@ export function ChartsView() {
     return result;
   }, [isComparisonMode, comparisonSecurities, comparisonData, securities]);
 
-  // Convert to OHLC data (with optional Heikin-Ashi via Rust)
+  // Convert to OHLC data (with optional aggregation + Heikin-Ashi)
   const [ohlcData, setOhlcData] = useState<OHLCData[]>([]);
   useEffect(() => {
     if (priceData.length === 0) { setOhlcData([]); return; }
-    const data = convertToOHLC(priceData, 1.5);
+    const daily = convertToOHLC(priceData, 1.5);
+    const data = aggregateOHLC(daily, candleInterval);
     if (useHeikinAshi) {
       convertToHeikinAshi(data).then(setOhlcData).catch(() => setOhlcData(data));
     } else {
       setOhlcData(data);
     }
-  }, [priceData, useHeikinAshi]);
+  }, [priceData, useHeikinAshi, candleInterval]);
 
   // Compute signals for Share button via Rust
   const [chartSignals, setChartSignals] = useState<TechnicalSignal[]>([]);
@@ -909,6 +988,24 @@ export function ChartsView() {
                   }`}
                 >
                   {range.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Candle Interval Selector */}
+            <div className="w-px h-5 bg-border" />
+            <div className="flex gap-1">
+              {candleIntervals.map(interval => (
+                <button
+                  key={interval.value}
+                  onClick={() => setCandleInterval(interval.value)}
+                  className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                    candleInterval === interval.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  }`}
+                >
+                  {interval.label}
                 </button>
               ))}
             </div>
@@ -1318,6 +1415,22 @@ export function ChartsView() {
                     </button>
                   ))}
                 </div>
+                <div className="w-px h-5 bg-border" />
+                <div className="flex gap-1">
+                  {candleIntervals.map(interval => (
+                    <button
+                      key={interval.value}
+                      onClick={() => setCandleInterval(interval.value)}
+                      className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                        candleInterval === interval.value
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                      }`}
+                    >
+                      {interval.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1547,8 +1660,6 @@ export function ChartsView() {
             {!isComparisonMode && ohlcData.length >= 20 && (
               <TradingAnalysisPanel
                 data={ohlcData}
-                securityName={selectedSecurity?.name}
-                ticker={selectedSecurity?.ticker || undefined}
                 currency={selectedSecurity?.currency}
                 currentPrice={ohlcData[ohlcData.length - 1]?.close}
               />
@@ -1570,6 +1681,12 @@ export function ChartsView() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Datenpunkte:</span>
                     <span className="font-mono tabular-nums">{ohlcData.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Intervall:</span>
+                    <span className="font-mono tabular-nums">
+                      {candleInterval === 'D' ? 'Täglich' : candleInterval === 'W' ? 'Wöchentlich' : 'Monatlich'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Zeitraum:</span>

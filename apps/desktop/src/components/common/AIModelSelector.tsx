@@ -94,6 +94,8 @@ interface AIModelSelectorProps {
   compact?: boolean;
   /** Disable the selector */
   disabled?: boolean;
+  /** Force dropdown direction (overrides auto-detection) */
+  forceDirection?: 'up' | 'down';
 }
 
 // Provider display order
@@ -107,6 +109,7 @@ export function AIModelSelector({
   onChange,
   compact = false,
   disabled = false,
+  forceDirection,
 }: AIModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
@@ -281,7 +284,7 @@ export function AIModelSelector({
   const handleToggle = () => {
     if (disabled) return;
     if (!isOpen) {
-      setOpenDirection(calculateDirection());
+      setOpenDirection(forceDirection ?? calculateDirection());
     }
     setIsOpen(!isOpen);
   };

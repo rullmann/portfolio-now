@@ -150,6 +150,9 @@ export interface TransactionData {
 export interface PriceData {
   date: string;
   value: number;
+  open?: number;
+  high?: number;
+  low?: number;
   volume?: number;
 }
 
