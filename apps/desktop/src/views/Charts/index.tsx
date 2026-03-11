@@ -40,7 +40,7 @@ import { AIAnalysisPanel } from '../../components/charts/AIAnalysisPanel';
 import { SignalsPanel } from '../../components/charts/SignalsPanel';
 import { AlertsPanel } from '../../components/charts/AlertsPanel';
 import { TradingAnalysisPanel } from '../../components/charts/TradingAnalysisPanel';
-import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel, ShareToXButton } from '../../components/charts';
+import { ComparisonChart, COMPARISON_COLORS, type ComparisonSecurity, DrawingTools, type Drawing, PatternStatisticsPanel, ShareToXButton, RiskAnalysisPanel, FundamentalsPanel } from '../../components/charts';
 import { SecuritySearchModal } from '../../components/modals';
 import { NewsResearchModal } from '../../components/modals/NewsResearchModal';
 import { SecurityLogo } from '../../components/common';
@@ -59,8 +59,10 @@ import {
   searchExternalSecurities,
   addExternalSecurityToWatchlist,
   createWatchlist,
+  getChartEvents,
   type OutlierSummary,
   type ChartDrawingResponse,
+  type ChartEvent,
 } from '../../lib/api';
 import type { WatchlistSecurityData, ChartAnnotationWithId, ExternalSecuritySearchResult } from '../../lib/types';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
@@ -202,7 +204,8 @@ export function ChartsView() {
   const [filterMode, setFilterMode] = useState<FilterMode>(appMode === 'analysis' ? 'watchlist' : 'holdings');
   const [holdingsSecurityIds, setHoldingsSecurityIds] = useState<Set<number>>(new Set());
   const [watchlistSecurityIds, setWatchlistSecurityIds] = useState<Set<number>>(new Set());
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const isFullscreen = useUIStore((s) => s.chartFullscreen);
+  const setIsFullscreen = useUIStore((s) => s.setChartFullscreen);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
 
@@ -231,6 +234,11 @@ export function ChartsView() {
   const [comparisonSecurities, setComparisonSecurities] = useState<Set<number>>(new Set());
   const [comparisonData, setComparisonData] = useState<Map<number, { date: string; close: number }[]>>(new Map());
 
+  // Chart events (dividends, earnings markers)
+  const [chartEvents, setChartEvents] = useState<ChartEvent[]>([]);
+  const [showChartEvents, setShowChartEvents] = useState(true);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+
   // Drawing mode
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
@@ -244,6 +252,7 @@ export function ChartsView() {
 
   // Outlier detection state
   const [outlierSummary, setOutlierSummary] = useState<OutlierSummary | null>(null);
+  const [outlierBannerCollapsed, setOutlierBannerCollapsed] = useState(false);
 
   // Refs for AI chart capture (normal and fullscreen)
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -693,6 +702,32 @@ export function ChartsView() {
     loadPriceData();
   }, [loadPriceData]);
 
+  // Load chart events (dividends, earnings) when security changes
+  useEffect(() => {
+    if (!selectedSecurity) {
+      setChartEvents([]);
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    const finnhubKey = apiKeys?.finnhubApiKey || '';
+    const loadEvents = async () => {
+      setIsLoadingEvents(true);
+      try {
+        const events = await getChartEvents(selectedSecurity.id, finnhubKey || undefined);
+        console.log(`[ChartEvents] Loaded ${events.length} events for security ${selectedSecurity.id} (finnhub: ${finnhubKey ? 'yes' : 'no'}):`, events.slice(0, 5));
+        setChartEvents(events);
+      } catch (err) {
+        console.warn('Failed to load chart events:', err);
+        setChartEvents([]);
+      } finally {
+        setIsLoadingEvents(false);
+      }
+    };
+
+    loadEvents();
+  }, [selectedSecurity, apiKeys?.finnhubApiKey]);
+
   // Load comparison data when comparison securities change
   useEffect(() => {
     if (!isComparisonMode || comparisonSecurities.size === 0) {
@@ -957,15 +992,19 @@ export function ChartsView() {
 
   // Fullscreen mode
   if (isFullscreen) {
-    // Calculate heights for fullscreen layout
-    const headerHeight = 52; // Header with title and controls
-    const aiPanelHeight = 280; // Fixed height for AI panel
-    const chartHeight = window.innerHeight - headerHeight - aiPanelHeight;
+    // Dynamic layout - chart takes remaining space, AI panel is at natural height
 
     return (
-      <div className="fixed inset-0 z-50 bg-background flex flex-col">
+      <div className="fixed inset-0 z-40 bg-background flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+        <div className="flex items-center px-4 py-2 border-b border-border gap-4">
+          <button
+            onClick={() => setIsFullscreen(false)}
+            className="p-2 hover:bg-muted rounded-lg transition-colors flex items-center gap-2"
+          >
+            <Minimize2 size={18} />
+            <span className="text-sm">ESC</span>
+          </button>
           <div className="flex items-center gap-4">
             {selectedSecurity && (
               <div className="flex items-center gap-3 text-lg font-semibold">
@@ -1062,6 +1101,22 @@ export function ChartsView() {
               />
             )}
 
+            {/* Events Toggle (Dividends + Earnings on chart) */}
+            {selectedSecurity && (
+              <button
+                onClick={() => setShowChartEvents(!showChartEvents)}
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                  showChartEvents && chartEvents.length > 0
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+                title={showChartEvents ? 'Dividenden & Earnings ausblenden' : 'Dividenden & Earnings anzeigen'}
+              >
+                <Calendar size={14} />
+                {isLoadingEvents ? 'Lade...' : chartEvents.length > 0 ? `Events (${chartEvents.length})` : 'Events'}
+              </button>
+            )}
+
             {/* News Research Button */}
             {selectedSecurity && aiEnabled && (
               <button
@@ -1074,14 +1129,6 @@ export function ChartsView() {
               </button>
             )}
           </div>
-
-          <button
-            onClick={() => setIsFullscreen(false)}
-            className="p-2 hover:bg-muted rounded-lg transition-colors flex items-center gap-2"
-          >
-            <Minimize2 size={18} />
-            <span className="text-sm">ESC</span>
-          </button>
         </div>
 
         {/* Main Content */}
@@ -1104,13 +1151,14 @@ export function ChartsView() {
                   <TradingViewChart
                     data={ohlcData}
                     indicators={indicators}
-                    height={chartHeight}
+                    height={fullscreenChartRef.current?.clientHeight || 500}
                     theme={resolvedTheme}
                     showVolume={true}
                     symbol={selectedSecurity?.ticker || selectedSecurity?.name}
                     logScale={useLogScale}
                     annotations={chartAnnotations}
                     onChartReady={handleChartReady}
+                    chartEvents={showChartEvents ? chartEvents : []}
                   />
                 </ChartErrorBoundary>
               )}
@@ -1141,6 +1189,22 @@ export function ChartsView() {
             />
           </div>
         </div>
+
+        {/* News Research Modal (must be inside fullscreen return) */}
+        {selectedSecurity && (
+          <NewsResearchModal
+            isOpen={isNewsModalOpen}
+            onClose={() => setIsNewsModalOpen(false)}
+            security={{
+              id: selectedSecurity.id,
+              name: selectedSecurity.name,
+              ticker: selectedSecurity.ticker,
+              isin: selectedSecurity.isin,
+              currency: selectedSecurity.currency,
+            }}
+            currentPrice={ohlcData[ohlcData.length - 1]?.close}
+          />
+        )}
       </div>
     );
   }
@@ -1398,6 +1462,15 @@ export function ChartsView() {
             {/* Time Range Selector */}
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
+                {/* Fullscreen Toggle */}
+                <button
+                  onClick={() => setIsFullscreen(true)}
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors"
+                  title="Vollbild"
+                >
+                  <Maximize2 size={16} />
+                </button>
+                <div className="w-px h-5 bg-border" />
                 <Calendar size={14} className="text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Zeitraum:</span>
                 <div className="flex gap-1">
@@ -1501,6 +1574,22 @@ export function ChartsView() {
                   </button>
                 )}
 
+                {/* Events Toggle (Dividends + Earnings on chart) */}
+                {!isComparisonMode && selectedSecurity && (
+                  <button
+                    onClick={() => setShowChartEvents(!showChartEvents)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                      showChartEvents && chartEvents.length > 0
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                    title={showChartEvents ? 'Dividenden & Earnings ausblenden' : 'Dividenden & Earnings anzeigen'}
+                  >
+                    <Calendar size={14} />
+                    {isLoadingEvents ? 'Lade...' : chartEvents.length > 0 ? `Events (${chartEvents.length})` : 'Events'}
+                  </button>
+                )}
+
                 {/* Share to X Button */}
                 {!isComparisonMode && selectedSecurity && (
                   <ShareToXButton
@@ -1535,43 +1624,44 @@ export function ChartsView() {
                     <span className="text-muted-foreground">{selectedSecurity.currency}</span>
                   </div>
                 )}
-                <button
-                  onClick={() => setIsFullscreen(true)}
-                  className="p-1.5 hover:bg-muted rounded-lg transition-colors"
-                  title="Vollbild"
-                >
-                  <Maximize2 size={16} />
-                </button>
               </div>
             </div>
 
-            {/* Outlier Warning Banner */}
+            {/* Outlier Warning Banner (collapsible) */}
             {outlierSummary && outlierSummary.outlierCount > 0 && (
-              <div className="mb-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2">
+              <button
+                onClick={() => setOutlierBannerCollapsed(!outlierBannerCollapsed)}
+                className="mb-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2 w-full text-left hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors cursor-pointer"
+              >
                 <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-amber-800 dark:text-amber-300">
                     {outlierSummary.outlierCount} Kursausreißer erkannt
                   </div>
-                  <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
-                    Die folgenden Kursdaten zeigen ungewöhnliche Tagesänderungen (&gt;30% oder Spike-Muster) und werden
-                    bei Analysen nicht berücksichtigt:
-                  </div>
-                  <div className="text-xs text-amber-600 dark:text-amber-500 mt-1 font-mono">
-                    {outlierSummary.outliers.slice(0, 5).map((o, i) => (
-                      <span key={o.date} className="inline-block mr-2">
-                        {o.date}: {o.changePercent > 0 ? '+' : ''}{o.changePercent.toFixed(1)}%
-                        {i < Math.min(4, outlierSummary.outliers.length - 1) && ','}
-                      </span>
-                    ))}
-                    {outlierSummary.outliers.length > 5 && (
-                      <span className="text-amber-500 dark:text-amber-600">
-                        ... und {outlierSummary.outliers.length - 5} weitere
-                      </span>
-                    )}
-                  </div>
+                  {!outlierBannerCollapsed && (
+                    <>
+                      <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                        Die folgenden Kursdaten zeigen ungewöhnliche Tagesänderungen (&gt;30% oder Spike-Muster) und werden
+                        bei Analysen nicht berücksichtigt:
+                      </div>
+                      <div className="text-xs text-amber-600 dark:text-amber-500 mt-1 font-mono">
+                        {outlierSummary.outliers.slice(0, 5).map((o, i) => (
+                          <span key={o.date} className="inline-block mr-2">
+                            {o.date}: {o.changePercent > 0 ? '+' : ''}{o.changePercent.toFixed(1)}%
+                            {i < Math.min(4, outlierSummary.outliers.length - 1) && ','}
+                          </span>
+                        ))}
+                        {outlierSummary.outliers.length > 5 && (
+                          <span className="text-amber-500 dark:text-amber-600">
+                            ... und {outlierSummary.outliers.length - 5} weitere
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
-              </div>
+                <Minimize2 size={14} className={`text-amber-500 flex-shrink-0 mt-0.5 transition-transform ${outlierBannerCollapsed ? 'rotate-180' : ''}`} />
+              </button>
             )}
 
             {/* Chart Area */}
@@ -1622,6 +1712,7 @@ export function ChartsView() {
                         logScale={useLogScale}
                         annotations={chartAnnotations}
                         onChartReady={handleChartReady}
+                        chartEvents={showChartEvents ? chartEvents : []}
                       />
                     </ChartErrorBoundary>
                     {/* Drawing Tools Overlay */}
@@ -1672,6 +1763,16 @@ export function ChartsView() {
               currency={selectedSecurity?.currency}
             />
             <PatternStatisticsPanel securityId={selectedSecurity?.id} />
+            {!isComparisonMode && ohlcData.length >= 30 && (
+              <RiskAnalysisPanel data={ohlcData} currency={selectedSecurity?.currency} />
+            )}
+            {!isComparisonMode && selectedSecurity && (
+              <FundamentalsPanel
+                securityId={selectedSecurity.id}
+                securityName={selectedSecurity.name}
+                currency={selectedSecurity.currency}
+              />
+            )}
 
             {/* Chart Info */}
             {ohlcData.length > 0 && (

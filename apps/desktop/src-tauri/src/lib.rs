@@ -15,6 +15,7 @@ pub mod quotes;
 pub mod security;
 pub mod tax;
 pub mod validation;
+pub mod analysis;
 pub mod indicators;
 
 use tauri::Manager;
@@ -90,6 +91,12 @@ pub fn run() {
             // Unified Quote Manager
             commands::quotes::quote_manager_audit,
             commands::quotes::apply_quote_manager_suggestion,
+            // Company Profiles
+            commands::quotes::fetch_security_profile,
+            commands::quotes::fetch_all_security_profiles,
+            // Fundamentals & Earnings (Yahoo Finance)
+            commands::quotes::fetch_security_fundamentals,
+            commands::quotes::fetch_security_earnings,
             // AI Quote Assistant
             commands::quotes::get_quote_problem_securities,
             commands::quotes::chat_with_quote_assistant,
@@ -445,6 +452,16 @@ pub fn run() {
             commands::market_screener::screen_market,
             commands::market_screener::cancel_market_screener,
             commands::market_screener::analyze_market_screener_with_ai,
+            // Advanced Analysis (CVaR, Drawdown, Rolling Returns, Monte Carlo, GARCH)
+            commands::analysis::calculate_var_cvar,
+            commands::analysis::calculate_portfolio_var_cvar,
+            commands::analysis::calculate_drawdowns,
+            commands::analysis::calculate_portfolio_drawdowns,
+            commands::analysis::calculate_rolling_returns,
+            commands::analysis::run_monte_carlo,
+            commands::analysis::calculate_garch,
+            commands::analysis::full_risk_analysis,
+            commands::analysis::get_chart_events,
             // API Key Validation
             commands::api_keys::validate_api_key,
         ])

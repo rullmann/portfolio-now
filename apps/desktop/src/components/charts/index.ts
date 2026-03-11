@@ -15,3 +15,5 @@ export { PatternStatisticsPanel } from './PatternStatisticsPanel';
 export { ShareToXButton } from './ShareToXButton';
 export type { ShareSecurityInfo } from './ShareToXButton';
 export { ShareToXModal } from './ShareToXModal';
+export { RiskAnalysisPanel } from './RiskAnalysisPanel';
+export { FundamentalsPanel } from './FundamentalsPanel';

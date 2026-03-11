@@ -234,6 +234,55 @@ export async function syncAllPrices(
   return invoke<QuoteSyncResult>('sync_all_prices', { onlyHeld, apiKeys });
 }
 
+// ============================================================================
+// Company Profiles
+// ============================================================================
+
+export interface CompanyProfile {
+  sector?: string;
+  industry?: string;
+  description?: string;
+  country?: string;
+  marketCap?: number;
+}
+
+export interface ProfileFetchSummary {
+  total: number;
+  fetched: number;
+  failed: number;
+  errors: string[];
+}
+
+export async function fetchSecurityProfile(
+  securityId: number,
+  apiKeys?: ApiKeys
+): Promise<CompanyProfile> {
+  return invoke<CompanyProfile>('fetch_security_profile', { securityId, apiKeys });
+}
+
+export async function fetchAllSecurityProfiles(
+  onlyHeld: boolean,
+  onlyMissing: boolean,
+  apiKeys?: ApiKeys
+): Promise<ProfileFetchSummary> {
+  return invoke<ProfileFetchSummary>('fetch_all_security_profiles', { onlyHeld, onlyMissing, apiKeys });
+}
+
+/** Extract company profile from SecurityData attributes */
+export function getSecurityProfile(attributes?: Record<string, string>): CompanyProfile | null {
+  if (!attributes) return null;
+  const sector = attributes['__sector'];
+  const industry = attributes['__industry'];
+  if (!sector && !industry) return null;
+  return {
+    sector,
+    industry,
+    description: attributes['__description'],
+    country: attributes['__country'],
+    marketCap: attributes['__market_cap'] ? Number(attributes['__market_cap']) : undefined,
+  };
+}
+
 /**
  * Quote error data for securities where quote fetch failed.
  */
@@ -3583,5 +3632,256 @@ export async function cancelMarketScreener(): Promise<void> {
 
 export async function analyzeMarketScreenerWithAi(request: MarketScreenerAiRequest): Promise<string> {
   return invoke<string>('analyze_market_screener_with_ai', { request });
+}
+
+// ============================================================================
+// Advanced Analysis (CVaR, Drawdown, Rolling Returns, Monte Carlo, GARCH)
+// ============================================================================
+
+export interface DateValue {
+  date: string;
+  value: number;
+}
+
+export interface VaRResult {
+  var95: number;
+  cvar95: number;
+  var99: number;
+  cvar99: number;
+  observations: number;
+  var95Annual: number;
+  cvar95Annual: number;
+  aiSummary: string;
+}
+
+export interface DrawdownPeriod {
+  startDate: string;
+  troughDate: string;
+  recoveryDate?: string;
+  depth: number;
+  durationDays: number;
+  recoveryDays?: number;
+}
+
+export interface DrawdownResult {
+  series: DateValue[];
+  worstDrawdowns: DrawdownPeriod[];
+  currentDrawdown: number;
+  averageDrawdown: number;
+  aiSummary: string;
+}
+
+export interface RollingReturnsResult {
+  windowDays: number;
+  windowLabel: string;
+  series: DateValue[];
+  best: number;
+  worst: number;
+  average: number;
+  median: number;
+  positivePct: number;
+  aiSummary: string;
+}
+
+export interface AllRollingReturns {
+  windows: RollingReturnsResult[];
+}
+
+export interface MonteCarloResult {
+  percentile5: DateValue[];
+  percentile25: DateValue[];
+  percentile50: DateValue[];
+  percentile75: DateValue[];
+  percentile95: DateValue[];
+  finalMean: number;
+  finalMedian: number;
+  finalStd: number;
+  probLoss: number;
+  probGain10: number;
+  probGain50: number;
+  numSimulations: number;
+  daysForward: number;
+  aiSummary: string;
+}
+
+export interface GarchResult {
+  historicalVolatility: DateValue[];
+  forecastVolatility: DateValue[];
+  omega: number;
+  alpha: number;
+  beta: number;
+  persistence: number;
+  longRunVolatility: number;
+  currentVolatility: number;
+  converged: boolean;
+  aiSummary: string;
+}
+
+export interface FullAnalysisResult {
+  varCvar: VaRResult;
+  drawdowns: DrawdownResult;
+  rollingReturns: AllRollingReturns;
+  monteCarlo: MonteCarloResult;
+  garch: GarchResult;
+  aiSummary: string;
+}
+
+export interface PricePoint {
+  date: string;
+  close: number;
+}
+
+export async function calculateVarCvar(prices: PricePoint[]): Promise<VaRResult> {
+  return invoke<VaRResult>('calculate_var_cvar', { prices });
+}
+
+export async function calculatePortfolioVarCvar(
+  portfolioId?: number,
+  startDate?: string,
+  endDate?: string,
+): Promise<VaRResult> {
+  return invoke<VaRResult>('calculate_portfolio_var_cvar', { portfolioId, startDate, endDate });
+}
+
+export async function calculateDrawdowns(prices: PricePoint[]): Promise<DrawdownResult> {
+  return invoke<DrawdownResult>('calculate_drawdowns', { prices });
+}
+
+export async function calculatePortfolioDrawdowns(
+  portfolioId?: number,
+  startDate?: string,
+  endDate?: string,
+): Promise<DrawdownResult> {
+  return invoke<DrawdownResult>('calculate_portfolio_drawdowns', { portfolioId, startDate, endDate });
+}
+
+export async function calculateRollingReturns(
+  prices: PricePoint[],
+  windows?: { days: number; label: string }[],
+): Promise<AllRollingReturns> {
+  return invoke<AllRollingReturns>('calculate_rolling_returns', { prices, windows });
+}
+
+export async function runMonteCarlo(
+  prices: PricePoint[],
+  numSimulations?: number,
+  daysForward?: number,
+): Promise<MonteCarloResult> {
+  return invoke<MonteCarloResult>('run_monte_carlo', { prices, numSimulations, daysForward });
+}
+
+export async function calculateGarch(
+  prices: PricePoint[],
+  forecastDays?: number,
+): Promise<GarchResult> {
+  return invoke<GarchResult>('calculate_garch', { prices, forecastDays });
+}
+
+export async function fullRiskAnalysis(
+  prices: PricePoint[],
+  monteCarloSimulations?: number,
+  monteCarloDays?: number,
+  garchForecastDays?: number,
+): Promise<FullAnalysisResult> {
+  return invoke<FullAnalysisResult>('full_risk_analysis', {
+    prices,
+    monteCarloSimulations,
+    monteCarloDays,
+    garchForecastDays,
+  });
+}
+
+// ============================================================================
+// Fundamentals & Earnings
+// ============================================================================
+
+export interface YahooFundamentals {
+  trailingPe?: number;
+  forwardPe?: number;
+  priceToBook?: number;
+  priceToSales?: number;
+  enterpriseToEbitda?: number;
+  pegRatio?: number;
+  returnOnEquity?: number;
+  returnOnAssets?: number;
+  profitMargin?: number;
+  operatingMargin?: number;
+  grossMargin?: number;
+  debtToEquity?: number;
+  currentRatio?: number;
+  quickRatio?: number;
+  freeCashFlow?: number;
+  operatingCashFlow?: number;
+  revenueGrowth?: number;
+  earningsGrowth?: number;
+  marketCap?: number;
+  enterpriseValue?: number;
+  revenue?: number;
+  ebitda?: number;
+  dividendYield?: number;
+  dividendRate?: number;
+  payoutRatio?: number;
+  bookValue?: number;
+  earningsPerShare?: number;
+  revenuePerShare?: number;
+  sharesOutstanding?: number;
+  floatShares?: number;
+  targetMeanPrice?: number;
+  targetHighPrice?: number;
+  targetLowPrice?: number;
+  recommendationMean?: number;
+  recommendationKey?: string;
+  numberOfAnalystOpinions?: number;
+}
+
+export interface EarningsQuarter {
+  quarter: string;
+  date?: string;
+  epsActual?: number;
+  epsEstimate?: number;
+  epsSurprise?: number;
+  epsSurprisePct?: number;
+  revenueActual?: number;
+  revenueEstimate?: number;
+}
+
+export interface YahooEarnings {
+  quarterlyEarnings: EarningsQuarter[];
+  nextEarningsDate?: string;
+  currentYearEstimate?: number;
+  nextYearEstimate?: number;
+  currentQuarterEstimate?: number;
+  epsGrowthEstimate?: number;
+  revenueGrowthEstimate?: number;
+}
+
+// ============================================================================
+// Chart Events (Dividend + Earnings markers)
+// ============================================================================
+
+export interface ChartEvent {
+  date: string;
+  eventType: 'dividend' | 'ex_dividend' | 'earnings_beat' | 'earnings_miss' | 'earnings_inline' | 'earnings_upcoming';
+  label: string;
+  value?: number;
+}
+
+export async function getChartEvents(
+  securityId: number,
+  finnhubApiKey?: string,
+): Promise<ChartEvent[]> {
+  return invoke<ChartEvent[]>('get_chart_events', { securityId, finnhubApiKey });
+}
+
+// ============================================================================
+// Fundamentals & Earnings
+// ============================================================================
+
+export async function fetchSecurityFundamentals(securityId: number): Promise<YahooFundamentals> {
+  return invoke<YahooFundamentals>('fetch_security_fundamentals', { securityId });
+}
+
+export async function fetchSecurityEarnings(securityId: number): Promise<YahooEarnings> {
+  return invoke<YahooEarnings>('fetch_security_earnings', { securityId });
 }
 

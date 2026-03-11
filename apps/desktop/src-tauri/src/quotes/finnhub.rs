@@ -294,6 +294,126 @@ pub async fn get_profile(symbol: &str, api_key: &str) -> Result<ProfileResponse>
     Ok(profile)
 }
 
+// ============================================================================
+// Earnings Data
+// ============================================================================
+
+use serde::Serialize;
+
+/// Single earnings result from Finnhub /stock/earnings
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct FinnhubEarning {
+    actual: Option<f64>,
+    estimate: Option<f64>,
+    period: Option<String>,
+    quarter: Option<i64>,
+    surprise: Option<f64>,
+    surprise_percent: Option<f64>,
+    symbol: Option<String>,
+    year: Option<i64>,
+}
+
+/// Parsed earnings event for chart display
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinnhubEarningsEvent {
+    pub date: String,
+    pub eps_actual: Option<f64>,
+    pub eps_estimate: Option<f64>,
+    pub surprise_percent: Option<f64>,
+    pub quarter: Option<i64>,
+    pub year: Option<i64>,
+}
+
+/// Fetch earnings history from Finnhub (free tier, full history)
+pub async fn fetch_earnings(symbol: &str, api_key: &str) -> Result<Vec<FinnhubEarningsEvent>> {
+    let clean = normalize_symbol(symbol);
+    let url = format!("{}/stock/earnings?symbol={}&limit=100", BASE_URL, urlencoding::encode(&clean));
+    log::debug!("Fetching Finnhub earnings for {}", clean);
+
+    let client = create_client(api_key)?;
+    let response = client.get(&url).send().await
+        .map_err(|e| anyhow!("Finnhub earnings request failed for {}: {}", clean, e))?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("Finnhub earnings HTTP error for {}: {}", clean, body));
+    }
+
+    let data: Vec<FinnhubEarning> = response.json().await
+        .map_err(|e| anyhow!("Failed to parse Finnhub earnings for {}: {}", clean, e))?;
+
+    let events: Vec<FinnhubEarningsEvent> = data.into_iter()
+        .filter_map(|e| {
+            let date = e.period?;
+            if date.len() < 10 { return None; }
+            Some(FinnhubEarningsEvent {
+                date,
+                eps_actual: e.actual,
+                eps_estimate: e.estimate,
+                surprise_percent: e.surprise_percent,
+                quarter: e.quarter,
+                year: e.year,
+            })
+        })
+        .collect();
+
+    log::info!("Finnhub: {} earnings events for {}", events.len(), clean);
+    Ok(events)
+}
+
+/// Finnhub earnings calendar response
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EarningsCalendarResponse {
+    earnings_calendar: Option<Vec<EarningsCalendarEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct EarningsCalendarEntry {
+    date: Option<String>,
+    symbol: Option<String>,
+    hour: Option<String>,
+    eps_estimate: Option<f64>,
+    eps_actual: Option<f64>,
+    quarter: Option<i64>,
+    year: Option<i64>,
+}
+
+/// Fetch upcoming earnings date from Finnhub calendar
+pub async fn fetch_next_earnings_date(symbol: &str, api_key: &str) -> Result<Option<String>> {
+    let clean = normalize_symbol(symbol);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let future = (chrono::Utc::now() + chrono::Duration::days(90)).format("%Y-%m-%d").to_string();
+
+    let url = format!(
+        "{}/calendar/earnings?from={}&to={}&symbol={}",
+        BASE_URL, today, future, urlencoding::encode(&clean)
+    );
+
+    let client = create_client(api_key)?;
+    let response = client.get(&url).send().await
+        .map_err(|e| anyhow!("Finnhub calendar request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let data: EarningsCalendarResponse = response.json().await
+        .map_err(|e| anyhow!("Failed to parse Finnhub calendar: {}", e))?;
+
+    let next = data.earnings_calendar
+        .and_then(|cal| cal.into_iter()
+            .find(|e| e.symbol.as_deref() == Some(&clean) && e.date.is_some())
+            .and_then(|e| e.date));
+
+    Ok(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

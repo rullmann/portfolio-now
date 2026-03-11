@@ -36,3 +36,4 @@ pub mod validation;
 pub mod watchlist;
 pub mod indicators;
 pub mod market_screener;
+pub mod analysis;

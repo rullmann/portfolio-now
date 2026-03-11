@@ -1275,6 +1275,26 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Created pp_chart_analysis table");
     }
 
+    // Migration: Create pp_earnings_cache table for accumulated earnings history
+    if !table_exists(conn, "pp_earnings_cache") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_earnings_cache (
+                ticker TEXT NOT NULL,
+                date TEXT NOT NULL,
+                eps_actual REAL,
+                eps_estimate REAL,
+                surprise_percent REAL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, date)
+            );
+            CREATE INDEX idx_pp_earnings_cache_ticker ON pp_earnings_cache(ticker);
+            "#,
+        )?;
+        log::info!("Migration: Created pp_earnings_cache table");
+    }
+
     Ok(())
 }
 

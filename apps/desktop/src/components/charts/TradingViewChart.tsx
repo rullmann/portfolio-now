@@ -18,14 +18,17 @@ import {
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
+  createSeriesMarkers,
 } from 'lightweight-charts';
 import type {
   IChartApi,
   ISeriesApi,
+  ISeriesMarkersPluginApi,
   CandlestickData,
   HistogramData,
   LineData,
   Time,
+  SeriesMarker,
 } from 'lightweight-charts';
 import type {
   OHLCData,
@@ -39,6 +42,7 @@ import type {
   FibonacciResult,
 } from '../../lib/indicators';
 import type { ChartAnnotationWithId } from '../../lib/types';
+import type { ChartEvent } from '../../lib/api';
 import {
   calculateSMA,
   calculateEMA,
@@ -76,6 +80,8 @@ export interface TradingViewChartProps {
   onChartReady?: (api: IChartApi, mainSeries: ISeriesApi<'Candlestick'>) => void;
   /** Callback when visible logical range changes (for lazy loading older data) */
   onVisibleLogicalRangeChange?: (range: { from: number; to: number } | null) => void;
+  /** Chart events for markers (dividends, earnings) */
+  chartEvents?: ChartEvent[];
 }
 
 // ============================================================================
@@ -117,9 +123,12 @@ export function TradingViewChart({
   onAnnotationClick,
   onChartReady,
   onVisibleLogicalRangeChange,
+  chartEvents = [],
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const markerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const [legendData, setLegendData] = useState<{
     open?: number;
     high?: number;
@@ -257,9 +266,13 @@ export function TradingViewChart({
       crosshair: {
         mode: CrosshairMode.Normal,
       },
-      rightPriceScale: {
+      leftPriceScale: {
+        visible: true,
         borderColor: isDark ? '#1b2332' : '#e1e1e1',
         mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+      },
+      rightPriceScale: {
+        visible: false,
       },
       timeScale: {
         borderColor: isDark ? '#1b2332' : '#e1e1e1',
@@ -277,8 +290,26 @@ export function TradingViewChart({
       borderVisible: false,
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
+      priceScaleId: 'left',
     });
     candlestickSeries.setData(chartData.candles);
+
+    // Invisible marker series pinned to very bottom of chart for event markers
+    const markerSeries = chart.addSeries(LineSeries, {
+      color: 'transparent',
+      lineWidth: 1,
+      priceScaleId: 'markers',
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    // Set data points at value 0 for all candle dates
+    markerSeries.setData(chartData.candles.map(c => ({ time: c.time, value: 0 })));
+    chart.priceScale('markers').applyOptions({
+      scaleMargins: { top: 0.95, bottom: 0 },
+      visible: false,
+    });
+    markerSeriesRef.current = markerSeries;
 
     // Add volume series
     let volumeSeries: ISeriesApi<'Histogram'> | null = null;
@@ -307,6 +338,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           series.setData(convertToLineData(indData as IndicatorLineData[]));
         }
@@ -321,6 +353,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dashed,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           upperSeries.setData(convertToLineData(bb.upper));
 
@@ -329,6 +362,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           middleSeries.setData(convertToLineData(bb.middle));
 
@@ -338,6 +372,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dashed,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           lowerSeries.setData(convertToLineData(bb.lower));
         }
@@ -418,6 +453,7 @@ export function TradingViewChart({
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: true,
+            priceScaleId: 'left',
           });
           vwapSeries.setData(convertToLineData(indData as IndicatorLineData[]));
         }
@@ -519,6 +555,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           tenkanSeries.setData(convertToLineData(ichi.tenkan));
 
@@ -528,6 +565,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           kijunSeries.setData(convertToLineData(ichi.kijun));
 
@@ -537,6 +575,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           senkouASeries.setData(convertToLineData(ichi.senkouA));
 
@@ -546,6 +585,7 @@ export function TradingViewChart({
             lineWidth: 1,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           senkouBSeries.setData(convertToLineData(ichi.senkouB));
 
@@ -556,6 +596,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dotted,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           chikouSeries.setData(convertToLineData(ichi.chikou));
         }
@@ -570,6 +611,7 @@ export function TradingViewChart({
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: true,
+            priceScaleId: 'left',
           });
           pivotSeries.setData(convertToLineData(pivots.pivot));
 
@@ -580,6 +622,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dashed,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           r1Series.setData(convertToLineData(pivots.r1));
 
@@ -589,6 +632,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dotted,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           r2Series.setData(convertToLineData(pivots.r2));
 
@@ -598,6 +642,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dotted,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           r3Series.setData(convertToLineData(pivots.r3));
 
@@ -608,6 +653,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dashed,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           s1Series.setData(convertToLineData(pivots.s1));
 
@@ -617,6 +663,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dotted,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           s2Series.setData(convertToLineData(pivots.s2));
 
@@ -626,6 +673,7 @@ export function TradingViewChart({
             lineStyle: LineStyle.Dotted,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceScaleId: 'left',
           });
           s3Series.setData(convertToLineData(pivots.s3));
         }
@@ -692,8 +740,6 @@ export function TradingViewChart({
           }
         });
 
-      // Note: Pattern/Signal markers are not supported in lightweight-charts v5
-      // They are shown in the annotations list below the chart instead
     }
 
     // Crosshair handler
@@ -772,12 +818,61 @@ export function TradingViewChart({
 
     return () => {
       resizeObserver.disconnect();
+      if (markersPluginRef.current) {
+        markersPluginRef.current.detach();
+        markersPluginRef.current = null;
+      }
+      markerSeriesRef.current = null;
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
       }
     };
   }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations, onChartReady, onVisibleLogicalRangeChange]);
+
+  // Separate useEffect for chart event markers — avoids full chart rebuild on toggle
+  useEffect(() => {
+    const series = markerSeriesRef.current;
+    if (!series) return;
+
+    // Detach old markers plugin
+    if (markersPluginRef.current) {
+      markersPluginRef.current.detach();
+      markersPluginRef.current = null;
+    }
+
+    if (!chartEvents || chartEvents.length === 0) return;
+
+    const validDates = new Set(chartData.candles.map(c => c.time as string));
+    const eventColorMap: Record<string, { color: string; text: string }> = {
+      dividend:          { color: '#3b82f6', text: 'D' },
+      ex_dividend:       { color: '#f59e0b', text: 'X' },
+      earnings_beat:     { color: '#22c55e', text: 'E' },
+      earnings_miss:     { color: '#ef4444', text: 'E' },
+      earnings_inline:   { color: '#9ca3af', text: 'E' },
+      earnings_upcoming: { color: '#a78bfa', text: 'E' },
+    };
+
+    const markers: SeriesMarker<Time>[] = chartEvents
+      .filter(e => validDates.has(e.date.substring(0, 10)))
+      .map(event => {
+        const cfg = eventColorMap[event.eventType] || { color: '#6b7280', text: '•' };
+        return {
+          time: event.date.substring(0, 10) as Time,
+          position: 'aboveBar' as const,
+          shape: 'circle' as const,
+          color: cfg.color,
+          text: cfg.text,
+          size: 1,
+        };
+      })
+      .sort((a, b) => (a.time as string).localeCompare(b.time as string));
+
+    console.log(`[ChartEvents] ${chartEvents.length} events, ${markers.length} matched chart dates, sample dates:`, chartEvents.slice(0, 3).map(e => e.date));
+    if (markers.length > 0) {
+      markersPluginRef.current = createSeriesMarkers(series, markers);
+    }
+  }, [chartEvents, chartData.candles]);
 
   // Early return for no data
   if (!data || data.length < 2) {
