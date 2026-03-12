@@ -3618,12 +3618,12 @@ export async function getUserProfilePicture(): Promise<string | null> {
 
 import type { MarketIndex, MarketScreenerResponse, MarketScreenerAiRequest } from './types';
 
-export async function getMarketIndices(): Promise<MarketIndex[]> {
-  return invoke<MarketIndex[]>('get_market_indices');
+export async function getMarketIndices(finnhubApiKey?: string): Promise<MarketIndex[]> {
+  return invoke<MarketIndex[]>('get_market_indices', { finnhubApiKey: finnhubApiKey || null });
 }
 
-export async function screenMarket(indexId: string, filters: import('./screener').ScreenerFilter[]): Promise<MarketScreenerResponse> {
-  return invoke<MarketScreenerResponse>('screen_market', { request: { indexId, filters } });
+export async function screenMarket(indexId: string, filters: import('./screener').ScreenerFilter[], finnhubApiKey?: string): Promise<MarketScreenerResponse> {
+  return invoke<MarketScreenerResponse>('screen_market', { request: { indexId, filters, finnhubApiKey: finnhubApiKey || null } });
 }
 
 export async function cancelMarketScreener(): Promise<void> {
@@ -3883,5 +3883,50 @@ export async function fetchSecurityFundamentals(securityId: number): Promise<Yah
 
 export async function fetchSecurityEarnings(securityId: number): Promise<YahooEarnings> {
   return invoke<YahooEarnings>('fetch_security_earnings', { securityId });
+}
+
+// ============================================================================
+// Cache Management
+// ============================================================================
+
+export interface CachedSecurityInfo {
+  securityId: number;
+  name: string;
+  ticker: string | null;
+  isin: string | null;
+  isInWatchlist: boolean;
+  isHeld: boolean;
+  priceCount: number;
+  priceDateMin: string | null;
+  priceDateMax: string | null;
+  earningsCount: number;
+  dividendCount: number;
+  hasLatestPrice: boolean;
+  totalDataPoints: number;
+  lastUpdatedAt: string | null;
+}
+
+export interface CacheDeleteResult {
+  pricesDeleted: number;
+  latestPricesDeleted: number;
+  earningsDeleted: number;
+  dividendsDeleted: number;
+  eventsDeleted: number;
+}
+
+export async function getCachedSecurities(): Promise<CachedSecurityInfo[]> {
+  return invoke<CachedSecurityInfo[]>('get_cached_securities');
+}
+
+export async function deleteCachedDataForSecurity(securityId: number): Promise<CacheDeleteResult> {
+  return invoke<CacheDeleteResult>('delete_cached_data_for_security', { securityId });
+}
+
+export async function deleteAllOrphanedCache(): Promise<CacheDeleteResult> {
+  return invoke<CacheDeleteResult>('delete_all_orphaned_cache');
+}
+
+export async function rebuildCacheMeta(): Promise<number> {
+  return invoke<number>('rebuild_cache_meta');
 }
 

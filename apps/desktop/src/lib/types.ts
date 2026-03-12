@@ -974,6 +974,7 @@ export interface MarketIndex {
   name: string;
   region: string;
   tickerCount: number;
+  source: string;
 }
 
 export interface MarketScreenerProgress {

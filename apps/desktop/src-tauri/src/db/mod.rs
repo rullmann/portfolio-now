@@ -1295,6 +1295,40 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         log::info!("Migration: Created pp_earnings_cache table");
     }
 
+    // Migration: Create pp_data_cache_meta table for cache management UI
+    if !table_exists(conn, "pp_data_cache_meta") {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE pp_data_cache_meta (
+                security_id INTEGER PRIMARY KEY,
+                security_name TEXT NOT NULL,
+                ticker TEXT,
+                isin TEXT,
+                price_count INTEGER NOT NULL DEFAULT 0,
+                price_date_min TEXT,
+                price_date_max TEXT,
+                earnings_count INTEGER NOT NULL DEFAULT 0,
+                dividend_count INTEGER NOT NULL DEFAULT 0,
+                has_latest_price INTEGER NOT NULL DEFAULT 0,
+                last_updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (security_id) REFERENCES pp_security(id) ON DELETE CASCADE
+            );
+            "#,
+        )?;
+        log::info!("Migration: Created pp_data_cache_meta table");
+    }
+
+    // Migration: Add security_id to pp_earnings_cache for cache management
+    if table_exists(conn, "pp_earnings_cache") && !column_exists(conn, "pp_earnings_cache", "security_id") {
+        conn.execute("ALTER TABLE pp_earnings_cache ADD COLUMN security_id INTEGER", [])?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_pp_earnings_cache_security ON pp_earnings_cache(security_id);")?;
+        conn.execute(
+            "UPDATE pp_earnings_cache SET security_id = (SELECT id FROM pp_security WHERE ticker = pp_earnings_cache.ticker LIMIT 1)",
+            [],
+        )?;
+        log::info!("Migration: Added security_id to pp_earnings_cache");
+    }
+
     Ok(())
 }
 

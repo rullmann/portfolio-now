@@ -2023,6 +2023,16 @@ fn get_portfolio_value_history(
     Ok(values)
 }
 
+/// Public wrapper for advanced analysis commands
+pub fn get_portfolio_value_history_public(
+    conn: &Connection,
+    portfolio_id: Option<i64>,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Vec<(NaiveDate, f64)>> {
+    get_portfolio_value_history(conn, portfolio_id, start_date, end_date)
+}
+
 /// Calculate daily returns from value series (without flow adjustment)
 /// Note: Kept for reference/testing, main code now uses calculate_flow_adjusted_returns()
 #[allow(dead_code)]

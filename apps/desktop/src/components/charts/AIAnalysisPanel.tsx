@@ -100,6 +100,7 @@ export function AIAnalysisPanel({
   // Enhanced analysis results
   const [alerts, setAlerts] = useState<AlertSuggestion[]>([]);
   const [riskReward, setRiskReward] = useState<RiskRewardAnalysis | null>(null);
+  const [newsSummary, setNewsSummary] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const retryTimerRef = useRef<number | null>(null);
   const rateLimiterRef = useRef<RateLimiter>(new RateLimiter(5000)); // 5 second minimum between calls
@@ -215,6 +216,7 @@ export function AIAnalysisPanel({
     setAnalysisInfo(null);
     setAnalysisDate(null);
     setTrendInfo(null);
+    setNewsSummary(null);
     setAlerts([]);
     setRiskReward(null);
 
@@ -275,6 +277,7 @@ export function AIAnalysisPanel({
     setAnalysisInfo(null);
     setAnalysisDate(null);
     setTrendInfo(null);
+    setNewsSummary(null);
     setAlerts([]);
     setRiskReward(null);
     setError(null);
@@ -582,6 +585,7 @@ export function AIAnalysisPanel({
           setTrendInfo(result.trend);
           setAlerts(result.alerts || []);
           setRiskReward(result.riskReward || null);
+          setNewsSummary(result.newsSummary || null);
           setAnalysisDate(now);
           setAnalysisInfo({ provider: result.provider, model: result.model, tokens: result.tokensUsed });
           calculateAiCost(result.provider, result.model, result.inputTokens, result.outputTokens, result.tokensUsed, baseCurrency)
@@ -784,6 +788,16 @@ export function AIAnalysisPanel({
       }
     } finally {
       setIsAnalyzing(false);
+      // Auto-scroll to make analysis results visible
+      setTimeout(() => {
+        const container = document.getElementById('view-scroll-container');
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth',
+          });
+        }
+      }, 200);
     }
   };
 
@@ -1095,6 +1109,19 @@ export function AIAnalysisPanel({
                 <div className="prose-ai">
                   <SafeMarkdown>{analysis}</SafeMarkdown>
                 </div>
+
+                {/* News summary */}
+                {newsSummary && (
+                  <div className="pt-2 border-t border-border">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <span className="text-[10px]">📰</span>
+                      <span className="text-xs font-medium">Aktuelle Nachrichten</span>
+                    </div>
+                    <div className="prose-ai text-xs text-muted-foreground">
+                      <SafeMarkdown>{newsSummary}</SafeMarkdown>
+                    </div>
+                  </div>
+                )}
 
                 {/* Annotations list */}
                 {annotations.length > 0 && (

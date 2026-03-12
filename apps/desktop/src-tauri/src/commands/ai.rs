@@ -170,12 +170,32 @@ pub async fn analyze_chart_enhanced(
     let model = resolve_model(&request.model);
     let provider = request.provider.as_str();
 
+    // Two-step flow: pre-fetch news via text API when web context is requested
+    let mut context = request.context.clone();
+    if context.include_web_context && context.web_news_context.is_none() {
+        let news_prompt = format!(
+            "Fasse die wichtigsten aktuellen Nachrichten zu {} ({}) der letzten 7 Tage in 3-5 kurzen Stichpunkten zusammen. Fokus: Kursrelevante Ereignisse, Earnings, Analysteneinschätzungen, Branchennews. Antworte auf Deutsch.",
+            context.security_name,
+            context.ticker.as_deref().unwrap_or("N/A")
+        );
+        let news_result = match provider {
+            "perplexity" => perplexity::complete_text(&model, &request.api_key, &news_prompt).await.ok(),
+            "openai" => openai::complete_text_with_web_search(&model, &request.api_key, &news_prompt).await.ok(),
+            "openrouter" => openrouter::complete_text(&model, &request.api_key, &news_prompt).await.ok(),
+            _ => None,
+        };
+        if let Some(news) = news_result {
+            log::info!("Pre-fetched news for {}: {} chars", context.security_name, news.len());
+            context.web_news_context = Some(news);
+        }
+    }
+
     let result = match provider {
-        "claude" => claude::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
-        "openai" => openai::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
-        "gemini" => gemini::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
-        "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
-        "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &model, &request.api_key, &request.context).await,
+        "claude" => claude::analyze_enhanced(&request.image_base64, &model, &request.api_key, &context).await,
+        "openai" => openai::analyze_enhanced(&request.image_base64, &model, &request.api_key, &context).await,
+        "gemini" => gemini::analyze_enhanced(&request.image_base64, &model, &request.api_key, &context).await,
+        "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &model, &request.api_key, &context).await,
+        "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &model, &request.api_key, &context).await,
         _ => Err(AiError::other("Unknown", &model, &format!("Unbekannter Anbieter: {}", provider))),
     };
 
@@ -184,11 +204,11 @@ pub async fn analyze_chart_enhanced(
             if let Some(fb) = get_fallback_model(provider, &model) {
                 log::info!("Auto-fallback: {} -> {} (provider: {})", model, fb, provider);
                 let retry = match provider {
-                    "claude" => claude::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
-                    "openai" => openai::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
-                    "gemini" => gemini::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
-                    "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
-                    "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &request.context).await,
+                    "claude" => claude::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &context).await,
+                    "openai" => openai::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &context).await,
+                    "gemini" => gemini::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &context).await,
+                    "perplexity" => perplexity::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &context).await,
+                    "openrouter" => openrouter::analyze_enhanced(&request.image_base64, &fb, &request.api_key, &context).await,
                     _ => return Err(ai_err_to_string(e.clone())),
                 };
                 retry.map_err(ai_err_to_string)

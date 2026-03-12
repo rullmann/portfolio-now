@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon, Mic, Square, SlidersHorizontal, CandlestickChart, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { X, Send, Loader2, Trash2, MessageSquare, GripVertical, CheckCircle, XCircle, AlertTriangle, Receipt, Plus, Check, Image as ImageIcon, Mic, Square, SlidersHorizontal, CandlestickChart, PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -304,6 +304,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
   const [isCollapsed, setIsCollapsed] = useState(() => {
     return localStorage.getItem(STORAGE_KEY_COLLAPSED) === 'true';
   });
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [lastResponseCost, setLastResponseCost] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1109,10 +1110,10 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
     loadMessagesForConversation();
   }, [currentConversationId]);
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages or suggestions arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, suggestions, pendingQueries]);
 
   // Focus input and scroll to bottom when panel opens
   useEffect(() => {
@@ -1141,14 +1142,18 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
   // Keyboard shortcut: Cmd+. to toggle collapse
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '.' && !isFullscreen) {
         e.preventDefault();
         toggleCollapsed();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [toggleCollapsed]);
+  }, [toggleCollapsed, isFullscreen]);
 
   // Handle resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1565,6 +1570,17 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
       sendMessage(input);
     }
   };
+
+  // Consume pending chat analysis from Screener Analyse button
+  const pendingChatAnalysis = useUIStore((s) => s.pendingChatAnalysis);
+  const clearPendingChatAnalysis = useUIStore((s) => s.clearPendingChatAnalysis);
+  useEffect(() => {
+    if (pendingChatAnalysis && !isLoading && currentConversationId) {
+      const { message } = pendingChatAnalysis;
+      clearPendingChatAnalysis();
+      sendMessage(message);
+    }
+  }, [pendingChatAnalysis, isLoading, currentConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Create a new conversation
   const handleNewConversation = async () => {
@@ -2059,15 +2075,20 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
       {/* Panel — flex flow or fixed overlay depending on mode */}
       <div
         ref={panelRef}
-        style={{
+        style={isFullscreen ? {} : {
           width: isCollapsed ? COLLAPSED_WIDTH : panelWidth,
           ...(overlay ? {} : { flexBasis: isCollapsed ? COLLAPSED_WIDTH : panelWidth }),
         }}
         className={cn(
-          'h-full relative transition-[width,flex-basis] duration-200',
-          'bg-background border-l border-border shadow-xl',
+          'relative transition-[width,flex-basis] duration-200',
+          'bg-background shadow-xl',
           'flex flex-col',
-          overlay ? 'fixed right-0 top-0 z-50' : 'shrink-0',
+          isFullscreen
+            ? 'fixed inset-0 z-50 border-0'
+            : cn(
+                'h-full border-l border-border',
+                overlay ? 'fixed right-0 top-0 z-50' : 'shrink-0',
+              ),
           isResizing && 'select-none !transition-none'
         )}
         onDrop={handleDrop}
@@ -2093,8 +2114,8 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
           </div>
         )}
 
-        {/* Resize Handle — only when expanded */}
-        {!isCollapsed && (
+        {/* Resize Handle — only when expanded and not fullscreen */}
+        {!isCollapsed && !isFullscreen && (
           <div
             onMouseDown={handleMouseDown}
             onDoubleClick={toggleCollapsed}
@@ -2110,7 +2131,7 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
         )}
 
         {/* Collapsed sidebar strip */}
-        {isCollapsed ? (
+        {isCollapsed && !isFullscreen ? (
           <div className="flex flex-col items-center h-full py-3 gap-3">
             <button
               onClick={toggleCollapsed}
@@ -2189,14 +2210,23 @@ export function ChatPanel({ isOpen, onClose, overlay = false }: ChatPanelProps) 
               </button>
             )}
             <button
-              onClick={toggleCollapsed}
+              onClick={() => { if (!isFullscreen) setIsCollapsed(false); setIsFullscreen(!isFullscreen); }}
               className="p-2 rounded hover:bg-muted transition-colors"
-              title="Einklappen (⌘.)"
+              title={isFullscreen ? 'Vollbild beenden' : 'Vollbild'}
             >
-              <PanelRightClose className="h-4 w-4" />
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
+            {!isFullscreen && (
+              <button
+                onClick={toggleCollapsed}
+                className="p-2 rounded hover:bg-muted transition-colors"
+                title="Einklappen (⌘.)"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </button>
+            )}
             <button
-              onClick={onClose}
+              onClick={() => { setIsFullscreen(false); onClose(); }}
               className="p-2 rounded hover:bg-muted transition-colors"
               title="Chat schließen"
             >

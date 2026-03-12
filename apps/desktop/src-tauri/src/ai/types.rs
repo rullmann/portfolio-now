@@ -277,6 +277,10 @@ pub struct EnhancedChartContext {
     // When true, AI should search for recent news and incorporate into analysis
     #[serde(default)]
     pub include_web_context: bool,
+
+    // Pre-fetched web news (injected by the two-step flow in commands/ai.rs)
+    #[serde(default)]
+    pub web_news_context: Option<String>,
 }
 
 /// AI-suggested price alert
@@ -324,6 +328,7 @@ pub struct EnhancedAnnotationAnalysisJson {
     pub annotations: Vec<ChartAnnotation>,
     pub alerts: Vec<AlertSuggestion>,
     pub risk_reward: Option<RiskRewardAnalysis>,
+    pub news_summary: Option<String>,
 }
 
 /// Response from enhanced AI analysis with annotations
@@ -335,6 +340,7 @@ pub struct EnhancedAnnotationAnalysisResponse {
     pub annotations: Vec<ChartAnnotation>,
     pub alerts: Vec<AlertSuggestion>,
     pub risk_reward: Option<RiskRewardAnalysis>,
+    pub news_summary: Option<String>,
     pub provider: String,
     pub model: String,
     pub tokens_used: Option<u32>,

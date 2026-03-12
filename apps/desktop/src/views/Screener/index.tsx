@@ -18,7 +18,7 @@ import {
   X,
   Globe,
   Database,
-  Bot,
+
   Loader2,
   Square,
   AlertTriangle,
@@ -26,13 +26,14 @@ import {
   Info,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import {
   getSecurities,
   getPriceHistory,
   getMarketIndices,
   screenMarket,
   cancelMarketScreener,
-  analyzeMarketScreenerWithAi,
+
   addExternalSecurityToWatchlist,
   createWatchlist,
   getWatchlists,
@@ -52,12 +53,15 @@ import {
   type ScreenerPreset,
 } from '../../lib/screener';
 import { runScreener, detectRegime, scoreSetup } from '../../lib/indicators-rust';
-import { SecurityLogo, RegimeBadge, SetupScoreBadge, SafeMarkdown } from '../../components/common';
-import type { RegimeAnalysis, SetupScore } from '../../lib/indicators';
+import { SecurityLogo, RegimeBadge, SetupScoreBadge } from '../../components/common';
+import type { RegimeAnalysis, SetupScore, TradingAnalysis } from '../../lib/indicators';
 import { useCachedLogos, type CachedLogo } from '../../lib/hooks';
 import { useSettingsStore, useUIStore } from '../../store';
 import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
+
 import type { SecurityData as APISecurity, PriceData, MarketScreenerProgress, BreakoutScore } from '../../lib/types';
+
+// ChevronsUpDown is not in lucide - we use ChevronDown + Search for the combobox
 
 // ============================================================================
 // Breakout Score Components
@@ -83,41 +87,55 @@ function BreakoutBadge({ score }: { score: BreakoutScore }) {
 
 function BreakoutDetailPanel({ score }: { score: BreakoutScore }) {
   const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
 
   return (
-    <div className="mt-1">
+    <div className="relative" ref={panelRef}>
       <button
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+        title="Regeldetails anzeigen"
       >
-        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        Regeldetails
+        <Info size={10} />
       </button>
       {open && (
-        <div className="mt-2 space-y-1.5 p-3 bg-muted/50 rounded-lg border border-border text-xs" onClick={(e) => e.stopPropagation()}>
-          {score.rules.map((rule, i) => (
-            <div key={i} className="flex items-start gap-2">
-              <div className="flex gap-0.5 mt-0.5 shrink-0">
-                {Array.from({ length: rule.maxPoints }).map((_, dot) => (
-                  <span
-                    key={dot}
-                    className={`w-2 h-2 rounded-full border ${dot < rule.points ? 'bg-primary border-primary' : 'bg-transparent border-muted-foreground/40'}`}
-                  />
-                ))}
+        <div
+          className="absolute right-0 top-6 z-50 w-72 p-2.5 bg-popover border border-border rounded-lg shadow-xl text-[11px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="font-medium text-xs mb-1.5">Breakout {score.totalPoints}/{score.maxPoints}</div>
+          <div className="space-y-1">
+            {score.rules.map((rule, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <div className="flex gap-px shrink-0">
+                  {Array.from({ length: rule.maxPoints }).map((_, dot) => (
+                    <span
+                      key={dot}
+                      className={`w-1.5 h-1.5 rounded-full ${dot < rule.points ? 'bg-primary' : 'bg-muted-foreground/25'}`}
+                    />
+                  ))}
+                </div>
+                <span className={`truncate ${rule.points > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {rule.ruleName}
+                </span>
+                <span className="text-muted-foreground ml-auto shrink-0">{rule.points}/{rule.maxPoints}</span>
               </div>
-              <div className="min-w-0">
-                <span className="font-medium">{rule.ruleName}</span>
-                <span className="text-muted-foreground ml-1">({rule.points}/{rule.maxPoints})</span>
-                {rule.description && (
-                  <p className="text-muted-foreground mt-0.5">{rule.description}</p>
-                )}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
           {score.downgraded && score.downgradeReason && (
-            <div className="flex items-start gap-1.5 mt-2 pt-2 border-t border-border text-amber-400">
-              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-              <span>{score.downgradeReason}</span>
+            <div className="flex items-center gap-1 mt-1.5 pt-1.5 border-t border-border text-amber-400 text-[10px]">
+              <AlertTriangle size={10} className="shrink-0" />
+              <span className="truncate">{score.downgradeReason}</span>
             </div>
           )}
         </div>
@@ -343,10 +361,16 @@ function MarketResultsTable({
   results,
   sortBy,
   onSortChange,
+  onAddToWatchlist,
+  onAnalyze,
+  analyzingTicker,
 }: {
   results: ScreenerResult[];
   sortBy: 'default' | 'breakout';
   onSortChange: (sort: 'default' | 'breakout') => void;
+  onAddToWatchlist?: (result: ScreenerResult) => void;
+  onAnalyze?: (result: ScreenerResult) => void;
+  analyzingTicker?: string | null;
 }) {
   const formatChange = (change: number | undefined) => {
     if (change === undefined) return null;
@@ -365,19 +389,21 @@ function MarketResultsTable({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/50">
-              <th className="text-left py-3 px-4 font-medium">Wertpapier</th>
-              <th className="text-right py-3 px-4 font-medium">Kurs</th>
-              <th className="text-right py-3 px-4 font-medium">1T</th>
-              <th className="text-right py-3 px-4 font-medium">5T</th>
-              <th className="text-right py-3 px-4 font-medium">RSI</th>
-              <th className="text-left py-3 px-4 font-medium">Erfüllte Filter</th>
+              <th className="text-left py-2 px-3 font-medium">Wertpapier</th>
+              <th className="text-right py-2 px-3 font-medium">Kurs</th>
+              <th className="text-right py-2 px-3 font-medium">1T</th>
+              <th className="text-right py-2 px-3 font-medium">5T</th>
+              <th className="text-right py-2 px-2 font-medium">RSI</th>
+              <th className="text-center py-2 px-2 font-medium">Regime</th>
               <th
-                className="text-center py-3 px-4 font-medium cursor-pointer hover:text-primary transition-colors select-none"
+                className="text-center py-2 px-2 font-medium cursor-pointer hover:text-primary transition-colors select-none"
                 onClick={() => onSortChange(sortBy === 'breakout' ? 'default' : 'breakout')}
                 title="Nach Breakout-Score sortieren"
               >
-                Breakout {sortBy === 'breakout' ? '\u2193' : ''}
+                Score {sortBy === 'breakout' ? '\u2193' : ''}
               </th>
+              <th className="text-left py-2 px-3 font-medium">Filter</th>
+              <th className="py-2 px-1 w-16"></th>
             </tr>
           </thead>
           <tbody>
@@ -386,27 +412,44 @@ function MarketResultsTable({
                 key={result.securityId}
                 className="border-b border-border last:border-0 hover:bg-muted/30"
               >
-                <td className="py-3 px-4">
+                <td className="py-2 px-3">
                   <div>
-                    <div className="font-medium">{result.securityName}</div>
+                    <div className="font-medium text-sm">{result.securityName}</div>
                     <div className="text-xs text-muted-foreground">
                       {result.ticker || result.isin || '-'}
                     </div>
                   </div>
                 </td>
-                <td className="py-3 px-4 text-right font-mono">
-                  {result.lastPrice.toFixed(2)} {result.currency}
+                <td className="py-2 px-3 text-right font-mono text-sm">
+                  {result.lastPrice.toFixed(2)}
                 </td>
-                <td className="py-3 px-4 text-right">
+                <td className="py-2 px-3 text-right">
                   {formatChange(result.change1d)}
                 </td>
-                <td className="py-3 px-4 text-right">
+                <td className="py-2 px-3 text-right">
                   {formatChange(result.change5d)}
                 </td>
-                <td className="py-3 px-4 text-right font-mono">
-                  {result.currentValues.rsi !== undefined ? result.currentValues.rsi.toFixed(1) : '-'}
+                <td className="py-2 px-2 text-right font-mono text-sm">
+                  {result.currentValues.rsi !== undefined ? result.currentValues.rsi.toFixed(0) : '-'}
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-2 px-2 text-center">
+                  {result.regime ? (
+                    <RegimeBadge regime={result.regime.regime} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </td>
+                <td className="py-2 px-2 text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    {result.setupScore ? (
+                      <SetupScoreBadge score={result.setupScore.totalScore} />
+                    ) : null}
+                    {result.breakoutScore ? (
+                      <BreakoutBadge score={result.breakoutScore} />
+                    ) : null}
+                  </div>
+                </td>
+                <td className="py-2 px-3">
                   <div className="flex flex-wrap gap-1">
                     {result.matchedFilters.slice(0, 2).map((filter, i) => (
                       <span
@@ -423,15 +466,32 @@ function MarketResultsTable({
                     )}
                   </div>
                 </td>
-                <td className="py-3 px-4">
-                  {result.breakoutScore ? (
-                    <div>
-                      <BreakoutBadge score={result.breakoutScore} />
-                      <BreakoutDetailPanel score={result.breakoutScore} />
-                    </div>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
-                  )}
+                <td className="py-2 px-1">
+                  <div className="flex items-center gap-0.5">
+                    {onAnalyze && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onAnalyze(result); }}
+                        disabled={analyzingTicker === result.ticker}
+                        className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors disabled:opacity-50"
+                        title="Trading-Analyse starten"
+                      >
+                        {analyzingTicker === result.ticker ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Zap size={14} />
+                        )}
+                      </button>
+                    )}
+                    {onAddToWatchlist && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onAddToWatchlist(result); }}
+                        className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                        title="Zur Watchlist hinzufügen"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -603,49 +663,77 @@ export function ScreenerView() {
   const [marketIndices, setMarketIndices] = useState<import('../../lib/types').MarketIndex[]>([]);
   const [selectedIndex, setSelectedIndex] = useState('dax40');
   const [marketProgress, setMarketProgress] = useState<import('../../lib/types').MarketScreenerProgress | null>(null);
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzingTicker, setAnalyzingTicker] = useState<string | null>(null);
 
-  const { brandfetchApiKey, aiEnabled, aiProvider, aiModel } = useSettingsStore();
+  const { brandfetchApiKey, aiEnabled } = useSettingsStore();
+  const { keys: secureKeys } = useSecureApiKeys();
+  const finnhubApiKey = secureKeys.finnhubApiKey || undefined;
   const { setCurrentView, setScrollTarget } = useUIStore();
+
+  // Combobox state for index selection
+  const [indexComboOpen, setIndexComboOpen] = useState(false);
+  const [indexSearchQuery, setIndexSearchQuery] = useState('');
+  const comboboxRef = useRef<HTMLDivElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const chatTriggeredRef = useRef(false);
+  const sendAnalysisToChat = useUIStore((s) => s.sendAnalysisToChat);
+  const setChatOpen = useUIStore((s) => s.setChatOpen);
   const pendingScreener = useUIStore((s) => s.pendingScreenerFilters);
   const clearPendingScreener = useUIStore((s) => s.clearPendingScreener);
-  const { keys: apiKeys } = useSecureApiKeys();
 
   // Track whether we need to auto-run after applying chat filters
-  const chatAutoRunRef = useRef<'market' | 'local' | null>(null);
+  const chatAutoRunRef = useRef<{ mode: 'market' | 'local'; indexId?: string } | null>(null);
 
   // Apply screener filters sent from ChatPanel
   useEffect(() => {
     if (!pendingScreener) return;
 
-    const newFilters = pendingScreener.filters.map((f, i) => ({
-      ...f,
-      id: `chat-${i}-${Date.now()}`,
-      enabled: true,
-    })) as ScreenerFilter[];
+    const newFilters = pendingScreener.filters
+      .filter((f) => typeof f.value === 'number' && !isNaN(f.value))
+      .map((f, i) => ({
+        ...f,
+        value: Number(f.value),
+        value2: f.value2 != null ? Number(f.value2) : undefined,
+        id: `chat-${i}-${Date.now()}`,
+        enabled: true,
+      })) as ScreenerFilter[];
     setFilters(newFilters);
     setResults([]);
-    setAiAnalysis(null);
+
+    chatTriggeredRef.current = true;
 
     if (pendingScreener.mode === 'market') {
       setMode('market');
       if (pendingScreener.indexId) {
         setSelectedIndex(pendingScreener.indexId);
       }
-      chatAutoRunRef.current = 'market';
+      chatAutoRunRef.current = { mode: 'market', indexId: pendingScreener.indexId };
     } else {
       setMode('local');
-      chatAutoRunRef.current = 'local';
+      chatAutoRunRef.current = { mode: 'local' };
     }
 
     clearPendingScreener();
   }, [pendingScreener, clearPendingScreener]);
 
-  // Load market indices on mount
+  // Load market indices on mount (and when finnhub key changes)
   useEffect(() => {
-    getMarketIndices().then(setMarketIndices).catch(() => {});
-  }, []);
+    getMarketIndices(finnhubApiKey).then(setMarketIndices).catch(() => {});
+  }, [finnhubApiKey]);
+
+  // Close combobox on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setIndexComboOpen(false);
+        setIndexSearchQuery('');
+      }
+    }
+    if (indexComboOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [indexComboOpen]);
 
   // Listen for market screener progress events
   useEffect(() => {
@@ -663,10 +751,15 @@ export function ScreenerView() {
     setIsRunning(true);
     setError(null);
     setResults([]);
-    setAiAnalysis(null);
     setMarketSortBy('breakout');
     try {
-      const response = await screenMarket(selectedIndex, filters);
+      // Sanitize filters: ensure value is always a number (chat AI may send strings)
+      const safeFilters = filters.map((f) => ({
+        ...f,
+        value: Number(f.value) || 0,
+        value2: f.value2 != null ? Number(f.value2) : undefined,
+      }));
+      const response = await screenMarket(selectedIndex, safeFilters, finnhubApiKey);
       setResults(response.results);
       if (response.totalErrors > 0) {
         setError(`${response.totalErrors} von ${response.totalScanned + response.totalErrors} Ticker konnten nicht geladen werden`);
@@ -680,63 +773,7 @@ export function ScreenerView() {
     } finally {
       setIsRunning(false);
     }
-  }, [selectedIndex, filters]);
-
-  // AI analysis of market results
-  const handleAiAnalysis = useCallback(async () => {
-    if (!aiEnabled || !aiProvider || !aiModel || results.length === 0) return;
-
-    const providerKeyMap: Record<string, string> = {
-      claude: 'anthropicApiKey',
-      openai: 'openaiApiKey',
-      gemini: 'geminiApiKey',
-      perplexity: 'perplexityApiKey',
-      openrouter: 'openrouterApiKey',
-    };
-    const apiKey = (apiKeys as Record<string, string>)[providerKeyMap[aiProvider] || ''];
-    if (!apiKey) {
-      setError('Kein API-Key für den KI-Anbieter hinterlegt. Bitte in den Einstellungen konfigurieren.');
-      return;
-    }
-
-    setIsAnalyzing(true);
-    setAiAnalysis(null);
-    try {
-      const indexName = marketIndices.find(i => i.id === selectedIndex)?.name || selectedIndex;
-      const filterDesc = filters.filter(f => f.enabled).map(f =>
-        `${indicatorLabels[f.indicator as ScreenerIndicator] || f.indicator} ${conditionLabels[f.condition as ScreenerCondition] || f.condition} ${f.value}${f.value2 ? `-${f.value2}` : ''}`
-      ).join(', ') || 'Keine Filter';
-
-      const aiResults = results.slice(0, 20).map(r => ({
-        symbol: r.ticker || r.securityName,
-        name: r.securityName,
-        price: r.lastPrice,
-        currency: r.currency || 'USD',
-        change1d: r.change1d,
-        change5d: r.change5d,
-        change20d: r.change20d,
-        rsi: r.currentValues?.rsi ?? undefined,
-        matchedFilters: r.matchedFilters,
-        breakoutScore: r.breakoutScore,
-      }));
-
-      const analysis = await analyzeMarketScreenerWithAi({
-        provider: aiProvider,
-        model: aiModel,
-        apiKey,
-        indexName,
-        filterDescription: filterDesc,
-        results: aiResults,
-      });
-      setAiAnalysis(analysis);
-
-    } catch (err) {
-      const errStr = err instanceof Error ? err.message : String(err);
-      setError(`KI-Analyse fehlgeschlagen: ${errStr}`);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  }, [aiEnabled, aiProvider, aiModel, apiKeys, results, marketIndices, selectedIndex, filters]);
+  }, [selectedIndex, filters, finnhubApiKey]);
 
   // Add market result to watchlist
   const handleAddToWatchlist = useCallback(async (result: ScreenerResult) => {
@@ -760,6 +797,43 @@ export function ScreenerView() {
       console.error('Failed to add to watchlist:', err);
     }
   }, []);
+
+  // Analyze a single security's trading setup and send to chat
+  const handleAnalyzeSecurity = useCallback(async (result: ScreenerResult) => {
+    if (!result.ticker || !aiEnabled) return;
+    setAnalyzingTicker(result.ticker);
+    try {
+      const analysis = await invoke<TradingAnalysis>('analyze_ticker_trading', {
+        symbol: result.ticker,
+        accountSize: null,
+        riskPercent: null,
+      });
+
+      const regime = analysis.regime;
+      const setup = analysis.setup;
+      const risk = analysis.risk;
+
+      const regimeLabel = regime.regime.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+      const directionLabel = setup.direction === 'long' ? 'Long' : setup.direction === 'short' ? 'Short' : 'Neutral';
+
+      // Short user-visible question
+      let userQuestion = `Analysiere das Trading-Setup für ${result.securityName} (${result.ticker}).\n\n`;
+      // Technical context for the AI
+      userQuestion += `Daten: Regime=${regimeLabel} (${(regime.confidence * 100).toFixed(0)}%), Score=${setup.totalScore.toFixed(0)}/100, Richtung=${directionLabel}, Setup=${setup.setupLabel}, Volatilität=${regime.volatilityLevel}`;
+      userQuestion += `, RSI=${result.currentValues.rsi?.toFixed(1) ?? '-'}, ADX=${result.currentValues.adx?.toFixed(1) ?? '-'}`;
+
+      if (risk) {
+        userQuestion += `, Entry=${risk.entryPrice.toFixed(2)}, Stop=${risk.stopPrice.toFixed(2)}, Target=${risk.targetPrice.toFixed(2)}, R:R=1:${risk.riskRewardRatio.toFixed(1)}`;
+      }
+
+      sendAnalysisToChat(result.securityName, result.ticker, userQuestion);
+      setChatOpen(true);
+    } catch (err) {
+      setError(`Analyse für ${result.ticker} fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAnalyzingTicker(null);
+    }
+  }, [aiEnabled, sendAnalysisToChat, setChatOpen]);
 
   // Prepare securities for logo loading
   const securitiesForLogos = useMemo(() =>
@@ -854,21 +928,46 @@ export function ScreenerView() {
     runScreener(securitiesData, filters).then(setResults).catch(() => setResults([]));
   }, [securitiesData, filters, loadPriceData]);
 
-  // Auto-run screener after chat navigation applied filters
+  // Auto-run screener after chat navigation applied filters.
+  // The pendingScreener effect sets both filters + selectedIndex in the same cycle.
+  // We must wait until the selectedIndex state has committed so handleRunMarketScreener
+  // uses the correct index. We detect this by checking that selectedIndex matches
+  // the indexId stored in chatAutoRunRef.
   useEffect(() => {
     if (!chatAutoRunRef.current) return;
-    const runMode = chatAutoRunRef.current;
+    const { mode: runMode, indexId } = chatAutoRunRef.current;
+
+    // Wait until selectedIndex matches the desired index (or no specific index was requested)
+    if (indexId && selectedIndex !== indexId) return;
+
     chatAutoRunRef.current = null;
 
-    // Use setTimeout to ensure state (filters, mode, selectedIndex) is settled
-    setTimeout(() => {
-      if (runMode === 'market') {
-        handleRunMarketScreener();
-      } else {
-        handleRunScreener();
-      }
-    }, 100);
+    if (runMode === 'market') {
+      handleRunMarketScreener();
+    } else {
+      handleRunScreener();
+    }
   }, [filters, mode, selectedIndex, handleRunMarketScreener, handleRunScreener]);
+
+  // Auto-scroll to results after chat-triggered screener completes (or is cancelled)
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    if (isRunning) {
+      wasRunningRef.current = true;
+    } else if (wasRunningRef.current && chatTriggeredRef.current) {
+      wasRunningRef.current = false;
+      chatTriggeredRef.current = false;
+      setTimeout(() => {
+        const container = document.getElementById('view-scroll-container');
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth',
+          });
+        }
+      }, 300);
+    }
+  }, [isRunning]);
 
   // Re-run screener when data is loaded
   useEffect(() => {
@@ -976,16 +1075,6 @@ export function ScreenerView() {
               Filter löschen
             </button>
           )}
-          {mode === 'market' && results.length > 0 && aiEnabled && (
-            <button
-              onClick={handleAiAnalysis}
-              disabled={isAnalyzing}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm border border-primary/50 text-primary rounded-md hover:bg-primary/10 transition-colors disabled:opacity-50"
-            >
-              {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
-              KI-Analyse
-            </button>
-          )}
           <button
             onClick={mode === 'market' ? handleRunMarketScreener : handleRunScreener}
             disabled={isRunning || activeFilterCount === 0}
@@ -1021,7 +1110,7 @@ export function ScreenerView() {
       <div className="flex items-center gap-4">
         <div className="flex gap-1 p-1 bg-muted rounded-lg">
           <button
-            onClick={() => { setMode('local'); setResults([]); setAiAnalysis(null); }}
+            onClick={() => { setMode('local'); setResults([]); }}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
               mode === 'local'
                 ? 'bg-primary text-primary-foreground shadow-sm'
@@ -1032,7 +1121,7 @@ export function ScreenerView() {
             Meine Wertpapiere
           </button>
           <button
-            onClick={() => { setMode('market'); setResults([]); setAiAnalysis(null); }}
+            onClick={() => { setMode('market'); setResults([]); }}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
               mode === 'market'
                 ? 'bg-primary text-primary-foreground shadow-sm'
@@ -1046,17 +1135,82 @@ export function ScreenerView() {
 
         {mode === 'market' && (
           <div className="flex items-center gap-2">
-            <select
-              value={selectedIndex}
-              onChange={(e) => { setSelectedIndex(e.target.value); setResults([]); setAiAnalysis(null); }}
-              className="px-3 py-1.5 text-sm bg-card border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {marketIndices.map((idx) => (
-                <option key={idx.id} value={idx.id}>
-                  {idx.name} ({idx.tickerCount} Aktien)
-                </option>
-              ))}
-            </select>
+            <div className="relative" ref={comboboxRef}>
+              <button
+                type="button"
+                onClick={() => { setIndexComboOpen(!indexComboOpen); setIndexSearchQuery(''); }}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-card border border-border rounded-md hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-primary min-w-[220px] justify-between"
+              >
+                <span>
+                  {marketIndices.find(i => i.id === selectedIndex)?.name || selectedIndex}
+                  <span className="text-muted-foreground ml-1">
+                    ({marketIndices.find(i => i.id === selectedIndex)?.tickerCount || 0} Aktien)
+                  </span>
+                </span>
+                <ChevronDown size={14} className={`text-muted-foreground transition-transform ${indexComboOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {indexComboOpen && (
+                <div className="absolute z-50 mt-1 w-[300px] bg-card border border-border rounded-md shadow-lg overflow-hidden">
+                  <div className="p-2 border-b border-border">
+                    <div className="relative">
+                      <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={indexSearchQuery}
+                        onChange={(e) => setIndexSearchQuery(e.target.value)}
+                        placeholder="Index suchen…"
+                        className="w-full pl-7 pr-3 py-1.5 text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-[300px] overflow-y-auto py-1">
+                    {(() => {
+                      const filtered = marketIndices.filter(idx =>
+                        idx.name.toLowerCase().includes(indexSearchQuery.toLowerCase())
+                      );
+                      const regions = [...new Set(filtered.map(i => i.region))];
+                      const regionLabels: Record<string, string> = { DE: 'Deutschland', EU: 'Europa', CH: 'Schweiz', AT: 'Österreich', US: 'USA', GB: 'Großbritannien' };
+                      return regions.map(region => (
+                        <div key={region}>
+                          <div className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                            {regionLabels[region] || region}
+                          </div>
+                          {filtered.filter(i => i.region === region).map(idx => (
+                            <button
+                              key={idx.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedIndex(idx.id);
+                                setResults([]);
+                                setIndexComboOpen(false);
+                                setIndexSearchQuery('');
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors flex items-center justify-between ${
+                                idx.id === selectedIndex ? 'bg-primary/10 text-primary font-medium' : ''
+                              }`}
+                            >
+                              <span>{idx.name}</span>
+                              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                {idx.source === 'finnhub' && (
+                                  <span className="text-[10px] bg-green-500/10 text-green-600 dark:text-green-400 px-1 rounded">LIVE</span>
+                                )}
+                                {idx.tickerCount} Aktien
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ));
+                    })()}
+                    {marketIndices.filter(idx => idx.name.toLowerCase().includes(indexSearchQuery.toLowerCase())).length === 0 && (
+                      <div className="px-3 py-4 text-sm text-muted-foreground text-center">
+                        Kein Index gefunden
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             {marketProgress && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 size={14} className="animate-spin text-primary" />
@@ -1084,35 +1238,17 @@ export function ScreenerView() {
         onApplyPreset={handleApplyPreset}
       />
 
-      {/* AI Analysis Panel */}
-      {aiAnalysis && (
-        <div className="bg-card rounded-lg border border-primary/30 p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Bot size={18} className="text-primary" />
-            <h3 className="font-semibold text-sm">KI-Analyse &amp; Handlungsempfehlung</h3>
-            <button onClick={() => setAiAnalysis(null)} className="ml-auto p-1 hover:bg-muted rounded">
-              <X size={14} />
-            </button>
-          </div>
-          <div className="flex items-start gap-2 mb-3 p-2.5 bg-muted/60 rounded-md text-xs text-muted-foreground">
-            <Info size={14} className="shrink-0 mt-0.5 text-primary/70" />
-            <span>Die KI analysiert die Breakout-Kandidaten und gibt konkrete Handlungsempfehlungen basierend auf dem 6-Regeln-System.</span>
-          </div>
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            <SafeMarkdown>{aiAnalysis}</SafeMarkdown>
-          </div>
-        </div>
-      )}
-
-
       {/* Results */}
       {(mode === 'market' ? sortedMarketResults : sortedResults).length > 0 ? (
-        <>
+        <div ref={resultsRef}>
           {mode === 'market' ? (
             <MarketResultsTable
               results={sortedMarketResults}
               sortBy={marketSortBy}
               onSortChange={setMarketSortBy}
+              onAddToWatchlist={handleAddToWatchlist}
+              onAnalyze={aiEnabled ? handleAnalyzeSecurity : undefined}
+              analyzingTicker={analyzingTicker}
             />
           ) : (
             <ResultsTable
@@ -1124,47 +1260,7 @@ export function ScreenerView() {
               onSortChange={setSortBy}
             />
           )}
-          {/* Add to Watchlist for market results */}
-          {mode === 'market' && (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-muted/50">
-                    <th className="text-left py-2 px-4 font-semibold">Ergebnisse zur Watchlist hinzufügen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedMarketResults.map((r) => (
-                    <tr key={r.securityId} className="border-b border-border/50 hover:bg-muted/30">
-                      <td className="py-2 px-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <span className="font-medium">{r.ticker || r.securityName}</span>
-                          <span className="text-muted-foreground text-xs">{r.securityName}</span>
-                          <span className="text-xs">{r.lastPrice.toFixed(2)} {r.currency || ''}</span>
-                          {r.change1d != null && (
-                            <span className={`text-xs ${r.change1d >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                              {r.change1d >= 0 ? '+' : ''}{r.change1d.toFixed(1)}%
-                            </span>
-                          )}
-                          {r.breakoutScore && (
-                            <BreakoutBadge score={r.breakoutScore} />
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleAddToWatchlist(r)}
-                          className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-primary border border-primary/50 rounded hover:bg-primary/10 transition-colors"
-                        >
-                          <Plus size={12} />
-                          Watchlist
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+        </div>
       ) : (
         <div className="bg-card rounded-lg border border-border p-8 text-center text-muted-foreground">
           {activeFilterCount === 0 ? (

@@ -452,6 +452,7 @@ pub fn run() {
             commands::market_screener::screen_market,
             commands::market_screener::cancel_market_screener,
             commands::market_screener::analyze_market_screener_with_ai,
+            commands::market_screener::analyze_ticker_trading,
             // Advanced Analysis (CVaR, Drawdown, Rolling Returns, Monte Carlo, GARCH)
             commands::analysis::calculate_var_cvar,
             commands::analysis::calculate_portfolio_var_cvar,
@@ -462,6 +463,11 @@ pub fn run() {
             commands::analysis::calculate_garch,
             commands::analysis::full_risk_analysis,
             commands::analysis::get_chart_events,
+            // Cache Management
+            commands::cache::get_cached_securities,
+            commands::cache::delete_cached_data_for_security,
+            commands::cache::delete_all_orphaned_cache,
+            commands::cache::rebuild_cache_meta,
             // API Key Validation
             commands::api_keys::validate_api_key,
         ])

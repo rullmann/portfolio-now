@@ -414,6 +414,84 @@ pub async fn fetch_next_earnings_date(symbol: &str, api_key: &str) -> Result<Opt
     Ok(next)
 }
 
+// ============================================================================
+// Index Constituents
+// ============================================================================
+
+/// Response from Finnhub Index Constituents API
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConstituentsResponse {
+    #[serde(default)]
+    constituents: Vec<String>,
+    #[serde(default)]
+    constituents_breakdown: Vec<ConstituentBreakdown>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct ConstituentBreakdown {
+    symbol: Option<String>,
+    name: Option<String>,
+    weight: Option<f64>,
+}
+
+/// Fetch index constituents from Finnhub (^GSPC, ^NDX, ^DJI)
+///
+/// Returns Vec<(symbol, name)> matching the hardcoded index format.
+pub async fn fetch_index_constituents(symbol: &str, api_key: &str) -> Result<Vec<(String, String)>> {
+    if api_key.is_empty() {
+        return Err(anyhow!("Finnhub API key required"));
+    }
+
+    let url = format!(
+        "{}/index/constituents?symbol={}&token={}",
+        BASE_URL,
+        urlencoding::encode(symbol),
+        urlencoding::encode(api_key)
+    );
+    log::info!("Fetching Finnhub index constituents for {}", symbol);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Finnhub constituents request failed for {}: {}", symbol, e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("Finnhub constituents HTTP error for {}: {} - {}", symbol, status, body));
+    }
+
+    let data: ConstituentsResponse = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse Finnhub constituents for {}: {}", symbol, e))?;
+
+    // Build name lookup from breakdown
+    let name_map: std::collections::HashMap<String, String> = data
+        .constituents_breakdown
+        .iter()
+        .filter_map(|b| {
+            Some((b.symbol.clone()?, b.name.clone().unwrap_or_default()))
+        })
+        .collect();
+
+    let result: Vec<(String, String)> = data
+        .constituents
+        .into_iter()
+        .map(|sym| {
+            let name = name_map.get(&sym).cloned().unwrap_or_default();
+            (sym, name)
+        })
+        .collect();
+
+    log::info!("Finnhub: {} constituents for {}", result.len(), symbol);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

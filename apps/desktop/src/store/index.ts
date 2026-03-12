@@ -94,6 +94,16 @@ interface UIState {
   clearPendingScreener: () => void;
   showChartFromChat: (securityName: string, timeRange?: string, indicators?: string[]) => void;
   clearPendingChart: () => void;
+  // Chart fullscreen state
+  chartFullscreen: boolean;
+  setChartFullscreen: (fullscreen: boolean) => void;
+  // Chat panel open state (moved from App.tsx local state for cross-component access)
+  isChatOpen: boolean;
+  setChatOpen: (open: boolean) => void;
+  // Pending chat analysis (from Screener Analyse button)
+  pendingChatAnalysis: { securityName: string; ticker: string; message: string } | null;
+  sendAnalysisToChat: (securityName: string, ticker: string, message: string) => void;
+  clearPendingChatAnalysis: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -118,6 +128,13 @@ export const useUIStore = create<UIState>()(
       clearPendingScreener: () => set({ pendingScreenerFilters: null }),
       showChartFromChat: (securityName, timeRange, indicators) => set({ pendingChartSecurityName: securityName, pendingChartTimeRange: timeRange || null, pendingChartIndicators: indicators || null }),
       clearPendingChart: () => set({ pendingChartSecurityName: null, pendingChartTimeRange: null, pendingChartIndicators: null }),
+      chartFullscreen: false,
+      setChartFullscreen: (fullscreen) => set({ chartFullscreen: fullscreen }),
+      isChatOpen: false,
+      setChatOpen: (open) => set({ isChatOpen: open }),
+      pendingChatAnalysis: null,
+      sendAnalysisToChat: (securityName, ticker, message) => set({ pendingChatAnalysis: { securityName, ticker, message } }),
+      clearPendingChatAnalysis: () => set({ pendingChatAnalysis: null }),
     }),
     {
       name: 'portfolio-ui-state',
@@ -440,17 +457,13 @@ const DEPRECATED_MODELS: Record<string, Record<string, string>> = {
   },
 };
 
-/** Get upgraded model if deprecated; also checks if model exists in fallback list */
+/** Get upgraded model if deprecated; only migrates explicitly deprecated models */
 function getUpgradedModel(provider: string, model: string): string | null {
-  // Explicit deprecated mapping
+  // Only migrate explicitly deprecated models — do NOT force-migrate
+  // models that are simply missing from the static fallback list,
+  // as users may have selected dynamically loaded models from the API.
   const mapped = DEPRECATED_MODELS[provider]?.[model];
   if (mapped) return mapped;
-
-  // If model is not in the fallback list, migrate to provider default
-  const fallback = AI_MODELS_FALLBACK[provider as AiProvider];
-  if (fallback && !fallback.some(m => m.id === model)) {
-    return DEFAULT_MODELS[provider as AiProvider] || null;
-  }
 
   return null;
 }

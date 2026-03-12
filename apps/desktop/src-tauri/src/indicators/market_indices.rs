@@ -9,6 +9,7 @@ pub struct MarketIndex {
     pub name: String,
     pub region: String,
     pub ticker_count: usize,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,16 +19,31 @@ pub struct MarketIndexTicker {
     pub name: String,
 }
 
-pub fn get_available_indices() -> Vec<MarketIndex> {
+/// Finnhub symbol mapping for US indices
+pub const FINNHUB_INDEX_MAP: &[(&str, &str)] = &[
+    ("sp500", "^GSPC"),
+    ("nasdaq100", "^NDX"),
+    ("dowjones30", "^DJI"),
+];
+
+pub fn get_available_indices(has_finnhub_key: bool) -> Vec<MarketIndex> {
+    let source_for = |id: &str| -> String {
+        if has_finnhub_key && FINNHUB_INDEX_MAP.iter().any(|(idx, _)| *idx == id) {
+            "finnhub".into()
+        } else {
+            "static".into()
+        }
+    };
+
     vec![
-        MarketIndex { id: "dax40".into(), name: "DAX 40".into(), region: "DE".into(), ticker_count: DAX40.len() },
-        MarketIndex { id: "eurostoxx50".into(), name: "EURO STOXX 50".into(), region: "EU".into(), ticker_count: EUROSTOXX50.len() },
-        MarketIndex { id: "smi20".into(), name: "SMI 20".into(), region: "CH".into(), ticker_count: SMI20.len() },
-        MarketIndex { id: "atx20".into(), name: "ATX 20".into(), region: "AT".into(), ticker_count: ATX20.len() },
-        MarketIndex { id: "sp500".into(), name: "S&P 500".into(), region: "US".into(), ticker_count: SP500.len() },
-        MarketIndex { id: "nasdaq100".into(), name: "NASDAQ 100".into(), region: "US".into(), ticker_count: NASDAQ100.len() },
-        MarketIndex { id: "dowjones30".into(), name: "Dow Jones 30".into(), region: "US".into(), ticker_count: DOWJONES30.len() },
-        MarketIndex { id: "ftse100".into(), name: "FTSE 100".into(), region: "GB".into(), ticker_count: FTSE100.len() },
+        MarketIndex { id: "dax40".into(), name: "DAX 40".into(), region: "DE".into(), ticker_count: DAX40.len(), source: "static".into() },
+        MarketIndex { id: "eurostoxx50".into(), name: "EURO STOXX 50".into(), region: "EU".into(), ticker_count: EUROSTOXX50.len(), source: "static".into() },
+        MarketIndex { id: "smi20".into(), name: "SMI 20".into(), region: "CH".into(), ticker_count: SMI20.len(), source: "static".into() },
+        MarketIndex { id: "atx20".into(), name: "ATX 20".into(), region: "AT".into(), ticker_count: ATX20.len(), source: "static".into() },
+        MarketIndex { id: "sp500".into(), name: "S&P 500".into(), region: "US".into(), ticker_count: SP500.len(), source: source_for("sp500") },
+        MarketIndex { id: "nasdaq100".into(), name: "NASDAQ 100".into(), region: "US".into(), ticker_count: NASDAQ100.len(), source: source_for("nasdaq100") },
+        MarketIndex { id: "dowjones30".into(), name: "Dow Jones 30".into(), region: "US".into(), ticker_count: DOWJONES30.len(), source: source_for("dowjones30") },
+        MarketIndex { id: "ftse100".into(), name: "FTSE 100".into(), region: "GB".into(), ticker_count: FTSE100.len(), source: "static".into() },
     ]
 }
 

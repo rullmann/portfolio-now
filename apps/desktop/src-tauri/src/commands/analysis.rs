@@ -4,6 +4,7 @@
 //! These operate on price data fetched from the database.
 
 use crate::analysis;
+use crate::commands::cache;
 use crate::db;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -272,22 +273,68 @@ pub async fn get_chart_events(
 
     let mut events = Vec::new();
 
-    // 1. Fetch dividends from Yahoo (full corporate dividend history, no API key needed)
-    match crate::quotes::yahoo::fetch_dividend_events(&ticker).await {
-        Ok(divs) => {
-            for div in divs {
-                events.push(ChartEvent {
-                    date: div.date,
-                    event_type: "dividend".into(),
-                    label: format!("{:.4} {}", div.amount, div.currency),
-                    value: Some(div.amount),
-                });
+    // 1. Dividends: load from cache first, fetch from Yahoo if stale (>24h or empty)
+    let need_div_fetch = {
+        let conn_guard = crate::db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("No database connection")?;
+        let cached_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pp_ex_dividend WHERE security_id = ?1",
+            rusqlite::params![security_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        let cache_is_fresh: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pp_ex_dividend WHERE security_id = ?1 AND updated_at > datetime('now', '-1 day'))",
+            rusqlite::params![security_id],
+            |row| row.get(0),
+        ).unwrap_or(false);
+        cached_count == 0 || !cache_is_fresh
+    }; // conn_guard dropped here
+
+    if need_div_fetch {
+        match crate::quotes::yahoo::fetch_dividend_events(&ticker).await {
+            Ok(divs) => {
+                let conn_guard = crate::db::get_connection().map_err(|e| e.to_string())?;
+                let conn = conn_guard.as_ref().ok_or("No database connection")?;
+                for div in &divs {
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO pp_ex_dividend (security_id, ex_date, amount, currency, source, updated_at) VALUES (?1, ?2, ?3, ?4, 'yahoo', datetime('now'))",
+                        rusqlite::params![security_id, div.date, div.amount, div.currency],
+                    );
+                }
+                log::info!("Cached {} Yahoo dividend events for {}", divs.len(), ticker);
+                // Update cache meta
+                let _ = cache::update_cache_meta(conn, security_id);
             }
-            log::info!("Loaded {} Yahoo dividend events for {}", events.len(), ticker);
+            Err(e) => {
+                log::warn!("Failed to fetch Yahoo dividend events for {}: {}", ticker, e);
+            }
         }
-        Err(e) => {
-            log::warn!("Failed to fetch Yahoo dividend events for {}: {}", ticker, e);
+    }
+
+    // Load dividends from cache
+    {
+        let conn_guard = crate::db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("No database connection")?;
+        let mut div_stmt = conn.prepare(
+            "SELECT ex_date, amount, currency FROM pp_ex_dividend WHERE security_id = ?1 ORDER BY ex_date"
+        ).map_err(|e| e.to_string())?;
+        let divs = div_stmt.query_map(rusqlite::params![security_id], |row| {
+            let date: String = row.get(0)?;
+            let amount: f64 = row.get::<_, Option<f64>>(1)?.unwrap_or(0.0);
+            let currency: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+            Ok(ChartEvent {
+                date,
+                event_type: "dividend".into(),
+                label: format!("{:.4} {}", amount, currency),
+                value: Some(amount),
+            })
+        }).map_err(|e| e.to_string())?;
+        for div in divs {
+            if let Ok(d) = div {
+                events.push(d);
+            }
         }
+        log::info!("Loaded {} dividend events for {} (from cache)", events.len(), ticker);
     }
 
     // 2. Earnings: Fetch from APIs, cache in SQLite, return full accumulated history
@@ -300,7 +347,7 @@ pub async fn get_chart_events(
             match crate::quotes::finnhub::fetch_earnings(&ticker, api_key).await {
                 Ok(earnings) => {
                     log::info!("Finnhub: {} earnings for {}", earnings.len(), ticker);
-                    cache_earnings_from_finnhub(&ticker, &earnings);
+                    cache_earnings_from_finnhub(&ticker, security_id, &earnings);
                 }
                 Err(e) => {
                     log::warn!("Finnhub earnings failed for {}: {}", ticker, e);
@@ -323,7 +370,7 @@ pub async fn get_chart_events(
     match crate::quotes::yahoo::fetch_earnings(&ticker).await {
         Ok(yahoo_earnings) => {
             log::info!("Yahoo: {} quarterly earnings for {}", yahoo_earnings.quarterly_earnings.len(), ticker);
-            cache_earnings_from_yahoo(&ticker, &yahoo_earnings.quarterly_earnings);
+            cache_earnings_from_yahoo(&ticker, security_id, &yahoo_earnings.quarterly_earnings);
             if let Some(ref next) = yahoo_earnings.next_earnings_date {
                 if !events.iter().any(|e| e.event_type == "earnings_upcoming") {
                     events.push(ChartEvent {
@@ -370,7 +417,7 @@ pub async fn get_chart_events(
 // ============================================================================
 
 /// Save Finnhub earnings into the cache (INSERT OR REPLACE to update existing)
-fn cache_earnings_from_finnhub(ticker: &str, earnings: &[crate::quotes::finnhub::FinnhubEarningsEvent]) {
+fn cache_earnings_from_finnhub(ticker: &str, security_id: i64, earnings: &[crate::quotes::finnhub::FinnhubEarningsEvent]) {
     let Ok(conn_guard) = db::get_connection() else { return };
     let Some(conn) = conn_guard.as_ref() else { return };
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -378,14 +425,17 @@ fn cache_earnings_from_finnhub(ticker: &str, earnings: &[crate::quotes::finnhub:
     for e in earnings {
         if e.eps_actual.is_none() { continue; }
         let _ = conn.execute(
-            "INSERT OR REPLACE INTO pp_earnings_cache (ticker, date, eps_actual, eps_estimate, surprise_percent, source, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 'finnhub', ?6)",
-            rusqlite::params![ticker, e.date, e.eps_actual, e.eps_estimate, e.surprise_percent, now],
+            "INSERT OR REPLACE INTO pp_earnings_cache (ticker, date, eps_actual, eps_estimate, surprise_percent, source, updated_at, security_id) VALUES (?1, ?2, ?3, ?4, ?5, 'finnhub', ?6, ?7)",
+            rusqlite::params![ticker, e.date, e.eps_actual, e.eps_estimate, e.surprise_percent, now, security_id],
         );
     }
+
+    // Update cache meta
+    let _ = cache::update_cache_meta(conn, security_id);
 }
 
 /// Save Yahoo earnings into the cache (only if not already present from Finnhub)
-fn cache_earnings_from_yahoo(ticker: &str, quarters: &[crate::quotes::yahoo::EarningsQuarter]) {
+fn cache_earnings_from_yahoo(ticker: &str, security_id: i64, quarters: &[crate::quotes::yahoo::EarningsQuarter]) {
     let Ok(conn_guard) = db::get_connection() else { return };
     let Some(conn) = conn_guard.as_ref() else { return };
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -399,10 +449,13 @@ fn cache_earnings_from_yahoo(ticker: &str, quarters: &[crate::quotes::yahoo::Ear
         let surprise_pct = q.eps_surprise_pct.map(|s| s * 100.0);
         // INSERT OR IGNORE: don't overwrite Finnhub data (which has better surprise %)
         let _ = conn.execute(
-            "INSERT OR IGNORE INTO pp_earnings_cache (ticker, date, eps_actual, eps_estimate, surprise_percent, source, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 'yahoo', ?6)",
-            rusqlite::params![ticker, date, q.eps_actual, q.eps_estimate, surprise_pct, now],
+            "INSERT OR IGNORE INTO pp_earnings_cache (ticker, date, eps_actual, eps_estimate, surprise_percent, source, updated_at, security_id) VALUES (?1, ?2, ?3, ?4, ?5, 'yahoo', ?6, ?7)",
+            rusqlite::params![ticker, date, q.eps_actual, q.eps_estimate, surprise_pct, now, security_id],
         );
     }
+
+    // Update cache meta
+    let _ = cache::update_cache_meta(conn, security_id);
 }
 
 /// Load all cached earnings for a ticker, sorted by date

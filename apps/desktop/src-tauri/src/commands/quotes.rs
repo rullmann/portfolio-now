@@ -7,6 +7,7 @@
 //! - sync_all_prices: Alle Securities aktualisieren
 //! - fetch_exchange_rates: EZB Wechselkurse abrufen
 
+use crate::commands::cache;
 use crate::commands::data;
 use crate::db;
 use crate::quotes::{self, alphavantage, ecb, finnhub, tradingview, yahoo, ExchangeRate, LatestQuote, ProviderType, Quote, QuoteResult};
@@ -1500,6 +1501,9 @@ fn save_quote_to_db(security_id: i64, quote: &LatestQuote) -> anyhow::Result<()>
         params![security_id],
     )?;
 
+    // Update cache meta
+    let _ = cache::update_cache_meta(conn, security_id);
+
     Ok(())
 }
 
@@ -1667,6 +1671,13 @@ fn save_historical_quotes_smart(security_id: i64, quotes: &[Quote], force: bool)
         security_id, stats.inserted, stats.updated, stats.skipped, stats.spikes_deleted, quotes_count,
         if force { " [FORCE]" } else { "" }
     );
+
+    // Update cache meta after saving
+    if let Ok(conn_guard) = db::get_connection() {
+        if let Some(conn) = conn_guard.as_ref() {
+            let _ = cache::update_cache_meta(conn, security_id);
+        }
+    }
 
     Ok(stats)
 }
@@ -3968,6 +3979,311 @@ pub fn apply_quote_assistant_suggestion(
     };
 
     apply_suggestion(conn, security_id, &suggestion)
+        .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Company Profile & Fundamentals
+// ============================================================================
+
+/// Company profile returned to the frontend
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyProfile {
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+    pub description: Option<String>,
+    pub country: Option<String>,
+    pub market_cap: Option<f64>,
+}
+
+/// Summary returned after a bulk-profile fetch
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileFetchSummary {
+    pub total: usize,
+    pub fetched: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+/// Fetch the company profile for a single security and persist it as attributes.
+#[command]
+pub async fn fetch_security_profile(
+    security_id: i64,
+    _api_keys: Option<ApiKeys>,
+) -> Result<CompanyProfile, String> {
+    // 1. Get ticker from DB (scoped so the guard is dropped before await)
+    let ticker = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+        let ticker: Option<String> = conn
+            .query_row(
+                "SELECT ticker FROM pp_security WHERE id = ?1",
+                params![security_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Security not found: {}", e))?;
+        match ticker {
+            Some(t) if !t.is_empty() => t,
+            _ => return Err("Kein Ticker hinterlegt".into()),
+        }
+    };
+
+    // 2. Fetch from Yahoo (async, no DB guard held)
+    let profile = yahoo::fetch_profile(&ticker)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 3. Persist profile fields as security attributes (new scoped block)
+    {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        // Read existing attributes JSON
+        let existing_attrs_json: Option<String> = conn
+            .query_row(
+                "SELECT attributes FROM pp_security WHERE id = ?1",
+                params![security_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(None);
+
+        let mut attrs: std::collections::HashMap<String, String> = existing_attrs_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        if let Some(ref v) = profile.sector {
+            attrs.insert("__sector".to_string(), v.clone());
+        }
+        if let Some(ref v) = profile.industry {
+            attrs.insert("__industry".to_string(), v.clone());
+        }
+        if let Some(ref v) = profile.description {
+            attrs.insert("__description".to_string(), v.clone());
+        }
+        if let Some(ref v) = profile.country {
+            attrs.insert("__country".to_string(), v.clone());
+        }
+        if let Some(v) = profile.market_cap {
+            attrs.insert("__market_cap".to_string(), v.to_string());
+        }
+
+        let attrs_json = serde_json::to_string(&attrs).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE pp_security SET attributes = ?1 WHERE id = ?2",
+            params![attrs_json, security_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(CompanyProfile {
+        sector: profile.sector,
+        industry: profile.industry,
+        description: profile.description,
+        country: profile.country,
+        market_cap: profile.market_cap,
+    })
+}
+
+/// Fetch company profiles for all (or a filtered subset of) securities.
+///
+/// * `only_held`    – restrict to securities that have a current holding > 0
+/// * `only_missing` – skip securities that already have a `__sector` attribute
+#[command]
+pub async fn fetch_all_security_profiles(
+    only_held: Option<bool>,
+    only_missing: Option<bool>,
+    _api_keys: Option<ApiKeys>,
+) -> Result<ProfileFetchSummary, String> {
+    let only_held = only_held.unwrap_or(false);
+    let only_missing = only_missing.unwrap_or(false);
+
+    // Collect candidate securities (id + ticker) in a scoped block
+    let candidates: Vec<(i64, String)> = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+        let sql = if only_held {
+            r#"
+            SELECT DISTINCT s.id, s.ticker
+            FROM pp_security s
+            JOIN pp_txn t ON t.security_id = s.id AND t.owner_type = 'portfolio'
+            WHERE s.ticker IS NOT NULL AND s.ticker != ''
+              AND s.is_retired = 0
+            GROUP BY s.id
+            HAVING SUM(CASE
+                WHEN t.txn_type IN ('BUY','TRANSFER_IN','DELIVERY_INBOUND') THEN t.shares
+                WHEN t.txn_type IN ('SELL','TRANSFER_OUT','DELIVERY_OUTBOUND') THEN -t.shares
+                ELSE 0
+            END) > 0
+            "#
+        } else {
+            r#"
+            SELECT id, ticker
+            FROM pp_security
+            WHERE ticker IS NOT NULL AND ticker != ''
+              AND is_retired = 0
+            "#
+        };
+
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if only_missing {
+            // Filter out securities that already have __sector attribute
+            rows.into_iter()
+                .filter(|(id, _)| {
+                    let attrs_json: Option<String> = conn
+                        .query_row(
+                            "SELECT attributes FROM pp_security WHERE id = ?1",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(None);
+                    let attrs: std::collections::HashMap<String, String> = attrs_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+                    !attrs.contains_key("__sector")
+                })
+                .collect()
+        } else {
+            rows
+        }
+    };
+
+    let total = candidates.len();
+    let mut fetched = 0usize;
+    let mut failed = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for (security_id, ticker) in candidates {
+        // Fetch profile (no DB guard held during await)
+        match yahoo::fetch_profile(&ticker).await {
+            Ok(profile) => {
+                // Persist
+                let persist_result: Result<(), String> = (|| {
+                    let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+                    let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+
+                    let existing_attrs_json: Option<String> = conn
+                        .query_row(
+                            "SELECT attributes FROM pp_security WHERE id = ?1",
+                            params![security_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(None);
+
+                    let mut attrs: std::collections::HashMap<String, String> = existing_attrs_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    if let Some(ref v) = profile.sector {
+                        attrs.insert("__sector".to_string(), v.clone());
+                    }
+                    if let Some(ref v) = profile.industry {
+                        attrs.insert("__industry".to_string(), v.clone());
+                    }
+                    if let Some(ref v) = profile.description {
+                        attrs.insert("__description".to_string(), v.clone());
+                    }
+                    if let Some(ref v) = profile.country {
+                        attrs.insert("__country".to_string(), v.clone());
+                    }
+                    if let Some(v) = profile.market_cap {
+                        attrs.insert("__market_cap".to_string(), v.to_string());
+                    }
+
+                    let attrs_json = serde_json::to_string(&attrs).map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE pp_security SET attributes = ?1 WHERE id = ?2",
+                        params![attrs_json, security_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok(())
+                })();
+
+                match persist_result {
+                    Ok(_) => fetched += 1,
+                    Err(e) => {
+                        failed += 1;
+                        errors.push(format!("{} ({}): {}", ticker, security_id, e));
+                    }
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                errors.push(format!("{} ({}): {}", ticker, security_id, e));
+            }
+        }
+    }
+
+    Ok(ProfileFetchSummary {
+        total,
+        fetched,
+        failed,
+        errors,
+    })
+}
+
+/// Fetch fundamental financial data (P/E, P/B, revenue, etc.) for a security.
+#[command]
+pub async fn fetch_security_fundamentals(
+    security_id: i64,
+) -> Result<yahoo::YahooFundamentals, String> {
+    // Get ticker (scoped block so guard is dropped before await)
+    let ticker = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+        let ticker: Option<String> = conn
+            .query_row(
+                "SELECT ticker FROM pp_security WHERE id = ?1",
+                params![security_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Security not found: {}", e))?;
+        match ticker {
+            Some(t) if !t.is_empty() => t,
+            _ => return Err("Kein Ticker hinterlegt".into()),
+        }
+    };
+
+    yahoo::fetch_fundamentals(&ticker)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Fetch earnings data (quarterly results, next earnings date, EPS estimates) for a security.
+#[command]
+pub async fn fetch_security_earnings(
+    security_id: i64,
+) -> Result<yahoo::YahooEarnings, String> {
+    // Get ticker (scoped block so guard is dropped before await)
+    let ticker = {
+        let conn_guard = db::get_connection().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("DB not initialized")?;
+        let ticker: Option<String> = conn
+            .query_row(
+                "SELECT ticker FROM pp_security WHERE id = ?1",
+                params![security_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Security not found: {}", e))?;
+        match ticker {
+            Some(t) if !t.is_empty() => t,
+            _ => return Err("Kein Ticker hinterlegt".into()),
+        }
+    };
+
+    yahoo::fetch_earnings(&ticker)
+        .await
         .map_err(|e| e.to_string())
 }
 

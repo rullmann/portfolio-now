@@ -9,13 +9,19 @@ use crate::ai::{
 use crate::indicators::breakout;
 use crate::indicators::market_indices;
 use crate::indicators::screener::run_screener;
-use crate::indicators::types::{BreakoutScore, OHLCData, ScreenerFilter, ScreenerResult, ScreenerSecurityData};
+use crate::indicators::types::{BreakoutScore, OHLCData, ScreenerFilter, ScreenerResult, ScreenerSecurityData, TradingAnalysis};
 use crate::quotes;
 use crate::security;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{command, AppHandle, Emitter};
+
+/// Session cache for Finnhub index constituents (don't re-fetch intraday)
+static FINNHUB_CONSTITUENTS_CACHE: std::sync::LazyLock<Mutex<HashMap<String, Vec<market_indices::MarketIndexTicker>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static MARKET_SCREENER_CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -28,6 +34,7 @@ static MARKET_SCREENER_CANCEL: AtomicBool = AtomicBool::new(false);
 pub struct MarketScreenerRequest {
     pub index_id: String,
     pub filters: Vec<ScreenerFilter>,
+    pub finnhub_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,8 +102,9 @@ fn quote_to_ohlc(q: &quotes::Quote) -> OHLCData {
 
 /// Get available market indices
 #[command]
-pub fn get_market_indices() -> Vec<market_indices::MarketIndex> {
-    market_indices::get_available_indices()
+pub fn get_market_indices(finnhub_api_key: Option<String>) -> Vec<market_indices::MarketIndex> {
+    let has_key = finnhub_api_key.as_ref().map_or(false, |k| !k.is_empty());
+    market_indices::get_available_indices(has_key)
 }
 
 /// Cancel a running market screener scan
@@ -120,8 +128,59 @@ pub async fn screen_market(
 
     MARKET_SCREENER_CANCEL.store(false, Ordering::Relaxed);
 
-    let tickers = market_indices::get_index_tickers(&request.index_id)
-        .ok_or_else(|| format!("Unbekannter Index: {}", request.index_id))?;
+    // Try Finnhub constituents for US indices if API key is available
+    let tickers = {
+        let finnhub_symbol = request.finnhub_api_key.as_ref()
+            .filter(|k| !k.is_empty())
+            .and_then(|_| {
+                market_indices::FINNHUB_INDEX_MAP.iter()
+                    .find(|(id, _)| *id == request.index_id.as_str())
+                    .map(|(_, sym)| *sym)
+            });
+
+        if let Some(fh_symbol) = finnhub_symbol {
+            let api_key = request.finnhub_api_key.as_ref().unwrap();
+
+            // Check session cache first
+            let cached = FINNHUB_CONSTITUENTS_CACHE.lock()
+                .ok()
+                .and_then(|cache| cache.get(fh_symbol).cloned());
+
+            if let Some(cached_tickers) = cached {
+                log::info!("Using cached Finnhub constituents for {} ({} tickers)", fh_symbol, cached_tickers.len());
+                cached_tickers
+            } else {
+                // Fetch from Finnhub
+                match quotes::finnhub::fetch_index_constituents(fh_symbol, api_key).await {
+                    Ok(constituents) => {
+                        let tickers: Vec<market_indices::MarketIndexTicker> = constituents
+                            .into_iter()
+                            .map(|(sym, name)| market_indices::MarketIndexTicker {
+                                symbol: sym,
+                                name,
+                            })
+                            .collect();
+                        log::info!("Finnhub constituents for {}: {} tickers", fh_symbol, tickers.len());
+
+                        // Cache for session
+                        if let Ok(mut cache) = FINNHUB_CONSTITUENTS_CACHE.lock() {
+                            cache.insert(fh_symbol.to_string(), tickers.clone());
+                        }
+
+                        tickers
+                    }
+                    Err(e) => {
+                        log::warn!("Finnhub constituents failed for {}, falling back to static: {}", fh_symbol, e);
+                        market_indices::get_index_tickers(&request.index_id)
+                            .ok_or_else(|| format!("Unbekannter Index: {}", request.index_id))?
+                    }
+                }
+            }
+        } else {
+            market_indices::get_index_tickers(&request.index_id)
+                .ok_or_else(|| format!("Unbekannter Index: {}", request.index_id))?
+        }
+    };
 
     let total = tickers.len();
     let today = Utc::now().date_naive();
@@ -265,6 +324,18 @@ pub async fn screen_market(
         }
     }
 
+    // Calculate regime + setup score for each result
+    for result in &mut results {
+        if let Some(ohlc) = ohlc_map.get(&result.security_id) {
+            if ohlc.len() >= 50 {
+                let regime = crate::indicators::regime::detect_regime(ohlc);
+                let setup = crate::indicators::regime::score_setup(ohlc, &regime);
+                result.regime = Some(regime);
+                result.setup_score = Some(setup);
+            }
+        }
+    }
+
     Ok(MarketScreenerResponse {
         results,
         total_scanned,
@@ -394,4 +465,34 @@ Antworte auf Deutsch, strukturiert mit Markdown-Überschriften."##,
     result.map_err(|e| {
         serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone())
     })
+}
+
+/// Analyze a single ticker's trading setup (Entry/Stop/Target)
+#[command]
+pub async fn analyze_ticker_trading(
+    symbol: String,
+    account_size: Option<f64>,
+    risk_percent: Option<f64>,
+) -> Result<TradingAnalysis, String> {
+    security::check_rate_limit("market_screener", &security::RateLimitConfig {
+        min_interval: std::time::Duration::from_secs(2),
+        max_requests_per_window: 30,
+        window_duration: std::time::Duration::from_secs(300),
+    })?;
+
+    let today = Utc::now().date_naive();
+    let six_months_ago = today - chrono::Duration::days(180);
+
+    let raw_quotes = quotes::yahoo::fetch_historical(&symbol, six_months_ago, today, true)
+        .await
+        .map_err(|e| format!("Yahoo-Daten für {} nicht verfügbar: {}", symbol, e))?;
+
+    if raw_quotes.len() < 50 {
+        return Err(format!("{}: Nur {} Datenpunkte (min. 50 benötigt)", symbol, raw_quotes.len()));
+    }
+
+    let ohlc: Vec<OHLCData> = raw_quotes.iter().map(quote_to_ohlc).collect();
+    let analysis = crate::indicators::regime::full_trading_analysis(&ohlc, account_size, risk_percent, None);
+
+    Ok(analysis)
 }

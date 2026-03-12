@@ -17,7 +17,7 @@ export function ChatButton({ onClick, hasMessages }: ChatButtonProps) {
     <button
       onClick={onClick}
       className={cn(
-        'fixed bottom-6 right-6 z-30',
+        'fixed bottom-6 right-6 z-50',
         'w-14 h-14 rounded-full',
         'bg-primary text-primary-foreground',
         'shadow-lg hover:shadow-xl',

@@ -6,7 +6,7 @@
  * This file retains types, preset definitions, labels, and filter helper functions.
  */
 
-import type { OHLCData } from './indicators';
+import type { OHLCData, RegimeAnalysis, SetupScore } from './indicators';
 import type { BreakoutScore } from './types';
 
 // ============================================================================
@@ -83,6 +83,8 @@ export interface ScreenerResult {
   change5d?: number;
   change20d?: number;
   breakoutScore?: BreakoutScore;
+  regime?: RegimeAnalysis;
+  setupScore?: SetupScore;
 }
 
 // ============================================================================

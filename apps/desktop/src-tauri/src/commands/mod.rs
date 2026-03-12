@@ -3,6 +3,7 @@ pub mod ai_helpers;
 pub mod api_keys;
 pub mod alerts;
 pub mod attributes;
+pub mod cache;
 pub mod chat;
 pub mod consortium;
 pub mod dashboard;

@@ -302,6 +302,10 @@ pub struct ScreenerResult {
     pub change_20d: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breakout_score: Option<BreakoutScore>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regime: Option<RegimeAnalysis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_score: Option<SetupScore>,
 }
 
 // Batch result for calculating all indicators at once

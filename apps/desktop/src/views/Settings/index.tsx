@@ -37,7 +37,7 @@ import { useSecureApiKeys } from '../../hooks/useSecureApiKeys';
 import { useApiKeyValidation, type ValidationResult } from '../../hooks/useApiKeyValidation';
 import type { ApiKeyType } from '../../lib/secureStorage';
 import { AttributeTypeManager } from '../../components/attributes';
-import { AiFeatureMatrix } from '../../components/settings';
+import { AiFeatureMatrix, CacheManagement } from '../../components/settings';
 import type { ValidationStatusSummary, ValidationResponse } from '../../lib/types';
 import { cn } from '../../lib/utils';
 import { useTwitterAuth } from '../../hooks/useTwitterAuth';
@@ -1789,6 +1789,9 @@ export function SettingsView() {
                   </p>
                 )}
               </div>
+
+              {/* Cache Management */}
+              <CacheManagement />
 
               {/* Custom Attributes */}
               <div className="bg-card rounded-lg border border-border p-6">

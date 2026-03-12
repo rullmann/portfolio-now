@@ -238,20 +238,16 @@ pub fn build_enhanced_annotation_prompt(ctx: &EnhancedChartContext) -> String {
         })
         .unwrap_or_default();
 
-    // Build web context instructions if enabled
-    let web_context_str = if ctx.include_web_context {
+    // Build web context section with pre-fetched news
+    let web_context_str = if let Some(ref news) = ctx.web_news_context {
         format!(
             r##"
 
-=== WEB-RECHERCHE (AKTIV) ===
-Recherchiere im Web nach aktuellen Informationen zu {} und integriere sie in deine Analyse:
-1. **Aktuelle Nachrichten**: Suche nach relevanten News der letzten 7 Tage
-2. **Earnings-Termine**: Prüfe bevorstehende oder kürzliche Quartalsberichte
-3. **Analysteneinschätzungen**: Aktuelle Ratings und Kursziele
-4. **Sektor-Entwicklung**: Relevante Branchennews
+=== AKTUELLE NACHRICHTEN ===
+{}
 
-Füge einen "news_summary" Abschnitt zur Analyse hinzu mit den wichtigsten Erkenntnissen."##,
-            ctx.security_name
+Berücksichtige diese Nachrichten in deiner Analyse und fasse die kursrelevanten Erkenntnisse im "news_summary" Feld zusammen (2-3 Sätze)."##,
+            news
         )
     } else {
         String::new()
@@ -312,7 +308,8 @@ Antworte AUSSCHLIESSLICH mit validem JSON (keine Markdown-Formatierung, kein Tex
     "take_profit": 160.00,
     "risk_reward_ratio": 2.64,
     "rationale": "Entry bei Support, SL unter letztem Tief, TP bei Widerstand"
-  }} | null
+  }} | null,
+  "news_summary": "Zusammenfassung kursrelevanter Nachrichten (2-3 Sätze)" | null
 }}
 
 WICHTIGE REGELN:

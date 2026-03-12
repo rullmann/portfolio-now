@@ -299,6 +299,8 @@ pub fn run_screener(securities: &[ScreenerSecurityData], filters: &[ScreenerFilt
                 change_5d: indicators.change_5d,
                 change_20d: indicators.change_20d,
                 breakout_score: None,
+                regime: None,
+                setup_score: None,
             });
         }
     }

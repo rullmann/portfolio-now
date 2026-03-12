@@ -632,6 +632,7 @@ pub async fn analyze_enhanced(
             annotations: parsed.annotations,
             alerts: parsed.alerts,
             risk_reward: parsed.risk_reward,
+            news_summary: parsed.news_summary,
             provider: "OpenAI".to_string(),
             model: model.to_string(),
             tokens_used: data.usage.map(|u| u.total_tokens),

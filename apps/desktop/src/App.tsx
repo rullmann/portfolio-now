@@ -347,8 +347,10 @@ function App() {
   const [dbPortfolioHistory, setDbPortfolioHistory] = useState<Array<{ date: string; value: number }>>([]);
   const [dbInvestedCapitalHistory, setDbInvestedCapitalHistory] = useState<Array<{ date: string; value: number }>>([]);
 
-  // Chat panel state
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  // Chat panel state (from UIStore for cross-component access)
+  const isChatOpen = useUIStore((s) => s.isChatOpen);
+  const setChatOpen = useUIStore((s) => s.setChatOpen);
+  const chartFullscreen = useUIStore((s) => s.chartFullscreen);
 
   // ============================================================================
   // Data Loading
@@ -686,7 +688,7 @@ function App() {
           <Header
             onImportPP={handleImportPP}
             onRefresh={loadDbData}
-            onOpenChat={() => setIsChatOpen(true)}
+            onOpenChat={() => setChatOpen(true)}
           />
 
           {/* Error Banner */}
@@ -696,7 +698,7 @@ function App() {
           <LoadingIndicator />
 
           {/* Content Area */}
-          <div key={currentView} className="flex-1 overflow-auto px-5 py-4 animate-fade-in">
+          <div id="view-scroll-container" key={currentView} className="flex-1 overflow-auto px-5 py-4 animate-fade-in">
             {renderView()}
           </div>
         </main>
@@ -704,9 +706,9 @@ function App() {
         {/* Chat interface - flex flow for Charts, overlay for other views */}
         {aiEnabled && (
           <>
-            {!isChatOpen && <ChatButton onClick={() => setIsChatOpen(true)} />}
+            {!isChatOpen && <ChatButton onClick={() => setChatOpen(true)} />}
             {isChatOpen && (
-              <ChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} overlay={currentView !== 'charts'} />
+              <ChatPanel isOpen={isChatOpen} onClose={() => setChatOpen(false)} overlay={currentView !== 'charts' && currentView !== 'screener' || chartFullscreen} />
             )}
           </>
         )}

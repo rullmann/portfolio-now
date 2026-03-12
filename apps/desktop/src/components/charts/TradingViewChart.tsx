@@ -129,6 +129,13 @@ export function TradingViewChart({
   const chartRef = useRef<IChartApi | null>(null);
   const markerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  // Store callbacks in refs to avoid chart recreation when they change
+  const onChartReadyRef = useRef(onChartReady);
+  onChartReadyRef.current = onChartReady;
+  const onVisibleLogicalRangeChangeRef = useRef(onVisibleLogicalRangeChange);
+  onVisibleLogicalRangeChangeRef.current = onVisibleLogicalRangeChange;
+  const onAnnotationClickRef = useRef(onAnnotationClick);
+  onAnnotationClickRef.current = onAnnotationClick;
   const [legendData, setLegendData] = useState<{
     open?: number;
     high?: number;
@@ -792,17 +799,17 @@ export function TradingViewChart({
     chart.timeScale().fitContent();
 
     // Notify parent that chart is ready (for drawing tools)
-    if (onChartReady) {
-      onChartReady(chart, candlestickSeries);
+    if (onChartReadyRef.current) {
+      onChartReadyRef.current(chart, candlestickSeries);
     }
 
     // Subscribe to visible range changes (for lazy loading)
-    if (onVisibleLogicalRangeChange) {
-      const handler = (range: { from: number; to: number } | null) => {
-        onVisibleLogicalRangeChange(range);
-      };
-      chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
-    }
+    const rangeHandler = (range: { from: number; to: number } | null) => {
+      if (onVisibleLogicalRangeChangeRef.current) {
+        onVisibleLogicalRangeChangeRef.current(range);
+      }
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
 
     // Resize observer - handle both width and height
     const resizeObserver = new ResizeObserver(entries => {
@@ -818,6 +825,7 @@ export function TradingViewChart({
 
     return () => {
       resizeObserver.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler);
       if (markersPluginRef.current) {
         markersPluginRef.current.detach();
         markersPluginRef.current = null;
@@ -828,7 +836,7 @@ export function TradingViewChart({
         chartRef.current = null;
       }
     };
-  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations, onChartReady, onVisibleLogicalRangeChange]);
+  }, [chartData, indicatorData, indicators, height, theme, showVolume, logScale, annotations]);
 
   // Separate useEffect for chart event markers — avoids full chart rebuild on toggle
   useEffect(() => {
@@ -956,9 +964,9 @@ export function TradingViewChart({
             <p className="text-xs text-muted-foreground line-clamp-3">{hoveredAnnotation.description}</p>
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
               <span className="text-xs font-mono">@ {hoveredAnnotation.price.toFixed(2)}</span>
-              {onAnnotationClick && (
+              {onAnnotationClickRef.current && (
                 <button
-                  onClick={() => onAnnotationClick(hoveredAnnotation)}
+                  onClick={() => onAnnotationClickRef.current?.(hoveredAnnotation)}
                   className="text-xs px-2 py-0.5 bg-muted hover:bg-muted/80 rounded transition-colors"
                 >
                   Details
